@@ -5,10 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "setup:whatsapp": "node setup_whatsapp.js",
-    "test:whatsapp": "node test_whatsapp_auth.js"
+    "dev": "nodemon index.js"
   },
   "keywords": ["stoory", "backend", "nodejs", "supabase", "influencers", "brands", "whatsapp", "otp"],
   "author": "Your Name",

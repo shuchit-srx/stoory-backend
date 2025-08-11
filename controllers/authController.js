@@ -265,6 +265,33 @@ class AuthController {
             });
         }
     }
+
+    /**
+     * Get mock login information (for testing)
+     */
+    async getMockLoginInfo(req, res) {
+        try {
+            res.json({
+                success: true,
+                mockLogin: {
+                    phone: '+919876543210',
+                    otp: '123456',
+                    description: 'Use these credentials for testing. This mock login bypasses WhatsApp OTP verification.',
+                    instructions: [
+                        '1. Use phone: +919876543210',
+                        '2. Use OTP: 123456',
+                        '3. Works for both login and registration',
+                        '4. Creates a test user if one doesn\'t exist'
+                    ]
+                }
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
 }
 
 // Validation middleware

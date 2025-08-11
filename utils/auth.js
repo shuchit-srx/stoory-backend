@@ -7,6 +7,10 @@ class AuthService {
     constructor() {
         this.jwtSecret = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
         this.jwtExpiry = '7d'; // 7 days
+        
+        // Mock login configuration
+        this.mockPhone = '9876543210'; // Mock phone number for testing
+        this.mockOTP = '123456'; // Mock OTP that always works
     }
 
     /**
@@ -142,6 +146,14 @@ class AuthService {
      */
     async sendOTP(phone) {
         try {
+            // Handle mock phone number
+            if (phone === this.mockPhone) {
+                return {
+                    success: true,
+                    message: `Mock OTP sent successfully! Use OTP: ${this.mockOTP} for testing.`
+                };
+            }
+
             // First check if user exists
             const userCheck = await this.checkUserExists(phone);
             if (!userCheck.success) {
@@ -180,6 +192,14 @@ class AuthService {
      */
     async sendRegistrationOTP(phone) {
         try {
+            // Handle mock phone number
+            if (phone === this.mockPhone) {
+                return {
+                    success: true,
+                    message: `Mock registration OTP sent successfully! Use OTP: ${this.mockOTP} for testing.`
+                };
+            }
+
             // Check if user already exists
             const userCheck = await this.checkUserExists(phone);
             if (!userCheck.success) {
@@ -218,7 +238,96 @@ class AuthService {
      */
     async verifyOTP(phone, token, userData) {
         try {
-            // Verify OTP from database
+            // Handle mock phone number and OTP
+            if (phone === this.mockPhone && token === this.mockOTP) {
+                // Check if mock user exists, if not create one
+                const { data: existingUser, error: userError } = await supabaseAdmin
+                    .from('users')
+                    .select('*')
+                    .eq('phone', phone)
+                    .eq('is_deleted', false)
+                    .single();
+
+                let user = existingUser;
+
+                // If mock user doesn't exist, create one
+                if (!existingUser) {
+                    const userId = crypto.randomUUID();
+                    
+                    const userCreateData = {
+                        id: userId,
+                        phone: phone,
+                        name: userData?.name || 'Mock Test User',
+                        email: userData?.email || 'mock@test.com',
+                        role: userData?.role || 'influencer',
+                        gender: userData?.gender || 'other',
+                        languages: userData?.languages || ['English'],
+                        categories: userData?.categories || ['Technology'],
+                        min_range: userData?.min_range || 1000,
+                        max_range: userData?.max_range || 50000
+                    };
+                    
+                    const { data: newUser, error: createError } = await supabaseAdmin
+                        .from('users')
+                        .insert(userCreateData)
+                        .select()
+                        .single();
+
+                    if (createError) {
+                        return {
+                            success: false,
+                            message: 'Failed to create mock user profile'
+                        };
+                    }
+
+                    user = newUser;
+                } else {
+                    // Update existing mock user with provided data
+                    if (userData && user) {
+                        const updateData = {
+                            name: userData.name || user.name,
+                            email: userData.email || user.email,
+                            role: userData.role || user.role,
+                            gender: userData.gender || user.gender,
+                            languages: userData.languages || user.languages,
+                            categories: userData.categories || user.categories,
+                            min_range: userData.min_range || user.min_range,
+                            max_range: userData.max_range || user.max_range
+                        };
+
+                        const { data: updatedUser, error: updateError } = await supabaseAdmin
+                            .from('users')
+                            .update(updateData)
+                            .eq('id', user.id)
+                            .select()
+                            .single();
+
+                        if (!updateError) {
+                            user = updatedUser;
+                        }
+                    }
+                }
+
+                // Generate JWT token for mock user
+                const jwtToken = jwt.sign(
+                    {
+                        id: user.id,
+                        phone: user.phone,
+                        role: user.role
+                    },
+                    this.jwtSecret,
+                    { expiresIn: this.jwtExpiry }
+                );
+
+                return {
+                    success: true,
+                    user: user,
+                    token: jwtToken,
+                    message: 'Mock authentication successful'
+                };
+            }
+
+            // Verify OTP from database for real users
             const verifyResult = await this.verifyStoredOTP(phone, token);
             if (!verifyResult.success) {
                 return verifyResult;
