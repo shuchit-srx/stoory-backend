@@ -30,7 +30,18 @@ class WhatsAppService {
             return;
         }
 
+        if (!this.apiKey) {
+            console.error('Missing WhatsApp API key. Falling back to console mode.');
+            this.setupConsole();
+            return;
+        }
+
         console.log('✅ Custom WhatsApp API configured');
+        console.log('📋 Configuration:', {
+            endpoint: this.customEndpoint,
+            templateName: this.templateName,
+            hasApiKey: !!this.apiKey
+        });
     }
 
     setupConsole() {
@@ -148,18 +159,35 @@ class WhatsAppService {
                 response: response.data
             };
         } catch (error) {
-            console.error('Facebook Graph API error:', error.response?.data || error.message);
+            console.error('Facebook Graph API error:', {
+                message: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data,
+                config: {
+                    url: error.config?.url,
+                    method: error.config?.method,
+                    headers: error.config?.headers
+                }
+            });
             
             // Provide more specific error messages
             let errorMessage = 'Failed to send OTP via Facebook Graph API';
             if (error.response?.data?.error) {
                 errorMessage = error.response.data.error.message || errorMessage;
+            } else if (error.response?.status === 401) {
+                errorMessage = 'Facebook Graph API authentication failed - check your access token';
+            } else if (error.response?.status === 403) {
+                errorMessage = 'Facebook Graph API permission denied - check app permissions';
+            } else if (error.response?.status === 404) {
+                errorMessage = 'Facebook Graph API endpoint not found - check phone number ID';
             }
             
             return {
                 success: false,
                 message: errorMessage,
-                error: error.response?.data || error.message
+                error: error.response?.data || error.message,
+                status: error.response?.status
             };
         }
     }
