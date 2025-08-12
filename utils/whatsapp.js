@@ -167,8 +167,20 @@ class WhatsAppService {
                 config: {
                     url: error.config?.url,
                     method: error.config?.method,
-                    headers: error.config?.headers
+                    headers: {
+                        ...error.config?.headers,
+                        Authorization: error.config?.headers?.Authorization ? 'Bearer [HIDDEN]' : 'MISSING'
+                    }
                 }
+            });
+            
+            // Log additional debugging info
+            console.error('Debug info:', {
+                hasResponse: !!error.response,
+                hasRequest: !!error.request,
+                isNetworkError: !error.response && !error.request,
+                endpoint: this.customEndpoint,
+                hasApiKey: !!this.apiKey
             });
             
             // Provide more specific error messages

@@ -131,6 +131,12 @@ server.listen(PORT, '0.0.0.0', () => {
         apiKey: process.env.WHATSAPP_API_KEY ? 'SET' : 'MISSING',
         templateName: process.env.WHATSAPP_TEMPLATE_NAME || 'not set'
     });
+    
+    // Set default WhatsApp service if not configured
+    if (!process.env.WHATSAPP_SERVICE) {
+        console.log('⚠️  WHATSAPP_SERVICE not set, defaulting to "custom"');
+        process.env.WHATSAPP_SERVICE = 'custom';
+    }
 });
 
 module.exports = { app, server, io }; 

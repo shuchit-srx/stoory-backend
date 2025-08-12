@@ -14,6 +14,15 @@ const createRateLimiter = (windowMs, max, message = 'Too many requests') => {
         },
         standardHeaders: true,
         legacyHeaders: false,
+        // Fix for Railway proxy issue
+        skip: (req) => {
+            // Skip rate limiting for health checks
+            return req.path === '/health';
+        },
+        // Use X-Forwarded-For header for Railway
+        keyGenerator: (req) => {
+            return req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress;
+        }
     });
 };
 
@@ -55,6 +64,9 @@ const corsOptions = {
 
 // Security middleware setup
 const setupSecurityMiddleware = (app) => {
+    // Trust proxy for Railway deployment
+    app.set('trust proxy', 1);
+    
     // Basic security headers
     app.use(helmet({
         contentSecurityPolicy: {
