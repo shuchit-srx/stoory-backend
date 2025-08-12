@@ -123,6 +123,20 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/health`);
     console.log(`🌐 Network access: http://0.0.0.0:${PORT}/health`);
+    
+    // Log WhatsApp configuration (without sensitive data)
+    console.log(`📱 WhatsApp Configuration:`, {
+        service: process.env.WHATSAPP_SERVICE || 'not set',
+        endpoint: process.env.WHATSAPP_API_ENDPOINT ? 'SET' : 'MISSING',
+        apiKey: process.env.WHATSAPP_API_KEY ? 'SET' : 'MISSING',
+        templateName: process.env.WHATSAPP_TEMPLATE_NAME || 'not set'
+    });
+    
+    // Set default WhatsApp service if not configured
+    if (!process.env.WHATSAPP_SERVICE) {
+        console.log('⚠️  WHATSAPP_SERVICE not set, defaulting to "custom"');
+        process.env.WHATSAPP_SERVICE = 'custom';
+    }
 });
 
 module.exports = { app, server, io }; 
