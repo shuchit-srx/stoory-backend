@@ -7,7 +7,8 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "start:prod": "NODE_ENV=production node index.js",
-    "start:staging": "NODE_ENV=staging node index.js"
+    "start:staging": "NODE_ENV=staging node index.js",
+    "test:network": "node scripts/test-network.js"
   },
   "keywords": ["stoory", "backend", "nodejs", "supabase", "influencers", "brands", "whatsapp", "otp"],
   "author": "Your Name",

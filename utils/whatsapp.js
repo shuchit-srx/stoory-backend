@@ -42,6 +42,36 @@ class WhatsAppService {
             templateName: this.templateName,
             hasApiKey: !!this.apiKey
         });
+
+        // Test network connectivity
+        this.testNetworkConnectivity();
+    }
+
+    async testNetworkConnectivity() {
+        try {
+            console.log('🔍 Testing network connectivity to Facebook Graph API...');
+            
+            // Test DNS resolution
+            const url = new URL(this.customEndpoint);
+            console.log('🌐 Testing DNS resolution for:', url.hostname);
+            
+            // Test basic connectivity
+            const testResponse = await axios.get('https://graph.facebook.com', {
+                timeout: 5000,
+                validateStatus: () => true // Accept any status
+            });
+            
+            console.log('✅ Network connectivity test passed:', {
+                status: testResponse.status,
+                hostname: url.hostname
+            });
+        } catch (error) {
+            console.error('❌ Network connectivity test failed:', {
+                error: error.message,
+                code: error.code,
+                hostname: new URL(this.customEndpoint).hostname
+            });
+        }
     }
 
     setupConsole() {
@@ -57,7 +87,13 @@ class WhatsAppService {
             
             switch (this.service) {
                 case 'custom':
-                    return await this.sendOTPViaCustomAPI(phone, otp);
+                    try {
+                        return await this.sendOTPViaCustomAPI(phone, otp);
+                    } catch (apiError) {
+                        console.error('Facebook Graph API failed, falling back to console mode:', apiError.message);
+                        // Fallback to console mode if API fails
+                        return await this.sendViaConsole(phone, message);
+                    }
                 case 'console':
                     return await this.sendViaConsole(phone, message);
                 default:
@@ -180,7 +216,11 @@ class WhatsAppService {
                 hasRequest: !!error.request,
                 isNetworkError: !error.response && !error.request,
                 endpoint: this.customEndpoint,
-                hasApiKey: !!this.apiKey
+                hasApiKey: !!this.apiKey,
+                errorCode: error.code,
+                errorMessage: error.message,
+                isTimeout: error.code === 'ECONNABORTED',
+                isNetworkError: error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED'
             });
             
             // Provide more specific error messages
