@@ -6,6 +6,12 @@ class WhatsAppService {
         this.customEndpoint = process.env.WHATSAPP_API_ENDPOINT;
         this.apiKey = process.env.WHATSAPP_API_KEY;
         this.templateName = process.env.WHATSAPP_TEMPLATE_NAME || 'otp_verification';
+        
+        // Railway-specific configurations
+        this.timeout = parseInt(process.env.WHATSAPP_TIMEOUT) || 30000; // 30 seconds
+        this.retryAttempts = parseInt(process.env.WHATSAPP_RETRY_ATTEMPTS) || 3;
+        this.retryDelay = parseInt(process.env.WHATSAPP_RETRY_DELAY) || 1000; // 1 second
+        
         this.setupService();
     }
 
@@ -30,59 +36,58 @@ class WhatsAppService {
             return;
         }
 
-        if (!this.apiKey) {
-            console.error('Missing WhatsApp API key. Falling back to console mode.');
-            this.setupConsole();
-            return;
-        }
-
-        // Configure DNS for Railway deployment
-        if (process.env.NODE_ENV === 'production') {
-            const dns = require('dns');
-            dns.setServers(['8.8.8.8', '8.8.4.4']); // Use Google DNS
-            console.log('🚂 Production environment - using Google DNS');
-        }
-
-        console.log('✅ Custom WhatsApp API configured');
-        console.log('📋 Configuration:', {
-            endpoint: this.customEndpoint,
-            templateName: this.templateName,
-            hasApiKey: !!this.apiKey
-        });
-
-        // Test network connectivity
-        this.testNetworkConnectivity();
-    }
-
-    async testNetworkConnectivity() {
-        try {
-            console.log('🔍 Testing network connectivity to Facebook Graph API...');
-            
-            // Test DNS resolution
-            const url = new URL(this.customEndpoint);
-            console.log('🌐 Testing DNS resolution for:', url.hostname);
-            
-            // Test basic connectivity
-            const testResponse = await axios.get('https://graph.facebook.com', {
-                timeout: 5000,
-                validateStatus: () => true // Accept any status
-            });
-            
-            console.log('✅ Network connectivity test passed:', {
-                status: testResponse.status,
-                hostname: url.hostname
-            });
-        } catch (error) {
-            console.error('❌ Network connectivity test failed:', {
-                error: error.message,
-                code: error.code,
-                hostname: new URL(this.customEndpoint).hostname
-            });
+        // Validate endpoint format for Railway compatibility
+        if (this.customEndpoint.includes('graph.facebook.com')) {
+            console.log('✅ Facebook Graph API configured');
+            console.log('⚠️  Note: Using Facebook Graph API - ensure proper network access in Railway');
+        } else {
+            console.log('✅ Custom WhatsApp API configured');
         }
     }
 
     setupConsole() {
         console.log('📱 Console WhatsApp service configured (for development)');
+    }
+
+    /**
+     * Create axios instance with Railway-optimized settings
+     */
+    createAxiosInstance() {
+        return axios.create({
+            timeout: this.timeout,
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Stoory-Backend/1.0'
+            },
+            // Railway-specific optimizations
+            maxRedirects: 5,
+            validateStatus: function (status) {
+                return status >= 200 && status < 600; // Accept all status codes to handle them manually
+            }
+        });
+    }
+
+    /**
+     * Retry mechanism for failed requests
+     */
+    async retryRequest(requestFn, maxAttempts = this.retryAttempts) {
+        let lastError;
+        
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return await requestFn();
+            } catch (error) {
+                lastError = error;
+                console.log(`Attempt ${attempt}/${maxAttempts} failed:`, error.message);
+                
+                if (attempt < maxAttempts) {
+                    // Wait before retrying
+                    await new Promise(resolve => setTimeout(resolve, this.retryDelay * attempt));
+                }
+            }
+        }
+        
+        throw lastError;
     }
 
     /**
@@ -94,13 +99,7 @@ class WhatsAppService {
             
             switch (this.service) {
                 case 'custom':
-                    try {
-                        return await this.sendOTPViaCustomAPI(phone, otp);
-                    } catch (apiError) {
-                        console.error('Facebook Graph API failed, falling back to console mode:', apiError.message);
-                        // Fallback to console mode if API fails
-                        return await this.sendViaConsole(phone, message);
-                    }
+                    return await this.sendOTPViaCustomAPI(phone, otp);
                 case 'console':
                     return await this.sendViaConsole(phone, message);
                 default:
@@ -142,7 +141,7 @@ class WhatsAppService {
     }
 
     /**
-     * Send OTP via Custom WhatsApp API (Facebook Graph API)
+     * Send OTP via Custom WhatsApp API (Facebook Graph API) with Railway optimizations
      */
     async sendOTPViaCustomAPI(phone, otp) {
         try {
@@ -193,7 +192,16 @@ class WhatsAppService {
                 headers['Authorization'] = `Bearer ${this.apiKey}`;
             }
 
-            const response = await axios.post(this.customEndpoint, payload, { headers });
+            // Use retry mechanism for Railway deployment
+            const response = await this.retryRequest(async () => {
+                const axiosInstance = this.createAxiosInstance();
+                return await axiosInstance.post(this.customEndpoint, payload, { headers });
+            });
+
+            // Handle different response status codes
+            if (response.status >= 400) {
+                throw new Error(`HTTP ${response.status}: ${JSON.stringify(response.data)}`);
+            }
 
             return {
                 success: true,
@@ -202,57 +210,41 @@ class WhatsAppService {
                 response: response.data
             };
         } catch (error) {
-            console.error('Facebook Graph API error:', {
-                message: error.message,
-                status: error.response?.status,
-                statusText: error.response?.statusText,
-                data: error.response?.data,
-                config: {
-                    url: error.config?.url,
-                    method: error.config?.method,
-                    headers: {
-                        ...error.config?.headers,
-                        Authorization: error.config?.headers?.Authorization ? 'Bearer [HIDDEN]' : 'MISSING'
-                    }
-                }
-            });
+            console.error('Facebook Graph API error:', error.response?.data || error.message);
             
-            // Log additional debugging info
-            console.error('Debug info:', {
-                hasResponse: !!error.response,
-                hasRequest: !!error.request,
-                isNetworkError: !error.response && !error.request,
-                endpoint: this.customEndpoint,
-                hasApiKey: !!this.apiKey,
-                errorCode: error.code,
-                errorMessage: error.message,
-                isTimeout: error.code === 'ECONNABORTED',
-                isNetworkError: error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED'
-            });
-            
-            // Provide more specific error messages
+            // Provide more specific error messages for Railway debugging
             let errorMessage = 'Failed to send OTP via Facebook Graph API';
+            let errorDetails = {};
+            
             if (error.response?.data?.error) {
                 errorMessage = error.response.data.error.message || errorMessage;
-            } else if (error.response?.status === 401) {
-                errorMessage = 'Facebook Graph API authentication failed - check your access token';
-            } else if (error.response?.status === 403) {
-                errorMessage = 'Facebook Graph API permission denied - check app permissions';
-            } else if (error.response?.status === 404) {
-                errorMessage = 'Facebook Graph API endpoint not found - check phone number ID';
+                errorDetails = error.response.data.error;
+            } else if (error.code === 'ECONNABORTED') {
+                errorMessage = 'Request timeout - Facebook Graph API is not responding';
+                errorDetails = { code: 'TIMEOUT', timeout: this.timeout };
+            } else if (error.code === 'ENOTFOUND') {
+                errorMessage = 'Network error - Cannot reach Facebook Graph API';
+                errorDetails = { code: 'NETWORK_ERROR', endpoint: this.customEndpoint };
+            } else if (error.code === 'ECONNREFUSED') {
+                errorMessage = 'Connection refused - Facebook Graph API is not accessible';
+                errorDetails = { code: 'CONNECTION_REFUSED' };
             }
             
             return {
                 success: false,
                 message: errorMessage,
-                error: error.response?.data || error.message,
-                status: error.response?.status
+                error: errorDetails,
+                debug: {
+                    endpoint: this.customEndpoint,
+                    timeout: this.timeout,
+                    retryAttempts: this.retryAttempts
+                }
             };
         }
     }
 
     /**
-     * Send welcome message via Custom WhatsApp API (Facebook Graph API)
+     * Send welcome message via Custom WhatsApp API (Facebook Graph API) with Railway optimizations
      */
     async sendWelcomeViaCustomAPI(phone, message) {
         try {
@@ -279,7 +271,16 @@ class WhatsAppService {
                 headers['Authorization'] = `Bearer ${this.apiKey}`;
             }
 
-            const response = await axios.post(this.customEndpoint, payload, { headers });
+            // Use retry mechanism for Railway deployment
+            const response = await this.retryRequest(async () => {
+                const axiosInstance = this.createAxiosInstance();
+                return await axiosInstance.post(this.customEndpoint, payload, { headers });
+            });
+
+            // Handle different response status codes
+            if (response.status >= 400) {
+                throw new Error(`HTTP ${response.status}: ${JSON.stringify(response.data)}`);
+            }
 
             return {
                 success: true,
@@ -290,16 +291,33 @@ class WhatsAppService {
         } catch (error) {
             console.error('Facebook Graph API error:', error.response?.data || error.message);
             
-            // Provide more specific error messages
+            // Provide more specific error messages for Railway debugging
             let errorMessage = 'Failed to send welcome message via Facebook Graph API';
+            let errorDetails = {};
+            
             if (error.response?.data?.error) {
                 errorMessage = error.response.data.error.message || errorMessage;
+                errorDetails = error.response.data.error;
+            } else if (error.code === 'ECONNABORTED') {
+                errorMessage = 'Request timeout - Facebook Graph API is not responding';
+                errorDetails = { code: 'TIMEOUT', timeout: this.timeout };
+            } else if (error.code === 'ENOTFOUND') {
+                errorMessage = 'Network error - Cannot reach Facebook Graph API';
+                errorDetails = { code: 'NETWORK_ERROR', endpoint: this.customEndpoint };
+            } else if (error.code === 'ECONNREFUSED') {
+                errorMessage = 'Connection refused - Facebook Graph API is not accessible';
+                errorDetails = { code: 'CONNECTION_REFUSED' };
             }
             
             return {
                 success: false,
                 message: errorMessage,
-                error: error.response?.data || error.message
+                error: errorDetails,
+                debug: {
+                    endpoint: this.customEndpoint,
+                    timeout: this.timeout,
+                    retryAttempts: this.retryAttempts
+                }
             };
         }
     }

@@ -6,11 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "build": "echo 'No build step required'",
-    "start:prod": "NODE_ENV=production node index.js",
-    "start:staging": "NODE_ENV=staging node index.js",
-    "test:network": "node scripts/test-network.js",
-    "test:facebook": "node scripts/test-facebook-api.js"
+    "test:whatsapp": "node test_whatsapp_railway.js",
+    "fix:railway": "node fix_railway_issues.js"
   },
   "keywords": ["stoory", "backend", "nodejs", "supabase", "influencers", "brands", "whatsapp", "otp"],
   "author": "Your Name",
@@ -36,6 +33,6 @@
     "nodemon": "^3.0.2"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=16.0.0"
   }
 }

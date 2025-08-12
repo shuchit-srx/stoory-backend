@@ -99,6 +99,54 @@ npm start
 
 The server will start on `http://localhost:3000`
 
+## 🚂 Railway Deployment
+
+### Quick Deployment
+
+1. **Install Railway CLI**:
+   ```bash
+   npm install -g @railway/cli
+   railway login
+   ```
+
+2. **Deploy to Railway**:
+   ```bash
+   railway init
+   railway up
+   ```
+
+3. **Configure Environment Variables** in Railway dashboard using the template from `env.example`
+
+### WhatsApp OTP Issues in Railway
+
+If you encounter issues with WhatsApp OTP when deploying to Railway:
+
+1. **Run the Railway fix script**:
+   ```bash
+   npm run fix:railway
+   ```
+
+2. **Test WhatsApp connectivity**:
+   ```bash
+   npm run test:whatsapp
+   ```
+
+3. **Common fixes**:
+   - Increase `WHATSAPP_TIMEOUT` to 60000ms
+   - Set `WHATSAPP_RETRY_ATTEMPTS` to 5
+   - Ensure Facebook Graph API endpoint uses HTTPS
+   - Verify template is approved in Facebook Business Manager
+
+### Railway-Specific Configurations
+
+The updated WhatsApp service includes:
+- **Retry mechanism** for failed requests
+- **Configurable timeouts** for Railway's network environment
+- **Better error handling** with detailed debugging information
+- **Network optimizations** for cloud deployment
+
+For detailed Railway deployment instructions, see [RAILWAY_DEPLOYMENT.md](./RAILWAY_DEPLOYMENT.md).
+
 ## 📚 API Documentation
 
 ### Authentication
