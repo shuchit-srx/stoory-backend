@@ -59,6 +59,15 @@ CREATE TABLE campaigns (
     end_date DATE,
     requirements TEXT,
     deliverables TEXT[],
+    campaign_type campaign_type DEFAULT 'product',
+    -- New fields for form
+    image_url TEXT,
+    language TEXT,
+    platform TEXT,
+    content_type TEXT,
+    -- Package options for product campaigns
+    sending_package BOOLEAN DEFAULT FALSE,
+    no_of_packages INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -69,7 +78,14 @@ CREATE TABLE bids (
     created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
-    budget DECIMAL(10,2) NOT NULL,
+    min_budget DECIMAL(10,2) NOT NULL,
+    max_budget DECIMAL(10,2) NOT NULL,
+    requirements TEXT,
+    language TEXT,
+    platform TEXT,
+    content_type TEXT,
+    category TEXT,
+    expiry_date TIMESTAMP WITH TIME ZONE,
     status bid_status DEFAULT 'open',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

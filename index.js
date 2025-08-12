@@ -13,6 +13,7 @@ const authRoutes = require('./routes/auth');
 const campaignRoutes = require('./routes/campaigns');
 const bidRoutes = require('./routes/bids');
 const requestRoutes = require('./routes/requests');
+const userRoutes = require('./routes/users');
 const messageRoutes = require('./routes/messages');
 const paymentRoutes = require('./routes/payments');
 
@@ -51,6 +52,9 @@ setupSecurityMiddleware(app);
 app.use(compression());
 app.use(morgan('combined'));
 
+// Make Socket.IO available to controllers
+app.set('io', io);
+
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/campaigns', campaignRoutes);
@@ -58,6 +62,7 @@ app.use('/api/bids', bidRoutes);
 app.use('/api/requests', requestRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/users', userRoutes);
 
 // 404 handler for API routes
 app.use('/api/*', (req, res) => {

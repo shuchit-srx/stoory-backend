@@ -13,7 +13,31 @@ class BidController {
             }
 
             const userId = req.user.id;
-            const bidData = req.body;
+            const { 
+                title, 
+                description, 
+                min_budget, 
+                max_budget, 
+                requirements,
+                language,
+                platform,
+                content_type,
+                category,
+                expiry_date
+            } = req.body;
+
+            const bidData = {
+                title,
+                description: description || '',
+                min_budget: parseFloat(min_budget),
+                max_budget: parseFloat(max_budget),
+                requirements: requirements || null,
+                language: language || null,
+                platform: platform || null,
+                content_type: content_type || null,
+                category: category || null,
+                expiry_date: expiry_date ? new Date(expiry_date).toISOString() : null
+            };
 
             // Ensure only brand owners can create bids
             if (req.user.role !== 'brand_owner' && req.user.role !== 'admin') {
@@ -33,21 +57,25 @@ class BidController {
                 .single();
 
             if (error) {
+                console.error('Database error creating bid:', error);
                 return res.status(500).json({
                     success: false,
-                    message: 'Failed to create bid'
+                    message: 'Failed to create bid',
+                    error: error.message
                 });
             }
 
             res.status(201).json({
                 success: true,
-                bid: bid,
+                data: bid,
                 message: 'Bid created successfully'
             });
         } catch (error) {
+            console.error('Exception creating bid:', error);
             res.status(500).json({
                 success: false,
-                message: 'Internal server error'
+                message: 'Internal server error',
+                error: error.message
             });
         }
     }
@@ -85,10 +113,10 @@ class BidController {
                 query = query.eq('status', status);
             }
             if (min_budget) {
-                query = query.gte('budget', min_budget);
+                query = query.gte('min_budget', parseFloat(min_budget));
             }
             if (max_budget) {
-                query = query.lte('budget', max_budget);
+                query = query.lte('max_budget', parseFloat(max_budget));
             }
             if (search) {
                 query = query.or(`title.ilike.%${search}%,description.ilike.%${search}%`);
@@ -223,7 +251,38 @@ class BidController {
 
             const { id } = req.params;
             const userId = req.user.id;
-            const updateData = req.body;
+            const { 
+                title, 
+                description, 
+                min_budget, 
+                max_budget,
+                requirements,
+                language,
+                platform,
+                content_type,
+                category,
+                expiry_date
+            } = req.body;
+
+            // Build update data object with only provided fields
+            const updateData = {};
+            if (title !== undefined) updateData.title = title;
+            if (description !== undefined) updateData.description = description;
+            if (min_budget !== undefined) updateData.min_budget = parseFloat(min_budget);
+            if (max_budget !== undefined) updateData.max_budget = parseFloat(max_budget);
+            if (requirements !== undefined) updateData.requirements = requirements;
+            if (language !== undefined) updateData.language = language;
+            if (platform !== undefined) updateData.platform = platform;
+            if (content_type !== undefined) updateData.content_type = content_type;
+            if (category !== undefined) updateData.category = category;
+            if (expiry_date !== undefined) updateData.expiry_date = expiry_date ? new Date(expiry_date).toISOString() : null;
+
+            console.log('Update bid request:', {
+                bidId: id,
+                userId: userId,
+                receivedData: req.body,
+                updateData: updateData
+            });
 
             // Check if bid exists and user has permission
             const { data: existingBid, error: checkError } = await supabaseAdmin
@@ -254,12 +313,15 @@ class BidController {
                 .single();
 
             if (error) {
+                console.error('Database error updating bid:', error);
                 return res.status(500).json({
                     success: false,
-                    message: 'Failed to update bid'
+                    message: 'Failed to update bid',
+                    error: error.message
                 });
             }
 
+            console.log('Bid updated successfully:', bid);
             res.json({
                 success: true,
                 bid: bid,
@@ -335,7 +397,7 @@ class BidController {
 
             let query = supabaseAdmin
                 .from('bids')
-                .select('status, budget');
+                .select('status, min_budget, max_budget');
 
             // Apply role-based filtering
             if (req.user.role === 'brand_owner') {
@@ -347,7 +409,8 @@ class BidController {
                     .select(`
                         bids (
                             status,
-                            budget
+                            min_budget,
+                            max_budget
                         )
                     `)
                     .eq('influencer_id', userId);
@@ -377,8 +440,9 @@ class BidController {
                 // Status stats
                 stats.byStatus[bid.status] = (stats.byStatus[bid.status] || 0) + 1;
                 
-                // Budget
-                stats.totalBudget += parseFloat(bid.budget || 0);
+                // Budget (use max_budget for total calculation)
+                const bidBudget = parseFloat(bid.max_budget || bid.min_budget || 0);
+                stats.totalBudget += bidBudget;
             });
 
             res.json({
@@ -401,11 +465,46 @@ const validateCreateBid = [
         .withMessage('Title must be between 3 and 200 characters'),
     body('description')
         .optional()
-        .isLength({ max: 1000 })
-        .withMessage('Description must be less than 1000 characters'),
-    body('budget')
+        .isLength({ min: 0, max: 2000 })
+        .withMessage('Description must be less than 2000 characters'),
+    body('min_budget')
         .isFloat({ min: 0 })
-        .withMessage('Budget must be a positive number')
+        .withMessage('Min budget must be a positive number'),
+    body('max_budget')
+        .isFloat({ min: 0 })
+        .withMessage('Max budget must be a positive number'),
+    body('requirements')
+        .optional()
+        .isLength({ min: 0, max: 1000 })
+        .withMessage('Requirements must be less than 1000 characters'),
+    body('language')
+        .optional()
+        .isLength({ min: 0, max: 50 })
+        .withMessage('Language must be less than 50 characters'),
+    body('platform')
+        .optional()
+        .isLength({ min: 0, max: 50 })
+        .withMessage('Platform must be less than 50 characters'),
+    body('content_type')
+        .optional()
+        .isLength({ min: 0, max: 50 })
+        .withMessage('Content type must be less than 50 characters'),
+    body('category')
+        .optional()
+        .isLength({ min: 0, max: 50 })
+        .withMessage('Category must be less than 50 characters'),
+    body('expiry_date')
+        .optional()
+        .isISO8601()
+        .withMessage('Expiry date must be a valid ISO date'),
+    // Custom validation to ensure max_budget >= min_budget
+    body()
+        .custom((value) => {
+            if (parseFloat(value.max_budget) < parseFloat(value.min_budget)) {
+                throw new Error('Max budget must be greater than or equal to min budget');
+            }
+            return true;
+        })
 ];
 
 const validateUpdateBid = [
@@ -415,12 +514,48 @@ const validateUpdateBid = [
         .withMessage('Title must be between 3 and 200 characters'),
     body('description')
         .optional()
-        .isLength({ max: 1000 })
-        .withMessage('Description must be less than 1000 characters'),
-    body('budget')
+        .isLength({ min: 0, max: 2000 })
+        .withMessage('Description must be less than 2000 characters'),
+    body('min_budget')
         .optional()
         .isFloat({ min: 0 })
-        .withMessage('Budget must be a positive number')
+        .withMessage('Min budget must be a positive number'),
+    body('max_budget')
+        .optional()
+        .isFloat({ min: 0 })
+        .withMessage('Max budget must be a positive number'),
+    body('requirements')
+        .optional()
+        .isLength({ min: 0, max: 1000 })
+        .withMessage('Requirements must be less than 1000 characters'),
+    body('language')
+        .optional()
+        .isLength({ min: 0, max: 50 })
+        .withMessage('Language must be less than 50 characters'),
+    body('platform')
+        .optional()
+        .isLength({ min: 0, max: 50 })
+        .withMessage('Platform must be less than 50 characters'),
+    body('content_type')
+        .optional()
+        .isLength({ min: 0, max: 50 })
+        .withMessage('Content type must be less than 50 characters'),
+    body('category')
+        .optional()
+        .isLength({ min: 0, max: 50 })
+        .withMessage('Category must be less than 50 characters'),
+    body('expiry_date')
+        .optional()
+        .isISO8601()
+        .withMessage('Expiry date must be a valid ISO date'),
+    // Custom validation to ensure max_budget >= min_budget
+    body()
+        .custom((value) => {
+            if (value.min_budget && value.max_budget && parseFloat(value.max_budget) < parseFloat(value.min_budget)) {
+                throw new Error('Max budget must be greater than or equal to min budget');
+            }
+            return true;
+        })
 ];
 
 module.exports = {

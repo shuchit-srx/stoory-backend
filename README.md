@@ -176,6 +176,83 @@ GET /api/campaigns?page=1&limit=10&type=campaign&status=pending
 Authorization: Bearer <supabase_access_token>
 ```
 
+### Bids
+
+#### Create Bid
+```http
+POST /api/bids
+Authorization: Bearer <supabase_access_token>
+Content-Type: application/json
+
+{
+  "title": "Quick Video Promotion",
+  "description": "Looking for influencers to promote our new product",
+  "min_budget": 5000,
+  "max_budget": 25000,
+  "requirements": "General audience, 18-35 age group",
+  "language": "English",
+  "platform": "Instagram",
+  "content_type": "Video",
+  "category": "Fashion",
+  "expiry_date": "2025-09-30T23:59:59Z"
+}
+```
+
+**Success Response (201):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "uuid",
+    "title": "Quick Video Promotion",
+    "description": "Looking for influencers to promote our new product",
+    "min_budget": 5000,
+    "max_budget": 25000,
+    "requirements": "General audience, 18-35 age group",
+    "language": "English",
+    "platform": "Instagram",
+    "content_type": "Video",
+    "category": "Fashion",
+    "expiry_date": "2025-09-30T23:59:59Z",
+    "status": "open",
+    "created_at": "2025-08-12T10:30:00Z",
+    "updated_at": "2025-08-12T10:30:00Z"
+  },
+  "message": "Bid created successfully"
+}
+```
+
+#### Get Bids
+```http
+GET /api/bids?page=1&limit=10&status=open&min_budget=1000&max_budget=50000&search=video
+Authorization: Bearer <supabase_access_token>
+```
+
+#### Update Bid
+```http
+PUT /api/bids/:id
+Authorization: Bearer <supabase_access_token>
+Content-Type: application/json
+
+{
+  "title": "Updated Video Promotion",
+  "max_budget": 30000,
+  "expiry_date": "2025-10-15T23:59:59Z"
+}
+```
+
+#### Delete Bid
+```http
+DELETE /api/bids/:id
+Authorization: Bearer <supabase_access_token>
+```
+
+#### Get Bid Statistics
+```http
+GET /api/bids/stats
+Authorization: Bearer <supabase_access_token>
+```
+
 ### Requests
 
 #### Apply to Campaign

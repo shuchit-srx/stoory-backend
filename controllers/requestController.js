@@ -125,7 +125,10 @@ class RequestController {
                 .insert(requestData)
                 .select(`
                     *,
-                    campaigns (*),
+                    campaigns (
+                        *,
+                        type:campaign_type
+                    ),
                     bids (*),
                     influencer:users!requests_influencer_id_fkey (*)
                 `)
@@ -136,6 +139,28 @@ class RequestController {
                     success: false,
                     message: 'Failed to create request'
                 });
+            }
+
+            // Emit real-time update to bid/campaign room
+            const io = req.app.get('io');
+            if (io) {
+                if (sourceType === 'campaign') {
+                    io.to(`campaign_${sourceId}`).emit('new_influencer_application', {
+                        type: 'campaign',
+                        campaignId: sourceId,
+                        influencerId: userId,
+                        requestId: request.id,
+                        timestamp: new Date().toISOString()
+                    });
+                } else {
+                    io.to(`bid_${sourceId}`).emit('new_influencer_application', {
+                        type: 'bid',
+                        bidId: sourceId,
+                        influencerId: userId,
+                        requestId: request.id,
+                        timestamp: new Date().toISOString()
+                    });
+                }
             }
 
             // Create conversation automatically
@@ -195,7 +220,7 @@ class RequestController {
                     campaigns (
                         id,
                         title,
-                        type,
+                        type:campaign_type,
                         budget,
                         status,
                         created_by_user:users!campaigns_created_by_fkey (
@@ -237,7 +262,7 @@ class RequestController {
                         campaigns!inner (
                             id,
                             title,
-                            type,
+                            type:campaign_type,
                             budget,
                             status,
                             created_by_user:users!campaigns_created_by_fkey (
@@ -306,7 +331,7 @@ class RequestController {
                     campaigns (
                         id,
                         title,
-                        type,
+                        type:campaign_type,
                         budget,
                         status,
                         created_by,
@@ -773,6 +798,279 @@ class RequestController {
                 message: 'Application withdrawn successfully'
             });
         } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
+
+    /**
+     * Get influencers who applied to a specific bid
+     */
+    async getBidInfluencers(req, res) {
+        try {
+            const { bid_id } = req.params;
+            const userId = req.user.id;
+
+            // Check if bid exists and user has permission
+            const { data: bid, error: bidError } = await supabaseAdmin
+                .from('bids')
+                .select('created_by')
+                .eq('id', bid_id)
+                .single();
+
+            if (bidError || !bid) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Bid not found'
+                });
+            }
+
+            // Only bid creator or admin can view influencers
+            if (bid.created_by !== userId && req.user.role !== 'admin') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied'
+                });
+            }
+
+            // Get influencers who applied to this bid
+            const { data: influencers, error } = await supabaseAdmin
+                .from('requests')
+                .select(`
+                    id,
+                    status,
+                    final_agreed_amount,
+                    initial_payment,
+                    final_payment,
+                    created_at,
+                    influencer:users!requests_influencer_id_fkey (
+                        id,
+                        phone,
+                        email,
+                        name,
+                        languages,
+                        categories,
+                        min_range,
+                        max_range,
+                        role
+                    )
+                `)
+                .eq('bid_id', bid_id)
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                console.error('Database error fetching bid influencers:', error);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch influencers',
+                    error: error.message
+                });
+            }
+
+            console.log('Successfully fetched bid influencers:', {
+                bidId: bid_id,
+                count: influencers.length,
+                influencers: influencers
+            });
+
+            res.json({
+                success: true,
+                influencers: influencers,
+                total: influencers.length
+            });
+        } catch (error) {
+            console.error('Error getting bid influencers:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Get influencers who applied to a specific campaign
+     */
+    async getCampaignInfluencers(req, res) {
+        try {
+            const { campaign_id } = req.params;
+            const userId = req.user.id;
+
+            // Check if campaign exists and user has permission
+            const { data: campaign, error: campaignError } = await supabaseAdmin
+                .from('campaigns')
+                .select('created_by')
+                .eq('id', campaign_id)
+                .single();
+
+            if (campaignError || !campaign) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Campaign not found'
+                });
+            }
+
+            // Only campaign creator or admin can view influencers
+            if (campaign.created_by !== userId && req.user.role !== 'admin') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied'
+                });
+            }
+
+            // Get influencers who applied to this campaign
+            const { data: influencers, error } = await supabaseAdmin
+                .from('requests')
+                .select(`
+                    id,
+                    status,
+                    final_agreed_amount,
+                    initial_payment,
+                    final_payment,
+                    created_at,
+                    influencer:users!requests_influencer_id_fkey (
+                        id,
+                        phone,
+                        email,
+                        name,
+                        languages,
+                        categories,
+                        min_range,
+                        max_range,
+                        role
+                    )
+                `)
+                .eq('campaign_id', campaign_id)
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch influencers'
+                });
+            }
+
+            res.json({
+                success: true,
+                influencers: influencers,
+                total: influencers.length
+            });
+        } catch (error) {
+            console.error('Error getting campaign influencers:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
+
+    /**
+     * Get real-time influencer count for a bid
+     */
+    async getBidInfluencerCount(req, res) {
+        try {
+            const { bid_id } = req.params;
+            const userId = req.user.id;
+
+            // Check if bid exists and user has permission
+            const { data: bid, error: bidError } = await supabaseAdmin
+                .from('bids')
+                .select('created_by')
+                .eq('id', bid_id)
+                .single();
+
+            if (bidError || !bid) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Bid not found'
+                });
+            }
+
+            // Only bid creator or admin can view count
+            if (bid.created_by !== userId && req.user.role !== 'admin') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied'
+                });
+            }
+
+            // Get count of influencers who applied
+            const { count, error } = await supabaseAdmin
+                .from('requests')
+                .select('*', { count: 'exact', head: true })
+                .eq('bid_id', bid_id);
+
+            if (error) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch influencer count'
+                });
+            }
+
+            res.json({
+                success: true,
+                count: count || 0
+            });
+        } catch (error) {
+            console.error('Error getting bid influencer count:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
+
+    /**
+     * Get real-time influencer count for a campaign
+     */
+    async getCampaignInfluencerCount(req, res) {
+        try {
+            const { campaign_id } = req.params;
+            const userId = req.user.id;
+
+            // Check if campaign exists and user has permission
+            const { data: campaign, error: campaignError } = await supabaseAdmin
+                .from('campaigns')
+                .select('created_by')
+                .eq('id', campaign_id)
+                .single();
+
+            if (campaignError || !campaign) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Campaign not found'
+                });
+            }
+
+            // Only campaign creator or admin can view count
+            if (campaign.created_by !== userId && req.user.role !== 'admin') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied'
+                });
+            }
+
+            // Get count of influencers who applied
+            const { count, error } = await supabaseAdmin
+                .from('requests')
+                .select('*', { count: 'exact', head: true })
+                .eq('campaign_id', campaign_id);
+
+            if (error) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch influencer count'
+                });
+            }
+
+            res.json({
+                success: true,
+                count: count || 0
+            });
+        } catch (error) {
+            console.error('Error getting campaign influencer count:', error);
             res.status(500).json({
                 success: false,
                 message: 'Internal server error'

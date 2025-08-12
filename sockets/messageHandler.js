@@ -101,6 +101,27 @@ class MessageHandler {
             }
         });
 
+        // Handle joining bid/campaign room for real-time updates
+        socket.on('join_bid_room', (bidId) => {
+            socket.join(`bid_${bidId}`);
+            console.log(`User joined bid room: ${bidId}`);
+        });
+
+        socket.on('join_campaign_room', (campaignId) => {
+            socket.join(`campaign_${campaignId}`);
+            console.log(`User joined campaign room: ${campaignId}`);
+        });
+
+        socket.on('leave_bid_room', (bidId) => {
+            socket.leave(`bid_${bidId}`);
+            console.log(`User left bid room: ${bidId}`);
+        });
+
+        socket.on('leave_campaign_room', (campaignId) => {
+            socket.leave(`campaign_${campaignId}`);
+            console.log(`User left campaign room: ${campaignId}`);
+        });
+
         // Handle message seen
         socket.on('mark_seen', async (data) => {
             try {

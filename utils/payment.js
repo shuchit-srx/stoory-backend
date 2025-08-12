@@ -175,9 +175,9 @@ class PaymentService {
                     campaigns (
                         id,
                         title,
-                        type
+                        type:campaign_type
                     )
-                `)
+                `, { count: 'exact' })
                 .eq('wallets.user_id', userId);
 
             if (status) {

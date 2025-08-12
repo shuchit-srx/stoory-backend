@@ -46,7 +46,7 @@ class WhatsAppService {
             
             switch (this.service) {
                 case 'custom':
-                    return await this.sendViaCustomAPI(phone, message);
+                    return await this.sendOTPViaCustomAPI(phone, otp);
                 case 'console':
                     return await this.sendViaConsole(phone, message);
                 default:
@@ -71,7 +71,7 @@ class WhatsAppService {
             
             switch (this.service) {
                 case 'custom':
-                    return await this.sendViaCustomAPI(phone, message);
+                    return await this.sendWelcomeViaCustomAPI(phone, message);
                 case 'console':
                     return await this.sendViaConsole(phone, message);
                 default:
@@ -88,7 +88,138 @@ class WhatsAppService {
     }
 
     /**
-     * Send via Custom WhatsApp API (Facebook Graph API)
+     * Send OTP via Custom WhatsApp API (Facebook Graph API)
+     */
+    async sendOTPViaCustomAPI(phone, otp) {
+        try {
+            // Format phone number for WhatsApp (remove + and add country code if needed)
+            const formattedPhone = this.formatPhoneForWhatsApp(phone);
+            
+            // Facebook Graph API template message payload for OTP
+            const payload = {
+                messaging_product: "whatsapp",
+                to: formattedPhone,
+                type: "template",
+                template: {
+                    name: this.templateName,
+                    language: {
+                        code: "en_US"
+                    },
+                    components: [
+                        {
+                            type: "body",
+                            parameters: [
+                                {
+                                    type: "text",
+                                    text: otp // OTP parameter
+                                }
+                            ]
+                        },
+                        {
+                            type: "button",
+                            sub_type: "url",
+                            index: 0, // button index starts from 0
+                            parameters: [
+                                {
+                                    type: "text",
+                                    text: "12345" // Dynamic URL parameter value
+                                }
+                            ]
+                        }
+                    ]
+                }
+            };
+
+            // Headers for Facebook Graph API
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (this.apiKey) {
+                headers['Authorization'] = `Bearer ${this.apiKey}`;
+            }
+
+            const response = await axios.post(this.customEndpoint, payload, { headers });
+
+            return {
+                success: true,
+                message: 'OTP sent successfully via WhatsApp',
+                provider: 'facebook-graph-api',
+                response: response.data
+            };
+        } catch (error) {
+            console.error('Facebook Graph API error:', error.response?.data || error.message);
+            
+            // Provide more specific error messages
+            let errorMessage = 'Failed to send OTP via Facebook Graph API';
+            if (error.response?.data?.error) {
+                errorMessage = error.response.data.error.message || errorMessage;
+            }
+            
+            return {
+                success: false,
+                message: errorMessage,
+                error: error.response?.data || error.message
+            };
+        }
+    }
+
+    /**
+     * Send welcome message via Custom WhatsApp API (Facebook Graph API)
+     */
+    async sendWelcomeViaCustomAPI(phone, message) {
+        try {
+            // Format phone number for WhatsApp (remove + and add country code if needed)
+            const formattedPhone = this.formatPhoneForWhatsApp(phone);
+            
+            // For welcome messages, we'll use a simple text message instead of template
+            // This prevents the OTP template from being used
+            const payload = {
+                messaging_product: "whatsapp",
+                to: formattedPhone,
+                type: "text",
+                text: {
+                    body: message
+                }
+            };
+
+            // Headers for Facebook Graph API
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (this.apiKey) {
+                headers['Authorization'] = `Bearer ${this.apiKey}`;
+            }
+
+            const response = await axios.post(this.customEndpoint, payload, { headers });
+
+            return {
+                success: true,
+                message: 'Welcome message sent successfully via WhatsApp',
+                provider: 'facebook-graph-api',
+                response: response.data
+            };
+        } catch (error) {
+            console.error('Facebook Graph API error:', error.response?.data || error.message);
+            
+            // Provide more specific error messages
+            let errorMessage = 'Failed to send welcome message via Facebook Graph API';
+            if (error.response?.data?.error) {
+                errorMessage = error.response.data.error.message || errorMessage;
+            }
+            
+            return {
+                success: false,
+                message: errorMessage,
+                error: error.response?.data || error.message
+            };
+        }
+    }
+
+    /**
+     * Send via Custom WhatsApp API (Facebook Graph API) - DEPRECATED
+     * @deprecated Use sendOTPViaCustomAPI or sendWelcomeViaCustomAPI instead
      */
     async sendViaCustomAPI(phone, message) {
         try {
