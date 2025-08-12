@@ -62,6 +62,25 @@ RAZORPAY_KEY_SECRET=your_razorpay_key_secret
 railway up
 ```
 
+**Note**: If you encounter Nixpacks build errors, the project now includes a Dockerfile that will be used automatically. The `railway.json` configuration specifies the Docker builder to avoid Nixpacks issues.
+
+## Build and Deployment Issues
+
+### Nixpacks Build Errors
+
+**Problem**: `nix-env -if .nixpacks/nixpkgs-*.nix` fails during build
+
+**Solution**: The project now uses Docker instead of Nixpacks
+- Dockerfile is included in the project
+- `railway.json` is configured to use `dockerfile` builder
+- This bypasses Nixpacks entirely
+
+**If you still encounter issues**:
+```bash
+# Force Railway to use Docker
+railway up --build-builder dockerfile
+```
+
 ## WhatsApp OTP Troubleshooting
 
 ### Common Issues and Solutions

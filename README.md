@@ -117,6 +117,17 @@ The server will start on `http://localhost:3000`
 
 3. **Configure Environment Variables** in Railway dashboard using the template from `env.example`
 
+### Build Issues in Railway
+
+If you encounter Nixpacks build errors:
+
+1. **The project now uses Docker** instead of Nixpacks
+2. **Dockerfile is included** and configured in `railway.json`
+3. **Run the fix script** to ensure proper configuration:
+   ```bash
+   npm run fix:railway
+   ```
+
 ### WhatsApp OTP Issues in Railway
 
 If you encounter issues with WhatsApp OTP when deploying to Railway:

@@ -29,6 +29,7 @@ class RailwayIssuesFixer {
         await this.fixNetworkIssues();
         await this.fixTemplateIssues();
         await this.createRailwayConfig();
+        await this.createDockerConfig();
 
         console.log('\n✅ Fixes applied! Please review the changes and redeploy.');
     }
@@ -158,7 +159,7 @@ class RailwayIssuesFixer {
 
         const railwayConfig = {
             build: {
-                builder: 'nixpacks'
+                builder: 'dockerfile'
             },
             deploy: {
                 startCommand: 'npm start',
@@ -196,6 +197,100 @@ class RailwayIssuesFixer {
             console.log('   ✅ Created .railwayignore');
         } catch (error) {
             console.log(`   ❌ Failed to create .railwayignore: ${error.message}`);
+        }
+
+        console.log('');
+    }
+
+    async createDockerConfig() {
+        console.log('6️⃣ Creating Docker Configuration...');
+
+        // Check if Dockerfile exists
+        if (!fs.existsSync('Dockerfile')) {
+            console.log('   ❌ Dockerfile not found - creating one...');
+            
+            const dockerfile = `# Use Node.js 18 Alpine for smaller image size
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies for native modules (if any)
+RUN apk add --no-cache python3 make g++
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy application code
+COPY . .
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nodejs -u 1001
+
+# Change ownership of the app directory
+RUN chown -R nodejs:nodejs /app
+USER nodejs
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
+  CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
+
+# Start the application
+CMD ["npm", "start"]`;
+
+            try {
+                fs.writeFileSync('Dockerfile', dockerfile);
+                console.log('   ✅ Created Dockerfile');
+            } catch (error) {
+                console.log(`   ❌ Failed to create Dockerfile: ${error.message}`);
+            }
+        } else {
+            console.log('   ✅ Dockerfile already exists');
+        }
+
+        // Check if .dockerignore exists
+        if (!fs.existsSync('.dockerignore')) {
+            console.log('   ❌ .dockerignore not found - creating one...');
+            
+            const dockerignore = `node_modules
+npm-debug.log
+.git
+.gitignore
+README.md
+.env
+.env.local
+.env.*.local
+.nyc_output
+coverage
+.nyc_output
+*.log
+.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+*~
+test_*.js
+fix_*.js
+RAILWAY_DEPLOYMENT.md
+railway.json
+.railwayignore`;
+
+            try {
+                fs.writeFileSync('.dockerignore', dockerignore);
+                console.log('   ✅ Created .dockerignore');
+            } catch (error) {
+                console.log(`   ❌ Failed to create .dockerignore: ${error.message}`);
+            }
+        } else {
+            console.log('   ✅ .dockerignore already exists');
         }
 
         console.log('');
