@@ -22,4 +22,10 @@ router.delete('/:id', authService.requireRole('influencer'), RequestController.w
 router.post('/approval-payment', authService.requireRole(['brand_owner', 'admin']), RequestController.processApprovalPayment);
 router.post('/completion-payment', authService.requireRole(['brand_owner', 'admin']), RequestController.processCompletionPayment);
 
+// Influencer list routes for bids and campaigns
+router.get('/bid/:bid_id/influencers', RequestController.getBidInfluencers);
+router.get('/campaign/:campaign_id/influencers', RequestController.getCampaignInfluencers);
+router.get('/bid/:bid_id/influencer-count', RequestController.getBidInfluencerCount);
+router.get('/campaign/:campaign_id/influencer-count', RequestController.getCampaignInfluencerCount);
+
 module.exports = router; 

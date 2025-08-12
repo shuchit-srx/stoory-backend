@@ -44,6 +44,12 @@ class CampaignController {
                 });
             }
 
+            console.log('Creating campaign with data:', {
+                userId: userId,
+                formData: formData,
+                campaignData: campaignData
+            });
+
             const { data: campaign, error } = await supabaseAdmin
                 .from('campaigns')
                 .insert({
@@ -54,21 +60,26 @@ class CampaignController {
                 .single();
 
             if (error) {
+                console.error('Database error creating campaign:', error);
                 return res.status(500).json({
                     success: false,
-                    message: 'Failed to create campaign'
+                    message: 'Failed to create campaign',
+                    error: error.message
                 });
             }
 
+            console.log('Campaign created successfully:', campaign);
             res.status(201).json({
                 success: true,
                 campaign: campaign,
                 message: 'Campaign created successfully'
             });
         } catch (error) {
+            console.error('Exception creating campaign:', error);
             res.status(500).json({
                 success: false,
-                message: 'Internal server error'
+                message: 'Internal server error',
+                error: error.message
             });
         }
     }

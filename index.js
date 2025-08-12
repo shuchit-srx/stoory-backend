@@ -52,6 +52,9 @@ setupSecurityMiddleware(app);
 app.use(compression());
 app.use(morgan('combined'));
 
+// Make Socket.IO available to controllers
+app.set('io', io);
+
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/campaigns', campaignRoutes);
