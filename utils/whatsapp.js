@@ -36,6 +36,13 @@ class WhatsAppService {
             return;
         }
 
+        // Configure DNS for Railway deployment
+        if (process.env.NODE_ENV === 'production') {
+            const dns = require('dns');
+            dns.setServers(['8.8.8.8', '8.8.4.4']); // Use Google DNS
+            console.log('🚂 Production environment - using Google DNS');
+        }
+
         console.log('✅ Custom WhatsApp API configured');
         console.log('📋 Configuration:', {
             endpoint: this.customEndpoint,

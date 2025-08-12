@@ -1,10 +1,7 @@
 const { supabaseAdmin } = require('../supabase/client');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-// Use Railway-optimized WhatsApp service in production
-const whatsappService = process.env.NODE_ENV === 'production' 
-    ? require('./whatsapp-railway') 
-    : require('./whatsapp');
+const whatsappService = require('./whatsapp');
 
 class AuthService {
     constructor() {
