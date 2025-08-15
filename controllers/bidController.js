@@ -69,6 +69,21 @@ class BidController {
                 });
             }
 
+            // Check subscription status for brand owners
+            if (req.user.role === 'brand_owner') {
+                const { data: hasPremiumAccess } = await supabaseAdmin.rpc('has_active_premium_subscription', {
+                    user_uuid: userId
+                });
+
+                if (!hasPremiumAccess) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'Premium subscription required to create bids',
+                        requires_subscription: true
+                    });
+                }
+            }
+
             const { data: bid, error } = await supabaseAdmin
                 .from('bids')
                 .insert({

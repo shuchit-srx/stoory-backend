@@ -65,6 +65,21 @@ class CampaignController {
                 });
             }
 
+            // Check subscription status for brand owners
+            if (req.user.role === 'brand_owner') {
+                const { data: hasPremiumAccess } = await supabaseAdmin.rpc('has_active_premium_subscription', {
+                    user_uuid: userId
+                });
+
+                if (!hasPremiumAccess) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'Premium subscription required to create campaigns',
+                        requires_subscription: true
+                    });
+                }
+            }
+
             console.log('Creating campaign with data:', {
                 userId: userId,
                 formData: formData,

@@ -16,6 +16,7 @@ const requestRoutes = require('./routes/requests');
 const userRoutes = require('./routes/users');
 const messageRoutes = require('./routes/messages');
 const paymentRoutes = require('./routes/payments');
+const subscriptionRoutes = require('./routes/subscriptions');
 
 const app = express();
 const server = http.createServer(app);
@@ -63,6 +64,7 @@ app.use('/api/requests', requestRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
 
 // 404 handler for API routes
 app.use('/api/*', (req, res) => {

@@ -6,6 +6,9 @@ class UserController {
      */
     async listInfluencers(req, res) {
         try {
+            const userId = req.user.id;
+            const userRole = req.user.role;
+
             const {
                 page = 1,
                 limit = 10,
@@ -38,9 +41,31 @@ class UserController {
             const sortField = allowedSortBy.has(sort_by) ? sort_by : 'created_at';
             const sortAscending = (String(sort_order).toLowerCase() === 'asc');
 
-            let query = supabaseAdmin
-                .from('users')
-                .select(`
+            // Check if user has active premium subscription (only for brand owners)
+            let hasPremiumAccess = false;
+            if (userRole === 'brand_owner') {
+                const { data: subscriptionStatus } = await supabaseAdmin.rpc('has_active_premium_subscription', {
+                    user_uuid: userId
+                });
+                hasPremiumAccess = subscriptionStatus;
+            }
+
+            // Build query based on subscription status
+            let selectFields = `
+                id,
+                phone,
+                role,
+                languages,
+                categories,
+                min_range,
+                max_range,
+                created_at,
+                social_platforms (*)
+            `;
+
+            // Add name and email only for premium users or non-brand owners
+            if (hasPremiumAccess || userRole !== 'brand_owner') {
+                selectFields = `
                     id,
                     phone,
                     name,
@@ -52,14 +77,24 @@ class UserController {
                     max_range,
                     created_at,
                     social_platforms (*)
-                `, { count: 'exact' })
+                `;
+            }
+
+            let query = supabaseAdmin
+                .from('users')
+                .select(selectFields, { count: 'exact' })
                 .eq('role', 'influencer')
                 .eq('is_deleted', false);
 
-            // Search across name, email, phone
+            // Search across name, email, phone (only if premium access)
             if (search && String(search).trim().length > 0) {
                 const term = String(search).trim();
-                query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`);
+                if (hasPremiumAccess || userRole !== 'brand_owner') {
+                    query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`);
+                } else {
+                    // For non-premium brand owners, only search by phone
+                    query = query.ilike('phone', `%${term}%`);
+                }
             }
 
             // Array overlaps for languages and categories
@@ -92,9 +127,26 @@ class UserController {
                 return res.status(500).json({ success: false, message: 'Failed to fetch influencers' });
             }
 
+            // Process influencers data based on subscription status
+            let processedInfluencers = influencers || [];
+            
+            if (userRole === 'brand_owner' && !hasPremiumAccess) {
+                // Mask sensitive data for non-premium brand owners
+                processedInfluencers = processedInfluencers.map(influencer => ({
+                    ...influencer,
+                    name: null,
+                    email: null,
+                    phone: influencer.phone ? influencer.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') : null
+                }));
+            }
+
             return res.json({
                 success: true,
-                influencers: influencers || [],
+                influencers: processedInfluencers,
+                subscription: {
+                    has_premium_access: hasPremiumAccess,
+                    requires_subscription: userRole === 'brand_owner' && !hasPremiumAccess
+                },
                 pagination: {
                     page: pageNum,
                     limit: limitNum,
