@@ -1,630 +1,225 @@
-# Stoory Backend
+# 🚀 Stoory Backend
 
-A comprehensive backend for the Stoory platform - connecting Brand Owners with Influencers through campaigns and bids.
+A comprehensive influencer marketing platform backend built with Node.js, Express, and Supabase.
 
-## 🚀 Features
+## 🎯 Features
 
-- **Authentication**: Supabase OTP-based phone authentication with built-in JWT tokens
-- **Role-based Access**: Influencers, Brand Owners, and Admin roles
-- **Campaign Management**: Create and manage campaigns/bids
-- **Real-time Messaging**: Socket.IO powered chat system
-- **Transaction Management**: Process payment responses from frontend
-- **Wallet System**: Two-stage payment system
-- **Row Level Security**: Comprehensive data protection
-- **File Storage**: Supabase Storage integration
+- **WhatsApp OTP Authentication** - Secure phone-based login
+- **Single Payment System** - Simplified payment flow with escrow
+- **Real-time Messaging** - WebSocket-based chat system
+- **Automated Conversations** - AI-powered chat flow
+- **Work Management** - Submission, approval, and revision system
+- **Wallet System** - Balance and transaction management
+- **File Upload** - Image and media handling
+- **Social Platform Integration** - Influencer profile management
 
 ## 🏗️ Architecture
 
 ```
-backend/
-├── controllers/          # Business logic controllers
-├── routes/              # API route definitions
-├── middleware/          # Security and validation middleware
-├── utils/               # Utility functions (auth, payment)
-├── sockets/             # Socket.IO message handling
-├── supabase/            # Supabase client configuration
-├── database/            # Database schema and migrations
-├── index.js             # Main server file
-└── package.json         # Dependencies
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Frontend      │    │   Backend       │    │   Database      │
+│   (React/Next)  │◄──►│   (Node.js)     │◄──►│   (Supabase)    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ┌─────────────────┐
+                       │   WebSocket     │
+                       │   (Socket.io)   │
+                       └─────────────────┘
 ```
 
-## 📋 Prerequisites
+## 🚀 Quick Start
 
-- Node.js (v18 or higher)
-- npm or yarn
-- Supabase account and project
+### Prerequisites
+- Node.js 18+
+- Supabase account
+- Railway account (for deployment)
 
-## 🛠️ Setup Instructions
+### Installation
 
-### 1. Clone and Install Dependencies
-
+1. **Clone the repository**
 ```bash
 git clone <repository-url>
 cd stoory-backend
+```
+
+2. **Install dependencies**
+```bash
 npm install
 ```
 
-### 2. Environment Configuration
-
-Copy the environment template and configure your variables:
-
+3. **Set up environment variables**
 ```bash
 cp env.example .env
 ```
 
-Update `.env` with your configuration:
-
+Fill in your environment variables:
 ```env
-# Server Configuration
+# Database
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+
+# JWT
+JWT_SECRET=your_jwt_secret
+
+# WhatsApp
+WHATSAPP_API_KEY=your_whatsapp_api_key
+WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
+
+# Razorpay
+RAZORPAY_KEY_ID=your_razorpay_key_id
+RAZORPAY_KEY_SECRET=your_razorpay_secret
+
+# Server
 PORT=3000
 NODE_ENV=development
-
-# Supabase Configuration
-SUPABASE_URL=your_supabase_url_here
-SUPABASE_ANON_KEY=your_supabase_anon_key_here
-SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key_here
-
-# File Upload Configuration
-MAX_FILE_SIZE=5242880
-ALLOWED_FILE_TYPES=image/jpeg,image/png,image/gif,video/mp4,video/avi
-
-
-
-# CORS Configuration
-CORS_ORIGIN=http://localhost:3000,http://localhost:3001
-
-# Database Configuration
-DB_POOL_SIZE=10
-DB_IDLE_TIMEOUT=30000
 ```
 
-### 3. Database Setup
+4. **Set up database**
+   - Run `database/schema.sql` in your Supabase SQL Editor
+   - Run `database/consolidated_migration.sql` for the latest features
 
-1. Create a new Supabase project
-2. Run the database schema from `database/schema.sql`
-3. Configure Row Level Security (RLS) policies
-4. Set up Supabase Storage buckets for file uploads
-
-### 4. Start the Server
-
+5. **Start development server**
 ```bash
-# Development mode
 npm run dev
-
-# Production mode
-npm start
 ```
 
-The server will start on `http://localhost:3000`
-
-## 🚂 Railway Deployment
-
-### Quick Deployment
-
-1. **Install Railway CLI**:
-   ```bash
-   npm install -g @railway/cli
-   railway login
-   ```
-
-2. **Deploy to Railway**:
-   ```bash
-   railway init
-   railway up
-   ```
-
-3. **Configure Environment Variables** in Railway dashboard using the template from `env.example`
-
-### Build Issues in Railway
-
-If you encounter Nixpacks build errors:
-
-1. **The project now uses Docker** instead of Nixpacks
-2. **Dockerfile is included** and configured in `railway.json`
-3. **Run the fix script** to ensure proper configuration:
-   ```bash
-   npm run fix:railway
-   ```
-
-### WhatsApp OTP Issues in Railway
-
-If you encounter issues with WhatsApp OTP when deploying to Railway:
-
-1. **Run the Railway fix script**:
-   ```bash
-   npm run fix:railway
-   ```
-
-2. **Test WhatsApp connectivity**:
-   ```bash
-   npm run test:whatsapp
-   ```
-
-3. **Common fixes**:
-   - Increase `WHATSAPP_TIMEOUT` to 60000ms
-   - Set `WHATSAPP_RETRY_ATTEMPTS` to 5
-   - Ensure Facebook Graph API endpoint uses HTTPS
-   - Verify template is approved in Facebook Business Manager
-
-### Railway-Specific Configurations
-
-The updated WhatsApp service includes:
-- **Retry mechanism** for failed requests
-- **Configurable timeouts** for Railway's network environment
-- **Better error handling** with detailed debugging information
-- **Network optimizations** for cloud deployment
-
-For detailed Railway deployment instructions, see [RAILWAY_DEPLOYMENT.md](./RAILWAY_DEPLOYMENT.md).
-
-## 📚 API Documentation
-
-### Authentication
-
-#### Send OTP
-```http
-POST /api/auth/send-otp
-Content-Type: application/json
-
-{
-  "phone": "+1234567890"
-}
-```
-
-#### Verify OTP
-```http
-POST /api/auth/verify-otp
-Content-Type: application/json
-
-{
-  "phone": "+1234567890",
-  "token": "123456",
-  "userData": {
-    "email": "user@example.com",
-    "role": "influencer"
-  }
-}
-```
-
-**Response includes Supabase session:**
-```json
-{
-  "success": true,
-  "user": { ... },
-  "session": {
-    "access_token": "eyJ...",
-    "refresh_token": "eyJ...",
-    "expires_at": 1234567890
-  },
-  "message": "Authentication successful"
-}
-```
-
-#### Refresh Token
-```http
-POST /api/auth/refresh-token
-Content-Type: application/json
-
-{
-  "refresh_token": "eyJ..."
-}
-```
-
-### Campaigns
-
-#### Create Campaign
-```http
-POST /api/campaigns
-Authorization: Bearer <supabase_access_token>
-Content-Type: application/json
-
-{
-  "type": "campaign",
-  "title": "Summer Product Launch",
-  "description": "Promote our new summer collection",
-  "budget": 5000,
-  "start_date": "2024-06-01",
-  "end_date": "2024-08-31"
-}
-```
-
-#### Get Campaigns
-```http
-GET /api/campaigns?page=1&limit=10&type=campaign&status=pending
-Authorization: Bearer <supabase_access_token>
-```
-
-### Bids
-
-#### Create Bid
-```http
-POST /api/bids
-Authorization: Bearer <supabase_access_token>
-Content-Type: application/json
-
-{
-  "title": "Quick Video Promotion",
-  "description": "Looking for influencers to promote our new product",
-  "min_budget": 5000,
-  "max_budget": 25000,
-  "requirements": "General audience, 18-35 age group",
-  "language": "English",
-  "platform": "Instagram",
-  "content_type": "Video",
-  "category": "Fashion",
-  "expiry_date": "2025-09-30T23:59:59Z"
-}
-```
-
-**Success Response (201):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "uuid",
-    "title": "Quick Video Promotion",
-    "description": "Looking for influencers to promote our new product",
-    "min_budget": 5000,
-    "max_budget": 25000,
-    "requirements": "General audience, 18-35 age group",
-    "language": "English",
-    "platform": "Instagram",
-    "content_type": "Video",
-    "category": "Fashion",
-    "expiry_date": "2025-09-30T23:59:59Z",
-    "status": "open",
-    "created_at": "2025-08-12T10:30:00Z",
-    "updated_at": "2025-08-12T10:30:00Z"
-  },
-  "message": "Bid created successfully"
-}
-```
-
-#### Get Bids
-```http
-GET /api/bids?page=1&limit=10&status=open&min_budget=1000&max_budget=50000&search=video
-Authorization: Bearer <supabase_access_token>
-```
-
-#### Update Bid
-```http
-PUT /api/bids/:id
-Authorization: Bearer <supabase_access_token>
-Content-Type: application/json
-
-{
-  "title": "Updated Video Promotion",
-  "max_budget": 30000,
-  "expiry_date": "2025-10-15T23:59:59Z"
-}
-```
-
-#### Delete Bid
-```http
-DELETE /api/bids/:id
-Authorization: Bearer <supabase_access_token>
-```
-
-#### Get Bid Statistics
-```http
-GET /api/bids/stats
-Authorization: Bearer <supabase_access_token>
-```
-
-### Requests
-
-#### Apply to Campaign
-```http
-POST /api/requests
-Authorization: Bearer <supabase_access_token>
-Content-Type: application/json
-
-{
-  "campaign_id": "uuid-here"
-}
-```
-
-### Messaging
-
-#### Get Conversations
-```http
-GET /api/messages/conversations?page=1&limit=10
-Authorization: Bearer <supabase_access_token>
-```
-
-#### Send Message
-```http
-POST /api/messages/conversations/:conversation_id/messages
-Authorization: Bearer <supabase_access_token>
-Content-Type: application/json
-
-{
-  "message": "Hello! I'm interested in your campaign",
-  "media_url": "https://example.com/image.jpg"
-}
-```
-
-### Transactions
-
-#### Process Payment Response
-```http
-POST /api/payments/process-payment
-Authorization: Bearer <supabase_access_token>
-Content-Type: application/json
-
-{
-  "razorpay_order_id": "order_xxx",
-  "razorpay_payment_id": "pay_xxx",
-  "razorpay_signature": "signature_xxx",
-  "request_id": "uuid-here",
-  "amount": 2500,
-  "payment_type": "approval"
-}
-```
-
-#### Get Wallet Balance
-```http
-GET /api/payments/wallet/balance
-Authorization: Bearer <supabase_access_token>
-```
-
-#### Get Transaction History
-```http
-GET /api/payments/transactions?page=1&limit=10&status=completed
-Authorization: Bearer <supabase_access_token>
-```
-
-#### Get Request Payment Details
-```http
-GET /api/payments/request/:request_id/payment-details
-Authorization: Bearer <supabase_access_token>
-```
-
-## 🔐 Supabase Authentication
-
-### Token Management
-
-The backend uses Supabase's built-in JWT tokens:
-
-- **Access Token**: Used for API authentication (short-lived)
-- **Refresh Token**: Used to get new access tokens (long-lived)
-- **Automatic Refresh**: Supabase handles token refresh automatically
-
-### Frontend Integration
-
-```javascript
-// Frontend - Initialize Supabase client
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  process.env.REACT_APP_SUPABASE_URL,
-  process.env.REACT_APP_SUPABASE_ANON_KEY
-)
-
-// Send OTP
-const sendOTP = async (phone) => {
-  const { data, error } = await supabase.auth.signInWithOtp({
-    phone: phone
-  })
-  return { data, error }
-}
-
-// Verify OTP
-const verifyOTP = async (phone, token) => {
-  const { data, error } = await supabase.auth.verifyOtp({
-    phone: phone,
-    token: token,
-    type: 'sms'
-  })
-  return { data, error }
-}
-
-// Use access token for API calls
-const makeAPICall = async () => {
-  const { data: { session } } = await supabase.auth.getSession()
-  
-  const response = await fetch('/api/campaigns', {
-    headers: {
-      'Authorization': `Bearer ${session.access_token}`
-    }
-  })
-}
-```
-
-## 💳 Frontend Payment Integration
-
-### 1. Install Razorpay SDK
-
-```bash
-npm install razorpay
-```
-
-### 2. Initialize Razorpay
-
-```javascript
-// Frontend code
-const options = {
-  key: process.env.REACT_APP_RAZORPAY_KEY_ID,
-  currency: "INR",
-  name: "Stoory",
-  description: "Campaign Payment",
-  amount: amount * 100, // Convert to paise
-  handler: function (response) {
-    // Send payment response to backend
-    processPaymentResponse(response);
-  },
-  prefill: {
-    name: user.name,
-    email: user.email,
-    contact: user.phone
-  },
-  theme: {
-    color: "#3399cc"
-  }
-};
-
-const rzp = new window.Razorpay(options);
-rzp.open();
-```
-
-### 3. Payment Flow
-
-1. **Frontend**: Create Razorpay payment
-2. **Frontend**: User completes payment
-3. **Frontend**: Send payment response to backend
-4. **Backend**: Process and store transaction
-5. **Backend**: Update campaign/request status
-
-### 4. Send Payment Response to Backend
-
-```javascript
-// Frontend - Send payment response to backend
-const processPaymentResponse = async (paymentResponse) => {
-  try {
-    const { data: { session } } = await supabase.auth.getSession()
-    
-    const response = await fetch('/api/payments/process-payment', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`
-      },
-      body: JSON.stringify({
-        razorpay_order_id: paymentResponse.razorpay_order_id,
-        razorpay_payment_id: paymentResponse.razorpay_payment_id,
-        razorpay_signature: paymentResponse.razorpay_signature,
-        request_id: requestId,
-        amount: amount,
-        payment_type: paymentType // 'approval' or 'completion'
-      })
-    });
-    
-    const result = await response.json();
-    if (result.success) {
-      console.log('Payment processed successfully');
-      // Update UI accordingly
-    }
-  } catch (error) {
-    console.error('Payment processing failed:', error);
-  }
-};
-```
-
-## 🔌 Socket.IO Events
-
-### Client to Server
-
-- `join` - Join user room
-- `join_conversation` - Join conversation room
-- `leave_conversation` - Leave conversation room
-- `typing_start` - Start typing indicator
-- `typing_stop` - Stop typing indicator
-- `send_message` - Send a message
-- `mark_seen` - Mark message as seen
-
-### Server to Client
-
-- `new_message` - New message received
-- `user_typing` - User typing indicator
-- `message_seen` - Message seen status
-- `message_notification` - Message notification
-- `user_status_change` - User status change
-- `user_offline` - User went offline
-
-## 🔒 Security Features
-
-- **Row Level Security (RLS)**: Database-level access control
-- **Supabase Authentication**: Built-in JWT token management
-- **Rate Limiting**: Protection against abuse
-- **CORS Configuration**: Cross-origin request control
-- **Input Validation**: Comprehensive request validation
-- **SQL Injection Protection**: Parameterized queries
-- **XSS Protection**: Security headers
-
-## 💳 Payment Flow
-
-1. **Campaign/Bid Creation**: Brand Owner creates campaign or bid
-2. **Application**: Influencer applies to campaign or bid
-3. **Approval Payment**: 
-   - Frontend creates Razorpay payment
-   - User completes payment
-   - Frontend sends payment response to backend
-   - Backend processes transaction and updates status
-4. **Work Phase**: Influencer completes the work
-5. **Completion Payment**: 
-   - Same process as approval payment
-   - Backend updates request status to completed
-6. **Campaign/Bid Closure**: Campaign or bid marked as closed
+## 📚 Documentation
+
+- **[API Documentation](API_DOCUMENTATION.md)** - Complete API reference with examples
+- **[Project Structure](PROJECT_STRUCTURE.md)** - Detailed project overview
+- **[Single Payment System](SINGLE_PAYMENT_SYSTEM_IMPLEMENTATION.md)** - Payment system guide
+
+## 🔄 Payment Flow
+
+### Single Payment System
+1. **Negotiation** → Brand and influencer agree on `final_agreed_amount`
+2. **Freeze** → When status becomes 'paid', entire amount frozen in escrow
+3. **Work** → Influencer completes the work
+4. **Release** → When status becomes 'completed', payment becomes withdrawable
+5. **Withdrawal** → Influencer can withdraw the amount
 
 ## 🗄️ Database Schema
 
 ### Core Tables
-
-- `users` - User profiles and authentication
-- `campaigns` - Detailed campaigns with requirements and deliverables
-- `bids` - Simple bids for quick transactions
-- `requests` - Influencer applications (unified for both campaigns and bids)
-- `conversations` - Chat conversations
-- `messages` - Individual messages
-- `wallets` - User wallet balances
-- `transactions` - Payment transaction history
-- `social_platforms` - User social media profiles
+- **`users`** - User profiles (brand owners, influencers, admins)
+- **`campaigns`** - Brand campaigns with fixed budgets
+- **`bids`** - Brand bids with min/max budgets
+- **`requests`** - Connections between influencers and campaigns/bids
+- **`conversations`** - Chat sessions between brand and influencer
+- **`messages`** - Individual messages in conversations
+- **`wallets`** - User wallet balances and frozen amounts
+- **`transactions`** - All payment movements and history
 
 ## 🚀 Deployment
 
-### Environment Variables
+### Railway Deployment
+1. Connect your GitHub repository to Railway
+2. Set environment variables in Railway dashboard
+3. Deploy automatically on push to main branch
 
-Ensure all environment variables are set in your production environment:
-
+### Manual Deployment
 ```bash
-# Required for production
-NODE_ENV=production
-PORT=3000
-SUPABASE_URL=your_production_supabase_url
-SUPABASE_ANON_KEY=your_production_anon_key
-SUPABASE_SERVICE_ROLE_KEY=your_production_service_key
-```
-
-### Docker Deployment
-
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
+npm run build
+npm start
 ```
 
 ## 🧪 Testing
 
+### Test Payment Flow
 ```bash
-# Run tests
-npm test
+# 1. Create test request
+curl -X POST /api/requests/campaign/test-campaign-id \
+  -H "Authorization: Bearer <token>"
 
-# Run tests with coverage
-npm run test:coverage
+# 2. Set agreed amount
+curl -X PUT /api/requests/test-request-id/agree-amount \
+  -H "Authorization: Bearer <token>" \
+  -d '{"final_agreed_amount": 500}'
+
+# 3. Process payment (status becomes 'paid')
+curl -X POST /api/payments/process \
+  -H "Authorization: Bearer <token>" \
+  -d '{"request_id": "test-request-id", "amount": 500}'
+
+# 4. Complete work (status becomes 'completed')
+curl -X PUT /api/requests/test-request-id/approve-work \
+  -H "Authorization: Bearer <token>"
 ```
 
-## 📝 License
+## 🔧 API Endpoints
 
-MIT License - see LICENSE file for details
+### Authentication
+- `POST /api/auth/send-otp` - Send WhatsApp OTP
+- `POST /api/auth/verify-otp` - Verify OTP and get JWT token
+
+### User Management
+- `GET/PUT /api/users/profile` - Get/update user profile
+- `GET/POST /api/users/social-platforms` - Manage social platforms
+
+### Campaigns & Bids
+- `POST/GET/PUT/DELETE /api/campaigns` - Campaign CRUD operations
+- `POST/GET/PUT/DELETE /api/bids` - Bid CRUD operations
+
+### Requests & Work
+- `POST /api/requests/campaign/:id` - Apply to campaign
+- `POST /api/requests/bid/:id` - Apply to bid
+- `GET /api/requests` - Get user requests
+- `PUT /api/requests/:id/agree-amount` - Set agreed amount
+
+### Messaging
+- `GET /api/conversations` - Get user conversations
+- `GET /api/conversations/:id/messages` - Get conversation messages
+- `POST /api/conversations/:id/messages` - Send message
+
+### Payments & Wallet
+- `GET /api/payments/wallet` - Get wallet balance
+- `GET /api/payments/transactions` - Get transaction history
+- `GET /api/payments/stats` - Get payment statistics
+
+## 🛠️ Technology Stack
+
+- **Backend**: Node.js + Express.js
+- **Database**: PostgreSQL (Supabase)
+- **Authentication**: JWT + WhatsApp OTP
+- **Real-time**: Socket.io
+- **File Storage**: Supabase Storage
+- **Payment**: Razorpay integration
+- **Deployment**: Railway
+- **WhatsApp**: WhatsApp Business API
+
+## 📁 Project Structure
+
+```
+stoory-backend/
+├── 📁 controllers/           # API route handlers
+├── 📁 database/              # Database migrations & schema
+├── 📁 middleware/            # Express middleware
+├── 📁 routes/               # API route definitions
+├── 📁 sockets/              # WebSocket handlers
+├── 📁 supabase/             # Database client
+├── 📁 utils/                # Utility functions
+├── 📄 index.js              # Main application entry point
+└── 📄 package.json          # Dependencies & scripts
+```
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## 📞 Support
+## 📄 License
 
-For support and questions:
-- Create an issue in the repository
-- Contact the development team
-- Check the documentation
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🆘 Support
+
+For support, email support@stoory.com or create an issue in this repository.
 
 ---
 
-**Stoory Backend** - Connecting Brands with Influencers 🚀 
+**Built with ❤️ for the influencer marketing community** 
