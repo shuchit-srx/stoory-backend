@@ -4,6 +4,7 @@ const {
   uploadImageToStorage,
   deleteImageFromStorage,
 } = require("../utils/imageUpload");
+const automatedFlowService = require("../utils/automatedFlowService");
 
 class BidController {
   /**
@@ -372,6 +373,8 @@ class BidController {
                     requests (
                         id,
                         status,
+                        proposed_amount,
+                        message,
                         created_at,
                         influencer:users!requests_influencer_id_fkey (
                             id,
@@ -673,6 +676,348 @@ class BidController {
         stats: stats,
       });
     } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Initialize automated conversation for bid application
+   */
+  async initializeBidConversation(req, res) {
+    try {
+      const { bid_id, influencer_id, proposed_amount } = req.body;
+
+      if (!bid_id || !influencer_id || !proposed_amount) {
+        return res.status(400).json({
+          success: false,
+          message: "bid_id, influencer_id, and proposed_amount are required",
+        });
+      }
+
+      // Verify user is the brand owner of this bid
+      const { data: bid, error: bidError } = await supabaseAdmin
+        .from("bids")
+        .select("created_by")
+        .eq("id", bid_id)
+        .single();
+
+      if (bidError || !bid) {
+        return res.status(404).json({
+          success: false,
+          message: "Bid not found",
+        });
+      }
+
+      if (bid.created_by !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the bid creator can initialize conversations",
+        });
+      }
+
+      const result = await automatedFlowService.initializeBidConversation(
+        bid_id,
+        influencer_id,
+        proposed_amount
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to initialize conversation",
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Automated conversation initialized successfully",
+        conversation: result.conversation,
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
+    } catch (error) {
+      console.error("Error initializing bid conversation:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle automated flow action from brand owner
+   */
+  async handleBrandOwnerAction(req, res) {
+    try {
+      const { conversation_id, action, data } = req.body;
+
+      if (!conversation_id || !action) {
+        return res.status(400).json({
+          success: false,
+          message: "conversation_id and action are required",
+        });
+      }
+
+      // Verify user is the brand owner of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("brand_owner_id, flow_state, awaiting_role")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (conversation.brand_owner_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the brand owner can perform this action",
+        });
+      }
+
+      if (conversation.awaiting_role !== "brand_owner") {
+        return res.status(400).json({
+          success: false,
+          message: "Not your turn to respond",
+        });
+      }
+
+      const result = await automatedFlowService.handleBrandOwnerResponse(
+        conversation_id,
+        action,
+        data
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to handle action",
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Action handled successfully",
+        conversation: result.conversation,
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
+    } catch (error) {
+      console.error("Error handling brand owner action:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle automated flow action from influencer
+   */
+  async handleInfluencerAction(req, res) {
+    try {
+      const { conversation_id, action, data } = req.body;
+
+      if (!conversation_id || !action) {
+        return res.status(400).json({
+          success: false,
+          message: "conversation_id and action are required",
+        });
+      }
+
+      // Verify user is the influencer of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("influencer_id, flow_state, awaiting_role")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (conversation.influencer_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the influencer can perform this action",
+        });
+      }
+
+      if (conversation.awaiting_role !== "influencer") {
+        return res.status(400).json({
+          success: false,
+          message: "Not your turn to respond",
+        });
+      }
+
+      const result = await automatedFlowService.handleInfluencerResponse(
+        conversation_id,
+        action,
+        data
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to handle action",
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Action handled successfully",
+        conversation: result.conversation,
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
+    } catch (error) {
+      console.error("Error handling influencer action:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle final confirmation for payment
+   */
+  async handleFinalConfirmation(req, res) {
+    try {
+      const { conversation_id, action } = req.body;
+
+      if (!conversation_id || !action) {
+        return res.status(400).json({
+          success: false,
+          message: "conversation_id and action are required",
+        });
+      }
+
+      // Verify user is the brand owner of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("brand_owner_id, flow_state, awaiting_role")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (conversation.brand_owner_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the brand owner can perform this action",
+        });
+      }
+
+      if (conversation.flow_state !== "brand_owner_confirming") {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid flow state for final confirmation",
+        });
+      }
+
+      const result = await automatedFlowService.handleFinalConfirmation(
+        conversation_id,
+        action
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to handle final confirmation",
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Final confirmation handled successfully",
+        flow_state: result.flow_state,
+      });
+    } catch (error) {
+      console.error("Error handling final confirmation:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Get conversation flow context
+   */
+  async getConversationFlowContext(req, res) {
+    try {
+      const { conversation_id } = req.params;
+
+      if (!conversation_id) {
+        return res.status(400).json({
+          success: false,
+          message: "conversation_id is required",
+        });
+      }
+
+      // Verify user is part of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("brand_owner_id, influencer_id")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (
+        conversation.brand_owner_id !== req.user.id &&
+        conversation.influencer_id !== req.user.id
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied to this conversation",
+        });
+      }
+
+      const result = await automatedFlowService.getConversationFlowContext(
+        conversation_id
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to get flow context",
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        conversation: result.conversation,
+        flow_context: result.flow_context,
+      });
+    } catch (error) {
+      console.error("Error getting conversation flow context:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",

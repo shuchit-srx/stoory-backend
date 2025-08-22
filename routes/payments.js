@@ -10,6 +10,12 @@ router.use(authService.authenticateToken);
 // Process payment from frontend
 router.post("/process-payment", PaymentController.processPayment);
 
+// Request payment config (Razorpay key, currency)
+router.get("/payment-config", PaymentController.getPaymentConfig);
+
+// Create Razorpay order for request payments
+router.post("/create-order", PaymentController.createOrderForRequest);
+
 // Transaction management
 router.get("/transactions", PaymentController.getTransactionHistory);
 

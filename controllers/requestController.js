@@ -117,6 +117,10 @@ class RequestController {
 
       if (sourceType === "campaign") {
         requestData.campaign_id = sourceId;
+        // Store proposed amount for campaign applications if provided
+        if (req.body.proposed_amount) {
+          requestData.proposed_amount = req.body.proposed_amount;
+        }
       } else {
         requestData.bid_id = sourceId;
         // Store proposed amount for bid applications
@@ -198,6 +202,8 @@ class RequestController {
         console.error("Failed to create conversation:", conversationError);
         // Don't fail the request creation, just log the error
       }
+
+      // Conversation created successfully - no automated messages needed
 
       res.status(201).json({
         success: true,
@@ -310,9 +316,19 @@ class RequestController {
         });
       }
 
+      const normalizedRequests = (requests || []).map((r) => ({
+        ...r,
+        amount:
+          r.final_agreed_amount !== null && r.final_agreed_amount !== undefined
+            ? r.final_agreed_amount
+            : r.proposed_amount !== undefined
+            ? r.proposed_amount
+            : null,
+      }));
+
       res.json({
         success: true,
-        requests: requests,
+        requests: normalizedRequests,
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
@@ -868,6 +884,8 @@ class RequestController {
           `
                     id,
                     status,
+                    proposed_amount,
+                    message,
                     final_agreed_amount,
                     payment_status,
                     payment_frozen_at,
@@ -956,6 +974,8 @@ class RequestController {
           `
                     id,
                     status,
+                    proposed_amount,
+                    message,
                     final_agreed_amount,
                     payment_status,
                     payment_frozen_at,
@@ -1191,7 +1211,7 @@ class RequestController {
           campaign_id: request.campaign_id,
           bid_id: request.bid_id,
           request_id: id,
-          chat_status: "automated",
+          chat_status: "realtime",
           payment_required: true,
           payment_completed: false,
         });
@@ -1587,7 +1607,7 @@ class RequestController {
         work_description: request.work_description,
         work_submission_link: request.work_submission_link,
         work_files: request.work_files || [],
-        chat_status: conversation?.chat_status || "automated",
+        chat_status: conversation?.chat_status || "realtime",
         payment_completed: conversation?.payment_completed || false,
       };
 

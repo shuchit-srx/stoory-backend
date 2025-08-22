@@ -2,8 +2,152 @@ const paymentService = require("../utils/payment");
 const { supabaseAdmin } = require("../supabase/client");
 const { validationResult } = require("express-validator");
 const crypto = require("crypto");
+const Razorpay = require("razorpay");
+
+// Initialize Razorpay only if environment variables are available
+let razorpay = null;
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+  });
+} else {
+  console.warn(
+    "⚠️  RazorPay environment variables not set. Payment features will be limited."
+  );
+}
 
 class PaymentController {
+  /**
+   * Get Razorpay config for request payments
+   */
+  async getPaymentConfig(req, res) {
+    try {
+      if (!razorpay) {
+        return res.status(503).json({
+          success: false,
+          message: "Payment service is not configured",
+        });
+      }
+
+      return res.json({
+        success: true,
+        config: {
+          key_id: process.env.RAZORPAY_KEY_ID,
+          currency: "INR",
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Create Razorpay order for a request payment
+   */
+  async createOrderForRequest(req, res) {
+    try {
+      const { request_id, amount, currency = "INR", notes = {} } = req.body;
+      const userId = req.user.id;
+
+      if (!request_id) {
+        return res.status(400).json({
+          success: false,
+          message: "request_id is required",
+        });
+      }
+
+      if (!razorpay) {
+        return res.status(503).json({
+          success: false,
+          message: "Payment service is not configured. Please contact support.",
+        });
+      }
+
+      // Get request details (lightweight)
+      const { data: request, error: requestError } = await supabaseAdmin
+        .from("requests")
+        .select("id, influencer_id, final_agreed_amount, campaign_id, bid_id")
+        .eq("id", request_id)
+        .single();
+
+      if (requestError || !request) {
+        return res.status(404).json({
+          success: false,
+          message: "Request not found",
+        });
+      }
+
+      // Permission: ensure caller is the brand owner of the source
+      let brandOwnerId = null;
+      if (request.campaign_id) {
+        const { data: campaign } = await supabaseAdmin
+          .from("campaigns")
+          .select("created_by")
+          .eq("id", request.campaign_id)
+          .single();
+        brandOwnerId = campaign?.created_by || null;
+      } else if (request.bid_id) {
+        const { data: bid } = await supabaseAdmin
+          .from("bids")
+          .select("created_by")
+          .eq("id", request.bid_id)
+          .single();
+        brandOwnerId = bid?.created_by || null;
+      }
+
+      if (!brandOwnerId || brandOwnerId !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the brand owner can create payment orders",
+        });
+      }
+
+      // Determine payable amount
+      const payable = amount || request.final_agreed_amount;
+      if (!payable || Number(payable) <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Valid amount is required",
+        });
+      }
+
+      const orderOptions = {
+        amount: Math.round(Number(payable) * 100),
+        currency: currency || "INR",
+        receipt: `req_${request_id}_${Date.now()}`,
+        notes: {
+          ...notes,
+          request_id,
+          brand_owner_id: brandOwnerId,
+          influencer_id: request.influencer_id,
+          source_type: request.campaign_id ? "campaign" : "bid",
+        },
+      };
+
+      const order = await razorpay.orders.create(orderOptions);
+
+      return res.json({
+        success: true,
+        order: {
+          id: order.id,
+          amount: order.amount,
+          currency: order.currency,
+          receipt: order.receipt,
+          notes: order.notes || {},
+        },
+      });
+    } catch (error) {
+      console.error("Create request order error:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
   /**
    * Process payment response from frontend
    */

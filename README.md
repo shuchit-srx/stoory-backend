@@ -1,225 +1,229 @@
-# 🚀 Stoory Backend
+# Stoory Backend - Automated Bid Flow System
 
-A comprehensive influencer marketing platform backend built with Node.js, Express, and Supabase.
+## 🎯 Overview
 
-## 🎯 Features
+This is the backend implementation for Stoory, featuring a complete automated bid flow system that handles conversations from bid application to payment initiation. The system is built with clean architecture, proper separation of concerns, and production-ready code.
 
-- **WhatsApp OTP Authentication** - Secure phone-based login
-- **Single Payment System** - Simplified payment flow with escrow
-- **Real-time Messaging** - WebSocket-based chat system
-- **Automated Conversations** - AI-powered chat flow
-- **Work Management** - Submission, approval, and revision system
-- **Wallet System** - Balance and transaction management
-- **File Upload** - Image and media handling
-- **Social Platform Integration** - Influencer profile management
+## 🚀 Features
+
+### **Automated Bid Flow System**
+- **Dynamic conversation flow** with state management
+- **Automated message generation** with context-aware content
+- **Action-based interactions** (buttons, input fields, confirmations)
+- **Role-based access control** (brand owners, influencers, admins)
+- **Real-time flow state tracking**
+- **Payment integration ready**
+
+### **Core System**
+- **User authentication** with JWT tokens
+- **Role-based permissions** (brand_owner, influencer, admin)
+- **Bid management** (create, read, update, delete)
+- **Campaign management** with automated flows
+- **Payment system integration**
+- **Real-time messaging** via WebSocket
 
 ## 🏗️ Architecture
 
+### **Clean Separation**
+- **Service Layer**: Business logic in dedicated services
+- **Controller Layer**: HTTP request handling and validation
+- **Route Layer**: API endpoint definitions
+- **Database Layer**: Supabase with PostgreSQL
+- **Utility Layer**: Reusable helper functions
+
+### **Key Components**
+- `utils/automatedFlowService.js` - Core automated flow logic
+- `controllers/bidController.js` - Bid and automated flow endpoints
+- `routes/bids.js` - API route definitions
+- `database/` - Schema and migration files
+
+## 📡 API Endpoints
+
+### **Automated Flow Endpoints**
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   Backend       │    │   Database      │
-│   (React/Next)  │◄──►│   (Node.js)     │◄──►│   (Supabase)    │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                              │
-                              ▼
-                       ┌─────────────────┐
-                       │   WebSocket     │
-                       │   (Socket.io)   │
-                       └─────────────────┘
-```
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Node.js 18+
-- Supabase account
-- Railway account (for deployment)
-
-### Installation
-
-1. **Clone the repository**
-```bash
-git clone <repository-url>
-cd stoory-backend
+POST /api/bids/automated/initialize          - Start automated conversation
+POST /api/bids/automated/brand-owner-action  - Handle brand owner actions
+POST /api/bids/automated/influencer-action   - Handle influencer actions
+POST /api/bids/automated/final-confirmation  - Final confirmation
+GET  /api/bids/automated/conversation/:id/context - Get flow context
 ```
 
-2. **Install dependencies**
-```bash
-npm install
+### **Standard Bid Endpoints**
 ```
-
-3. **Set up environment variables**
-```bash
-cp env.example .env
+POST   /api/bids                    - Create new bid
+GET    /api/bids                    - Get all bids
+GET    /api/bids/:id                - Get specific bid
+PUT    /api/bids/:id                - Update bid
+DELETE /api/bids/:id                - Delete bid
+GET    /api/bids/stats              - Get bid statistics
 ```
-
-Fill in your environment variables:
-```env
-# Database
-SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-
-# JWT
-JWT_SECRET=your_jwt_secret
-
-# WhatsApp
-WHATSAPP_API_KEY=your_whatsapp_api_key
-WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
-
-# Razorpay
-RAZORPAY_KEY_ID=your_razorpay_key_id
-RAZORPAY_KEY_SECRET=your_razorpay_secret
-
-# Server
-PORT=3000
-NODE_ENV=development
-```
-
-4. **Set up database**
-   - Run `database/schema.sql` in your Supabase SQL Editor
-   - Run `database/consolidated_migration.sql` for the latest features
-
-5. **Start development server**
-```bash
-npm run dev
-```
-
-## 📚 Documentation
-
-- **[API Documentation](API_DOCUMENTATION.md)** - Complete API reference with examples
-- **[Project Structure](PROJECT_STRUCTURE.md)** - Detailed project overview
-- **[Single Payment System](SINGLE_PAYMENT_SYSTEM_IMPLEMENTATION.md)** - Payment system guide
-
-## 🔄 Payment Flow
-
-### Single Payment System
-1. **Negotiation** → Brand and influencer agree on `final_agreed_amount`
-2. **Freeze** → When status becomes 'paid', entire amount frozen in escrow
-3. **Work** → Influencer completes the work
-4. **Release** → When status becomes 'completed', payment becomes withdrawable
-5. **Withdrawal** → Influencer can withdraw the amount
 
 ## 🗄️ Database Schema
 
-### Core Tables
-- **`users`** - User profiles (brand owners, influencers, admins)
-- **`campaigns`** - Brand campaigns with fixed budgets
-- **`bids`** - Brand bids with min/max budgets
-- **`requests`** - Connections between influencers and campaigns/bids
-- **`conversations`** - Chat sessions between brand and influencer
-- **`messages`** - Individual messages in conversations
-- **`wallets`** - User wallet balances and frozen amounts
-- **`transactions`** - All payment movements and history
+### **Key Tables**
+- `users` - User accounts and roles
+- `bids` - Bid information and requirements
+- `conversations` - Automated flow conversations
+- `messages` - Automated and user messages
+- `requests` - Bid applications and connections
 
-## 🚀 Deployment
+### **Automated Flow Fields**
+- `flow_state` - Current conversation state
+- `awaiting_role` - Whose turn to respond
+- `flow_data` - JSON data for flow context
+- `action_required` - Whether message requires action
+- `action_data` - UI elements (buttons, inputs)
 
-### Railway Deployment
-1. Connect your GitHub repository to Railway
-2. Set environment variables in Railway dashboard
-3. Deploy automatically on push to main branch
+## 🚀 Getting Started
 
-### Manual Deployment
+### **Prerequisites**
+- Node.js 16+
+- PostgreSQL database
+- Supabase account
+
+### **Installation**
 ```bash
-npm run build
-npm start
+# Clone repository
+git clone <repository-url>
+cd stoory-backend
+
+# Install dependencies
+npm install
+
+# Set up environment variables
+cp env.example .env
+# Edit .env with your configuration
+
+# Run database migrations
+# Execute database/add_automation_fields.sql
+# Execute database/add_automated_message_fields.sql
+
+# Start development server
+npm run dev
+```
+
+### **Environment Variables**
+```bash
+# Database
+DATABASE_URL=your_database_url
+SUPABASE_URL=your_supabase_url
+SUPABASE_SERVICE_KEY=your_service_key
+
+# Authentication
+JWT_SECRET=your_jwt_secret
+PORT=3000
 ```
 
 ## 🧪 Testing
 
-### Test Payment Flow
+### **Automated Flow Testing**
+The system includes comprehensive testing for:
+- Message generation
+- Action creation
+- Flow state transitions
+- Role-based access control
+- Error handling
+
+### **API Testing**
+Use the provided API documentation to test all endpoints:
+- `AUTOMATED_FLOW_API_DOCUMENTATION.md` - Complete API reference
+- `FRONTEND_AUTOMATED_FLOW_INTEGRATION.md` - Frontend integration guide
+
+## 📚 Documentation
+
+### **Core Documentation**
+- `IMPLEMENTATION_COMPLETE_SUMMARY.md` - Complete system overview
+- `BID_AUTOMATED_FLOW_GUIDE.md` - Business logic documentation
+- `AUTOMATED_FLOW_API_DOCUMENTATION.md` - API reference
+- `FRONTEND_AUTOMATED_FLOW_INTEGRATION.md` - Frontend guide
+
+### **Database Migrations**
+- `database/add_automation_fields.sql` - Add automation fields to conversations
+- `database/add_automated_message_fields.sql` - Add action fields to messages
+
+## 🔄 Flow States
+
+### **Complete Flow**
+```
+initial → influencer_responding → brand_owner_confirming → payment_pending
+    ↓              ↓                      ↓
+negotiating → influencer_responding → brand_owner_confirming
+    ↓              ↓                      ↓
+question_pending → influencer_responding → brand_owner_confirming
+```
+
+### **State Descriptions**
+- `initial` - Brand owner sees action buttons
+- `influencer_responding` - Influencer confirms/rejects
+- `negotiating` - Price or question negotiation
+- `brand_owner_confirming` - Final confirmation
+- `payment_pending` - Payment initiation
+
+## 🛡️ Security
+
+### **Authentication & Authorization**
+- JWT token-based authentication
+- Role-based access control
+- Ownership verification for all actions
+- Flow state validation
+
+### **Data Protection**
+- Input validation and sanitization
+- SQL injection prevention
+- XSS protection
+- Rate limiting ready
+
+## 🚀 Deployment
+
+### **Railway Deployment**
 ```bash
-# 1. Create test request
-curl -X POST /api/requests/campaign/test-campaign-id \
-  -H "Authorization: Bearer <token>"
-
-# 2. Set agreed amount
-curl -X PUT /api/requests/test-request-id/agree-amount \
-  -H "Authorization: Bearer <token>" \
-  -d '{"final_agreed_amount": 500}'
-
-# 3. Process payment (status becomes 'paid')
-curl -X POST /api/payments/process \
-  -H "Authorization: Bearer <token>" \
-  -d '{"request_id": "test-request-id", "amount": 500}'
-
-# 4. Complete work (status becomes 'completed')
-curl -X PUT /api/requests/test-request-id/approve-work \
-  -H "Authorization: Bearer <token>"
+# Deploy to Railway
+npm run deploy:railway
 ```
 
-## 🔧 API Endpoints
-
-### Authentication
-- `POST /api/auth/send-otp` - Send WhatsApp OTP
-- `POST /api/auth/verify-otp` - Verify OTP and get JWT token
-
-### User Management
-- `GET/PUT /api/users/profile` - Get/update user profile
-- `GET/POST /api/users/social-platforms` - Manage social platforms
-
-### Campaigns & Bids
-- `POST/GET/PUT/DELETE /api/campaigns` - Campaign CRUD operations
-- `POST/GET/PUT/DELETE /api/bids` - Bid CRUD operations
-
-### Requests & Work
-- `POST /api/requests/campaign/:id` - Apply to campaign
-- `POST /api/requests/bid/:id` - Apply to bid
-- `GET /api/requests` - Get user requests
-- `PUT /api/requests/:id/agree-amount` - Set agreed amount
-
-### Messaging
-- `GET /api/conversations` - Get user conversations
-- `GET /api/conversations/:id/messages` - Get conversation messages
-- `POST /api/conversations/:id/messages` - Send message
-
-### Payments & Wallet
-- `GET /api/payments/wallet` - Get wallet balance
-- `GET /api/payments/transactions` - Get transaction history
-- `GET /api/payments/stats` - Get payment statistics
-
-## 🛠️ Technology Stack
-
-- **Backend**: Node.js + Express.js
-- **Database**: PostgreSQL (Supabase)
-- **Authentication**: JWT + WhatsApp OTP
-- **Real-time**: Socket.io
-- **File Storage**: Supabase Storage
-- **Payment**: Razorpay integration
-- **Deployment**: Railway
-- **WhatsApp**: WhatsApp Business API
-
-## 📁 Project Structure
-
+### **Docker Deployment**
+```bash
+# Build and run with Docker
+docker build -t stoory-backend .
+docker run -p 3000:3000 stoory-backend
 ```
-stoory-backend/
-├── 📁 controllers/           # API route handlers
-├── 📁 database/              # Database migrations & schema
-├── 📁 middleware/            # Express middleware
-├── 📁 routes/               # API route definitions
-├── 📁 sockets/              # WebSocket handlers
-├── 📁 supabase/             # Database client
-├── 📁 utils/                # Utility functions
-├── 📄 index.js              # Main application entry point
-└── 📄 package.json          # Dependencies & scripts
+
+## 🔧 Development
+
+### **Available Scripts**
+```bash
+npm run dev          # Start development server
+npm start            # Start production server
+npm run nodemon      # Start with nodemon
+```
+
+### **Code Structure**
+```
+├── controllers/     # Request handlers
+├── routes/         # API route definitions
+├── utils/          # Business logic services
+├── database/       # Schema and migrations
+├── middleware/     # Authentication and validation
+├── sockets/        # WebSocket handling
+└── supabase/       # Database client
 ```
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+1. Follow the existing code structure
+2. Add proper error handling
+3. Include input validation
+4. Update documentation
+5. Test all changes
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is proprietary software for Stoory.
 
 ## 🆘 Support
 
-For support, email support@stoory.com or create an issue in this repository.
+For questions or issues, refer to the documentation files or contact the development team.
 
 ---
 
-**Built with ❤️ for the influencer marketing community** 
+**🚀 Ready for production deployment with automated bid flow system!** 

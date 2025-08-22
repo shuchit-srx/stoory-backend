@@ -390,6 +390,8 @@ class CampaignController {
                     requests (
                         id,
                         status,
+                        proposed_amount,
+                        message,
                         created_at,
                         influencer:users!requests_influencer_id_fkey (
                             id,
