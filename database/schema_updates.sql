@@ -53,6 +53,7 @@ CHECK (flow_state IN (
   'negotiation_input',
   'brand_owner_negotiation',
   'payment_pending',
+  'payment_completed',
   'real_time',
   'chat_closed'
 ));
@@ -120,3 +121,62 @@ SET message_type = 'user',
     action_required = false,
     is_automated = false
 WHERE message_type IS NULL;
+
+-- Create payment_orders table for automated flow payments
+CREATE TABLE IF NOT EXISTS payment_orders (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    bid_id UUID REFERENCES bids(id) ON DELETE CASCADE,
+    campaign_id UUID REFERENCES campaigns(id) ON DELETE CASCADE,
+    influencer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    brand_owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    amount DECIMAL(10,2) NOT NULL,
+    currency TEXT DEFAULT 'INR',
+    razorpay_order_id TEXT UNIQUE NOT NULL,
+    status TEXT DEFAULT 'created' CHECK (status IN ('created', 'paid', 'failed', 'cancelled')),
+    payment_type TEXT DEFAULT 'bid_collaboration',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    -- Ensure payment order is linked to either campaign OR bid, not both
+    CONSTRAINT check_payment_order_source CHECK (
+        (campaign_id IS NOT NULL AND bid_id IS NULL) OR 
+        (campaign_id IS NULL AND bid_id IS NOT NULL)
+    )
+);
+
+-- Create indexes for payment_orders table
+CREATE INDEX IF NOT EXISTS idx_payment_orders_conversation_id ON payment_orders(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_bid_id ON payment_orders(bid_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_campaign_id ON payment_orders(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_influencer_id ON payment_orders(influencer_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_brand_owner_id ON payment_orders(brand_owner_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_razorpay_order_id ON payment_orders(razorpay_order_id);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_status ON payment_orders(status);
+
+-- Enable RLS for payment_orders table
+ALTER TABLE payment_orders ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for payment_orders table
+CREATE POLICY "Users can view relevant payment orders" ON payment_orders
+    FOR SELECT USING (
+        auth.uid()::text = influencer_id::text OR
+        auth.uid()::text = brand_owner_id::text OR
+        auth.jwt() ->> 'role' = 'admin'
+    );
+
+CREATE POLICY "Brand owners can create payment orders" ON payment_orders
+    FOR INSERT WITH CHECK (
+        auth.uid()::text = brand_owner_id::text AND 
+        (auth.jwt() ->> 'role' = 'brand_owner' OR auth.jwt() ->> 'role' = 'admin')
+    );
+
+CREATE POLICY "Users can update relevant payment orders" ON payment_orders
+    FOR UPDATE USING (
+        auth.uid()::text = influencer_id::text OR
+        auth.uid()::text = brand_owner_id::text OR
+        auth.jwt() ->> 'role' = 'admin'
+    );
+
+-- Create trigger for updated_at on payment_orders
+CREATE TRIGGER update_payment_orders_updated_at BEFORE UPDATE ON payment_orders
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

@@ -67,4 +67,24 @@ router.get(
   PaymentController.getRequestPaymentDetails
 );
 
+// Verify automated flow payment
+router.post(
+  "/verify-automated-flow-payment",
+  [
+    body("razorpay_order_id")
+      .notEmpty()
+      .withMessage("RazorPay order ID is required"),
+    body("razorpay_payment_id")
+      .notEmpty()
+      .withMessage("RazorPay payment ID is required"),
+    body("razorpay_signature")
+      .notEmpty()
+      .withMessage("RazorPay signature is required"),
+    body("conversation_id")
+      .isUUID()
+      .withMessage("Conversation ID must be a valid UUID"),
+  ],
+  PaymentController.verifyAutomatedFlowPayment
+);
+
 module.exports = router;

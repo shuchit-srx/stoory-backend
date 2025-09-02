@@ -458,6 +458,142 @@ class AutomatedFlowService {
           };
           break;
 
+        case "proceed_to_payment":
+          // Brand owner proceeds to payment
+          newFlowState = "payment_pending";
+          newAwaitingRole = null; // No one needs to act, payment is in progress
+
+          // Get the agreed amount from flow_data
+          const agreedAmount =
+            conversation.flow_data?.agreed_amount ||
+            conversation.flow_data?.proposed_amount ||
+            0;
+
+          if (agreedAmount <= 0) {
+            throw new Error("No valid amount found for payment");
+          }
+
+          // Create Razorpay order
+          const Razorpay = require("razorpay");
+          let razorpay = null;
+
+          if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+            razorpay = new Razorpay({
+              key_id: process.env.RAZORPAY_KEY_ID,
+              key_secret: process.env.RAZORPAY_KEY_SECRET,
+            });
+          }
+
+          if (!razorpay) {
+            throw new Error("Payment service is not configured");
+          }
+
+          // Create Razorpay order
+          const orderOptions = {
+            amount: Math.round(agreedAmount * 100), // Convert to paise
+            currency: "INR",
+            receipt: `bid_${conversation.bid_id}_${Date.now()}`,
+            notes: {
+              conversation_id: conversationId,
+              bid_id: conversation.bid_id,
+              influencer_id: conversation.influencer_id,
+              brand_owner_id: conversation.brand_owner_id,
+              payment_type: "bid_collaboration",
+            },
+          };
+
+          const razorpayOrder = await razorpay.orders.create(orderOptions);
+
+          // Store payment order in database
+          const { data: paymentOrder, error: orderError } = await supabaseAdmin
+            .from("payment_orders")
+            .insert({
+              conversation_id: conversationId,
+              bid_id: conversation.bid_id,
+              influencer_id: conversation.influencer_id,
+              brand_owner_id: conversation.brand_owner_id,
+              amount: agreedAmount,
+              currency: "INR",
+              razorpay_order_id: razorpayOrder.id,
+              status: "created",
+              payment_type: "bid_collaboration",
+            })
+            .select()
+            .single();
+
+          if (orderError) {
+            throw new Error(
+              `Failed to create payment order: ${orderError.message}`
+            );
+          }
+
+          // Update bid/campaign status to 'pending' (payment initiated)
+          if (conversation.bid_id) {
+            const { error: bidUpdateError } = await supabaseAdmin
+              .from("bids")
+              .update({ status: "pending" })
+              .eq("id", conversation.bid_id);
+
+            if (bidUpdateError) {
+              console.warn(
+                `Failed to update bid status: ${bidUpdateError.message}`
+              );
+            }
+          } else if (conversation.campaign_id) {
+            const { error: campaignUpdateError } = await supabaseAdmin
+              .from("campaigns")
+              .update({ status: "pending" })
+              .eq("id", conversation.campaign_id);
+
+            if (campaignUpdateError) {
+              console.warn(
+                `Failed to update campaign status: ${campaignUpdateError.message}`
+              );
+            }
+          }
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
+            message: `💳 **Payment Initiated**\n\nPayment order has been created for **₹${agreedAmount}**.\n\nOrder ID: \`${razorpayOrder.id}\`\n\nPlease complete the payment to finalize the collaboration.`,
+            message_type: "automated",
+            action_required: false,
+            action_data: {
+              payment_order: {
+                id: paymentOrder.id,
+                razorpay_order_id: razorpayOrder.id,
+                amount: agreedAmount,
+                currency: "INR",
+                razorpay_config: {
+                  key_id: process.env.RAZORPAY_KEY_ID,
+                  amount: Math.round(agreedAmount * 100),
+                  currency: "INR",
+                  order_id: razorpayOrder.id,
+                  name: "Stoory Collaboration",
+                  description: `Payment for bid collaboration - ₹${agreedAmount}`,
+                  prefill: {
+                    email: "", // Will be filled by frontend
+                    contact: "", // Will be filled by frontend
+                  },
+                  theme: {
+                    color: "#3399cc",
+                  },
+                },
+              },
+            },
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.brand_owner_id,
+            message: `✅ **Payment Order Created**\n\nPayment order created successfully for ₹${agreedAmount}.\n\nOrder ID: \`${razorpayOrder.id}\`\n\nPlease complete the payment to finalize the collaboration.`,
+            message_type: "audit",
+            action_required: false,
+          };
+          break;
+
         default:
           throw new Error(`Unknown action: ${action}`);
       }
