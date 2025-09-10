@@ -24,63 +24,127 @@ class PaymentService {
         razorpay_order_id,
         razorpay_payment_id,
         razorpay_signature,
-        request_id,
-        amount,
-        payment_stage, // 'initial' (30%) or 'final' (70%)
+        conversation_id,
+        amount_paise,
       } = paymentData;
 
-      // Get request details
-      const { data: request, error: requestError } = await supabaseAdmin
-        .from("requests")
-        .select(
-          `
-                    *,
-                    campaigns (
-                        id,
-                        title,
-                        created_by,
-                        budget
-                    ),
-                    bids (
-                        id,
-                        title,
-                        created_by,
-                        budget
-                    ),
-                    influencer:users!requests_influencer_id_fkey (
-                        id,
-                        wallets (id)
-                    )
-                `
-        )
-        .eq("id", request_id)
+      // Get conversation details
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select(`
+          *,
+          request:requests (
+            id,
+            final_agreed_amount,
+            influencer_id,
+            campaign_id,
+            bid_id
+          ),
+          influencer:users!conversations_influencer_id_fkey (
+            id,
+            wallets (id, balance_paise, frozen_balance_paise)
+          )
+        `)
+        .eq("id", conversation_id)
         .single();
 
-      if (requestError || !request) {
-        throw new Error("Request not found");
+      if (convError || !conversation) {
+        throw new Error("Conversation not found");
       }
 
-      // Determine the source type and ID
-      const sourceType = request.campaign_id ? "campaign" : "bid";
-      const sourceId = request.campaign_id || request.bid_id;
-      const source = request.campaigns || request.bids;
+      // Verify payment signature
+      const text = `${razorpay_order_id}|${razorpay_payment_id}`;
+      const expectedSignature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(text)
+        .digest('hex');
+
+      if (razorpay_signature !== expectedSignature) {
+        throw new Error("Invalid payment signature");
+      }
+
+      // Check for duplicate payment
+      const { data: existingTransaction } = await supabaseAdmin
+        .from("transactions")
+        .select("id")
+        .eq("razorpay_payment_id", razorpay_payment_id)
+        .single();
+
+      if (existingTransaction) {
+        throw new Error("Payment already processed");
+      }
+
+      // Get payment amount
+      const paymentAmount = amount_paise || Math.round((conversation.request?.final_agreed_amount || 1000) * 100);
+      const wallet = conversation.influencer.wallets;
+
+      // Update wallet balance (add payment amount in paise)
+      const newBalance = (wallet.balance_paise || 0) + paymentAmount;
+      const { error: walletUpdateError } = await supabaseAdmin
+        .from("wallets")
+        .update({ 
+          balance_paise: newBalance,
+          balance: newBalance / 100 // Keep old balance field for compatibility
+        })
+        .eq("id", wallet.id);
+
+      if (walletUpdateError) {
+        throw new Error(`Failed to update wallet balance: ${walletUpdateError.message}`);
+      }
+
+      // Create payment order
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("payment_orders")
+        .insert({
+          conversation_id: conversation_id,
+          amount_paise: paymentAmount,
+          currency: "INR",
+          status: "verified",
+          razorpay_order_id: razorpay_order_id,
+          razorpay_payment_id: razorpay_payment_id,
+          razorpay_signature: razorpay_signature,
+          metadata: {
+            conversation_type: conversation.bid_id ? "bid" : "campaign",
+            brand_owner_id: conversation.brand_owner_id,
+            influencer_id: conversation.influencer_id
+          }
+        })
+        .select()
+        .single();
+
+      if (orderError) {
+        throw new Error(`Failed to create payment order: ${orderError.message}`);
+      }
 
       // Create transaction record
       const transactionData = {
-        wallet_id: request.influencer.wallets.id,
-        amount: amount,
+        wallet_id: wallet.id,
+        user_id: conversation.influencer_id,
+        amount: paymentAmount / 100, // Keep old amount field for compatibility
+        amount_paise: paymentAmount,
         type: "credit",
+        direction: "credit",
         status: "completed",
-        request_id: request_id,
+        stage: "verified",
         razorpay_order_id: razorpay_order_id,
         razorpay_payment_id: razorpay_payment_id,
-        payment_stage: payment_type,
+        related_payment_order_id: paymentOrder.id,
+        payment_stage: "bid_collaboration",
+        notes: "Payment for campaign collaboration"
       };
 
-      if (sourceType === "campaign") {
-        transactionData.campaign_id = sourceId;
-      } else {
-        transactionData.bid_id = sourceId;
+      // Add source reference (campaign or bid)
+      if (conversation.request) {
+        if (conversation.request.campaign_id) {
+          transactionData.campaign_id = conversation.request.campaign_id;
+        } else if (conversation.request.bid_id) {
+          transactionData.bid_id = conversation.request.bid_id;
+        }
+        transactionData.request_id = conversation.request.id;
+      } else if (conversation.campaign_id) {
+        transactionData.campaign_id = conversation.campaign_id;
+      } else if (conversation.bid_id) {
+        transactionData.bid_id = conversation.bid_id;
       }
 
       const { data: transaction, error: transactionError } = await supabaseAdmin
@@ -90,49 +154,151 @@ class PaymentService {
         .single();
 
       if (transactionError) {
-        throw new Error("Failed to create transaction record");
+        throw new Error(`Failed to create transaction record: ${transactionError.message}`);
       }
 
-      // Update wallet balance
-      const newBalance =
-        parseFloat(request.influencer.wallets.balance) + parseFloat(amount);
-      await supabaseAdmin
-        .from("wallets")
-        .update({ balance: newBalance })
-        .eq("id", request.influencer.wallets.id);
+      // Update request status to "paid" if request exists
+      if (conversation.request) {
+        const { error: requestUpdateError } = await supabaseAdmin
+          .from("requests")
+          .update({ 
+            status: "paid",
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", conversation.request.id);
 
-      // Update request status - single payment system
-      // Payment will be automatically frozen when status becomes 'paid'
-      // and released when status becomes 'completed' via database triggers
-      await supabaseAdmin
-        .from("requests")
-        .update({
-          status: "paid",
-        })
-        .eq("id", request_id);
+        if (requestUpdateError) {
+          console.error("Request update error:", requestUpdateError);
+          // Don't fail the payment, just log the error
+        }
+      }
 
-      // Update source status to pending (work in progress)
-      if (sourceType === "campaign") {
+      // Update source status (campaign or bid) to "pending" (work in progress)
+      if (conversation.campaign_id) {
         await supabaseAdmin
           .from("campaigns")
           .update({ status: "pending" })
-          .eq("id", sourceId);
-      } else {
+          .eq("id", conversation.campaign_id);
+      } else if (conversation.bid_id) {
         await supabaseAdmin
           .from("bids")
           .update({ status: "pending" })
-          .eq("id", sourceId);
+          .eq("id", conversation.bid_id);
+      }
+
+      // Create escrow hold
+      const { data: escrowHold, error: escrowError } = await supabaseAdmin
+        .from("escrow_holds")
+        .insert({
+          conversation_id: conversation_id,
+          payment_order_id: paymentOrder.id,
+          amount_paise: paymentAmount,
+          status: "held"
+        })
+        .select()
+        .single();
+
+      if (escrowError) {
+        console.error("Escrow hold creation error:", escrowError);
+        // Continue anyway as the payment is processed
       }
 
       return {
         success: true,
         transaction: transaction,
+        payment_order: paymentOrder,
+        escrow_hold: escrowHold,
         message: "Payment processed successfully",
       };
     } catch (error) {
+      console.error("Error processing payment response:", error);
       return {
         success: false,
         error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Create payment order
+   */
+  async createPaymentOrder(orderData) {
+    try {
+      const { conversationId, amount, paymentType } = orderData;
+      
+      // Get conversation details
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select(`
+          *,
+          request:requests (
+            id,
+            final_agreed_amount,
+            influencer_id,
+            campaign_id,
+            bid_id
+          )
+        `)
+        .eq("id", conversationId)
+        .single();
+
+      if (convError || !conversation) {
+        throw new Error("Conversation not found");
+      }
+
+      // Get payment amount
+      const paymentAmount = amount || conversation.request?.final_agreed_amount || 0;
+      const amountPaise = Math.round(parseFloat(paymentAmount) * 100);
+
+      if (amountPaise <= 0) {
+        throw new Error("Invalid payment amount");
+      }
+
+      // Create payment order
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("payment_orders")
+        .insert({
+          conversation_id: conversationId,
+          amount_paise: amountPaise,
+          currency: "INR",
+          status: "created",
+          metadata: {
+            conversation_type: conversation.bid_id ? "bid" : "campaign",
+            brand_owner_id: conversation.brand_owner_id,
+            influencer_id: conversation.influencer_id,
+            payment_type: paymentType || "bid_collaboration"
+          }
+        })
+        .select()
+        .single();
+
+      if (orderError) {
+        throw new Error(`Failed to create payment order: ${orderError.message}`);
+      }
+
+      // Generate Razorpay order (this would typically call Razorpay API)
+      const razorpayConfig = {
+        order_id: paymentOrder.id, // Use our order ID as Razorpay order ID for now
+        amount: amountPaise,
+        currency: "INR",
+        receipt: `order_${paymentOrder.id}`,
+        notes: {
+          conversation_id: conversationId,
+          payment_type: paymentType || "bid_collaboration"
+        }
+      };
+
+      return {
+        success: true,
+        payment_order: paymentOrder,
+        razorpayConfig,
+        message: "Payment order created successfully"
+      };
+    } catch (error) {
+      console.error("Error creating payment order:", error);
+      return {
+        success: false,
+        error: error.message
       };
     }
   }

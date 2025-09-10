@@ -60,6 +60,10 @@ router.get(
   "/automated/conversation/:conversation_id/context",
   BidController.getConversationFlowContext
 );
+router.post(
+  "/automated/verify-payment",
+  BidController.verifyAutomatedFlowPayment
+);
 
 // Work submission and review routes
 router.post(
