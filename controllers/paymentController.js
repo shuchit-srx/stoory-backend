@@ -677,6 +677,11 @@ class PaymentController {
   async getWalletBalance(req, res) {
     try {
       const userId = req.user.id;
+      console.log("[Wallet] getWalletBalance called", {
+        userId,
+        hasAuth: !!req.user,
+        role: req.user?.role,
+      });
 
       // Get wallet details
       const { data: wallet, error: walletError } = await supabaseAdmin
@@ -686,9 +691,36 @@ class PaymentController {
         .single();
 
       if (walletError) {
+        console.warn("[Wallet] Supabase error fetching wallet", walletError);
         return res.status(404).json({
           success: false,
           message: "Wallet not found",
+          details: walletError.message || walletError,
+        });
+      }
+
+      if (!wallet) {
+        console.warn("[Wallet] No wallet row for user", { userId });
+
+        // Extra diagnostics: does the user exist?
+        const { data: userExists, error: userErr } = await supabaseAdmin
+          .from("users")
+          .select("id")
+          .eq("id", userId)
+          .single();
+        console.log("[Wallet] User existence check", {
+          exists: !!userExists,
+          userErr: userErr?.message,
+        });
+
+        return res.status(404).json({
+          success: false,
+          message: "Wallet not found",
+          diagnostics: {
+            user_exists: !!userExists,
+            hint:
+              "If user exists but wallet does not, run one-time backfill to create wallets for legacy users.",
+          },
         });
       }
 
@@ -704,6 +736,7 @@ class PaymentController {
         data: balanceInfo,
       });
     } catch (error) {
+      console.error("[Wallet] Unexpected error in getWalletBalance", error);
       console.error("Get wallet balance error:", error);
       res.status(500).json({
         success: false,
