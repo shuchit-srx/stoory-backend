@@ -507,9 +507,21 @@ class MessageController {
       // Emit real-time update
       const io = req.app.get("io");
       if (io) {
-        io.to(conversationId).emit("new_message", {
+        // Emit to conversation room
+        io.to(`conversation_${conversationId}`).emit("new_message", {
           conversation_id: conversationId,
           message: newMessage,
+        });
+
+        // Emit notification to receiver's personal room
+        io.to(`user_${receiverId}`).emit("notification", {
+          type: "message",
+          data: {
+            conversation_id: conversationId,
+            message: newMessage,
+            sender_id: senderId,
+            receiver_id: receiverId,
+          },
         });
       }
 
