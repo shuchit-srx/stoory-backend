@@ -92,18 +92,7 @@ class AutomatedFlowService {
         influencer_id: influencerId,
         flow_state: "influencer_responding", // Start directly in influencer_responding state
         awaiting_role: "influencer", // Influencer needs to respond
-        chat_status: "automated",
-        flow_data: {
-          proposed_amount: proposedAmount,
-          bid_title: bid.title,
-          bid_description: bid.description,
-          min_budget: bid.min_budget,
-          max_budget: bid.max_budget,
-          negotiation_count: 0,
-          max_negotiations: 3,
-        },
-        automation_enabled: true,
-        conversation_type: "bid",
+        chat_status: "automated"
       };
 
       const { data: conversation, error: conversationError } =
@@ -118,6 +107,45 @@ class AutomatedFlowService {
         throw new Error(
           `Failed to create conversation: ${conversationError.message}`
         );
+      }
+
+      // Ensure a request exists and store the proposed amount; link it to the conversation
+      let requestForPair = null;
+      const { data: existingRequest } = await supabaseAdmin
+        .from("requests")
+        .select("id, proposed_amount")
+        .eq("bid_id", bidId)
+        .eq("influencer_id", influencerId)
+        .single();
+
+      if (existingRequest) {
+        requestForPair = existingRequest;
+        // Update proposed_amount if provided
+        if (proposedAmount) {
+          await supabaseAdmin
+            .from("requests")
+            .update({ proposed_amount: parseFloat(proposedAmount) })
+            .eq("id", existingRequest.id);
+        }
+      } else {
+        const { data: newRequest } = await supabaseAdmin
+          .from("requests")
+          .insert({
+            bid_id: bidId,
+            influencer_id: influencerId,
+            status: "connected",
+            proposed_amount: proposedAmount ? parseFloat(proposedAmount) : null
+          })
+          .select()
+          .single();
+        requestForPair = newRequest;
+      }
+
+      if (requestForPair && requestForPair.id) {
+        await supabaseAdmin
+          .from("conversations")
+          .update({ request_id: requestForPair.id })
+          .eq("id", conversation.id);
       }
 
       // Create initial message from brand owner to influencer
@@ -198,168 +226,30 @@ class AutomatedFlowService {
   }
 
   /**
-   * Initialize automated conversation for campaign application
-   */
-  async initializeCampaignConversation(
-    campaignId,
-    influencerId,
-    proposedAmount
-  ) {
-    try {
-      // Get campaign details
-      const { data: campaign, error: campaignError } = await supabaseAdmin
-        .from("campaigns")
-        .select("*, users!campaigns_created_by_fkey(name, role)")
-        .eq("id", campaignId)
-        .single();
-
-      if (campaignError || !campaign) {
-        throw new Error("Campaign not found");
-      }
-
-      // Get influencer details
-      const { data: influencer, error: influencerError } = await supabaseAdmin
-        .from("users")
-        .select("name, role")
-        .eq("id", influencerId)
-        .single();
-
-      if (influencerError || !influencer) {
-        throw new Error("Influencer not found");
-      }
-
-      // Check if conversation already exists for this specific campaign context
-      const { data: existingConversations, error: checkError } =
-        await supabaseAdmin
-          .from("conversations")
-          .select("*, messages(*)")
-          .eq("campaign_id", campaignId)
-          .eq("influencer_id", influencerId)
-          .eq("brand_owner_id", campaign.created_by);
-
-      if (checkError) {
-        throw new Error("Failed to check existing conversations");
-      }
-
-      if (existingConversations && existingConversations.length > 0) {
-        // Return existing conversation
-        const existingConv = existingConversations[0];
-        return {
-          success: true,
-          conversation: existingConv,
-          flow_state: existingConv.flow_state,
-          awaiting_role: existingConv.awaiting_role,
-          message: "Existing conversation found",
-        };
-      }
-
-      // Create new conversation
-      const conversationData = {
-        campaign_id: campaignId,
-        influencer_id: influencerId,
-        brand_owner_id: campaign.created_by,
-        flow_state: "influencer_responding",
-        awaiting_role: "influencer",
-        flow_data: {
-          proposed_amount: proposedAmount,
-          campaign_title: campaign.title,
-          influencer_name: influencer.name,
-          brand_owner_name: campaign.users.name,
-        },
-      };
-
-      const { data: conversation, error: conversationError } =
-        await supabaseAdmin
-          .from("conversations")
-          .insert(conversationData)
-          .select()
-          .single();
-
-      if (conversationError) {
-        console.error("❌ Failed to create conversation:", conversationError);
-        throw new Error(
-          `Failed to create conversation: ${conversationError.message}`
-        );
-      }
-
-      // Create initial messages
-      const messagesToInsert = [
-        {
-          conversation_id: conversation.id,
-          sender_id: SYSTEM_USER_ID,
-          receiver_id: influencerId,
-          message: `🎯 **New Campaign Application**\n\n**Campaign:** ${campaign.title}\n**Brand Owner:** ${campaign.users.name}\n**Proposed Amount:** ₹${proposedAmount}\n\nYou have received a new campaign application. Please review and respond.`,
-          message_type: "automated",
-          action_required: true,
-          action_data: {
-            actions: [
-              {
-                type: "accept",
-                label: "Accept Campaign",
-                style: "success",
-              },
-              {
-                type: "decline",
-                label: "Decline",
-                style: "danger",
-              },
-            ],
-          },
-        },
-        {
-          conversation_id: conversation.id,
-          sender_id: SYSTEM_USER_ID,
-          receiver_id: campaign.created_by,
-          message: `📨 **Campaign Application Sent**\n\nYour campaign "${campaign.title}" has been sent to ${influencer.name} for ₹${proposedAmount}.\n\nWaiting for influencer response...`,
-          message_type: "audit",
-          action_required: false,
-        },
-      ];
-
-      const { data: messages, error: messagesError } = await supabaseAdmin
-        .from("messages")
-        .insert(messagesToInsert)
-        .select();
-
-      if (messagesError) {
-        console.error("❌ Failed to create initial messages:", messagesError);
-        // Don't throw error here, conversation was created successfully
-      }
-
-      return {
-        success: true,
-        conversation: conversation,
-        flow_state: "influencer_responding",
-        awaiting_role: "influencer",
-        message: "Campaign conversation initialized successfully",
-      };
-    } catch (error) {
-      console.error("❌ Failed to initialize campaign conversation:", error);
-      throw error;
-    }
-  }
-
-  /**
    * Handle brand owner actions in the automated flow
    */
   async handleBrandOwnerAction(conversationId, action, data = {}) {
     try {
+      console.log("🔍 [DEBUG] handleBrandOwnerAction called:");
+      console.log("  - conversationId:", conversationId);
+      console.log("  - action:", action);
+      console.log("  - data:", data);
+
       // Get conversation details
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
-        .select("*, flow_data")
+        .select("*")
         .eq("id", conversationId)
         .single();
 
       if (convError || !conversation) {
+        console.error("❌ [DEBUG] Conversation not found:", convError);
         throw new Error("Conversation not found");
       }
 
+      console.log("✅ [DEBUG] Conversation found:", conversation.id);
+
       let newFlowState, newAwaitingRole, newMessage, auditMessage;
-      let priceOfferFlowData,
-        negotiatedPriceFlowData,
-        acceptedFlowData,
-        negotiatedAcceptedFlowData;
 
       switch (action) {
         case "connect":
@@ -421,12 +311,54 @@ class AutomatedFlowService {
           newFlowState = "influencer_price_response";
           newAwaitingRole = "influencer";
 
-          // Update conversation flow_data with the price offer
-          const priceOfferFlowData = {
-            ...conversation.flow_data,
-            price_offer: data.price,
-            offer_timestamp: new Date().toISOString(),
-          };
+          // Persist the offered price as requests.proposed_amount
+          if (conversation.request_id) {
+            await supabaseAdmin
+              .from("requests")
+              .update({
+                proposed_amount: data.price ? parseFloat(data.price) : null,
+                status: "negotiating"
+              })
+              .eq("id", conversation.request_id);
+          } else {
+            // Fallback: upsert request by bid_id + influencer_id
+            const { data: reqRow } = await supabaseAdmin
+              .from("requests")
+              .select("id")
+              .eq("bid_id", conversation.bid_id)
+              .eq("influencer_id", conversation.influencer_id)
+              .single();
+            if (reqRow) {
+              await supabaseAdmin
+                .from("requests")
+                .update({
+                  proposed_amount: data.price ? parseFloat(data.price) : null,
+                  status: "negotiating"
+                })
+                .eq("id", reqRow.id);
+              await supabaseAdmin
+                .from("conversations")
+                .update({ request_id: reqRow.id })
+                .eq("id", conversationId);
+            } else {
+              const { data: newReq } = await supabaseAdmin
+                .from("requests")
+                .insert({
+                  bid_id: conversation.bid_id,
+                  influencer_id: conversation.influencer_id,
+                  status: "negotiating",
+                  proposed_amount: data.price ? parseFloat(data.price) : null
+                })
+                .select()
+                .single();
+              if (newReq) {
+                await supabaseAdmin
+                  .from("conversations")
+                  .update({ request_id: newReq.id })
+                  .eq("id", conversationId);
+              }
+            }
+          }
 
           newMessage = {
             conversation_id: conversationId,
@@ -537,14 +469,7 @@ class AutomatedFlowService {
           newFlowState = "influencer_final_response";
           newAwaitingRole = "influencer";
 
-          // Update negotiation count and store negotiated price
-          const negotiatedPriceFlowData = {
-            ...conversation.flow_data,
-            negotiation_count:
-              (conversation.flow_data.negotiation_count || 0) + 1,
-            negotiated_price: data.price,
-            negotiation_timestamp: new Date().toISOString(),
-          };
+          // Note: flow_data column removed - negotiation tracking simplified
 
           newMessage = {
             conversation_id: conversationId,
@@ -614,215 +539,206 @@ class AutomatedFlowService {
           break;
 
         case "proceed_to_payment":
+          console.log("💳 [DEBUG] Processing proceed_to_payment action");
           // Brand owner proceeds to payment
           newFlowState = "payment_pending";
-          newAwaitingRole = null; // No one needs to act, payment is in progress
+          newAwaitingRole = "brand_owner";
 
-          // Get the agreed amount from flow_data
-          const agreedAmount =
-            conversation.flow_data?.agreed_amount ||
-            conversation.flow_data?.negotiated_price ||
-            conversation.flow_data?.price_offer ||
-            conversation.flow_data?.proposed_amount ||
-            0;
-
-          if (agreedAmount <= 0) {
-            throw new Error("No valid amount found for payment");
+          // Get the amount from various sources
+          let paymentAmount = data.amount || 0;
+          
+          if (paymentAmount <= 0) {
+            // Prefer requests.proposed_amount, then final_agreed_amount
+            if (conversation.request_id) {
+              console.log("🔎 [DEBUG] Looking up request by request_id for amount:", conversation.request_id);
+              const { data: request } = await supabaseAdmin
+                .from("requests")
+                .select("proposed_amount, final_agreed_amount")
+                .eq("id", conversation.request_id)
+                .single();
+              console.log("🔎 [DEBUG] Request row:", request);
+              if (request?.proposed_amount && parseFloat(request.proposed_amount) > 0) {
+                paymentAmount = parseFloat(request.proposed_amount);
+                console.log("💰 [DEBUG] Got amount from request.proposed_amount:", paymentAmount);
+              } else if (request?.final_agreed_amount && parseFloat(request.final_agreed_amount) > 0) {
+                paymentAmount = parseFloat(request.final_agreed_amount);
+                console.log("💰 [DEBUG] Got amount from request.final_agreed_amount:", paymentAmount);
+              }
+            }
+            // If no linked request, attempt to find one by bid_id + influencer_id
+            if (paymentAmount <= 0 && conversation.bid_id && conversation.influencer_id) {
+              console.log("🔎 [DEBUG] Looking up request by pair (bid_id, influencer_id):", conversation.bid_id, conversation.influencer_id);
+              const { data: reqByPair } = await supabaseAdmin
+                .from("requests")
+                .select("id, proposed_amount, final_agreed_amount")
+                .eq("bid_id", conversation.bid_id)
+                .eq("influencer_id", conversation.influencer_id)
+                .order("updated_at", { ascending: false })
+                .limit(1)
+                .single();
+              console.log("🔎 [DEBUG] Pair request row:", reqByPair);
+              if (reqByPair) {
+                if (reqByPair.proposed_amount && parseFloat(reqByPair.proposed_amount) > 0) {
+                  paymentAmount = parseFloat(reqByPair.proposed_amount);
+                  console.log("💰 [DEBUG] Got amount from (pair) request.proposed_amount:", paymentAmount);
+                } else if (reqByPair.final_agreed_amount && parseFloat(reqByPair.final_agreed_amount) > 0) {
+                  paymentAmount = parseFloat(reqByPair.final_agreed_amount);
+                  console.log("💰 [DEBUG] Got amount from (pair) request.final_agreed_amount:", paymentAmount);
+                }
+                // Also backfill conversation.request_id for future
+                if (reqByPair.id) {
+                  console.log("🧩 [DEBUG] Backfilling conversation.request_id:", reqByPair.id);
+                  await supabaseAdmin
+                    .from("conversations")
+                    .update({ request_id: reqByPair.id })
+                    .eq("id", conversationId);
+                }
+              }
+            }
+            // Fall back to conversation flow_data agreed_amount
+            if (paymentAmount <= 0 && conversation.flow_data && conversation.flow_data.agreed_amount) {
+              paymentAmount = conversation.flow_data.agreed_amount;
+              console.log("💰 [DEBUG] Got amount from flow_data:", paymentAmount);
+            }
+            // Try to get amount from recent price negotiation messages
+            if (paymentAmount <= 0) {
+              console.log("🔎 [DEBUG] Scanning last negotiation messages for amount...");
+              const { data: priceMessages } = await supabaseAdmin
+                .from("messages")
+                .select("message, action_data")
+                .eq("conversation_id", conversationId)
+                .in("message_type", ["influencer_price_response", "brand_owner_pricing_input", "brand_owner_negotiation_response"])
+                .order("created_at", { ascending: false })
+                .limit(5);
+              
+              // Look for price in recent messages
+              for (const msg of priceMessages || []) {
+                const priceMatch = msg.message?.match(/₹(\d+(?:\.\d{2})?)/);
+                if (priceMatch) {
+                  paymentAmount = parseFloat(priceMatch[1]);
+                  console.log("💰 [DEBUG] Got amount from message:", paymentAmount);
+                  break;
+                }
+                // Also check action_data for price
+                if (msg.action_data && msg.action_data.price) {
+                  paymentAmount = parseFloat(msg.action_data.price);
+                  console.log("💰 [DEBUG] Got amount from action_data:", paymentAmount);
+                  break;
+                }
+              }
+            }
+          }
+          
+          if (paymentAmount <= 0) {
+            console.error("❌ [DEBUG] Payment amount is required");
+            throw new Error('Payment amount is required. Ensure requests.proposed_amount/final_agreed_amount is set, or pass data.amount');
           }
 
-          // Create Razorpay order
-          const Razorpay = require("razorpay");
-          let razorpay = null;
+          console.log("💰 [DEBUG] Payment amount:", paymentAmount);
+          // Convert to paise for database storage
+          const paymentAmountPaise = Math.round(paymentAmount * 100);
+          console.log("💰 [DEBUG] Payment amount in paise:", paymentAmountPaise);
 
-          if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-            razorpay = new Razorpay({
-              key_id: process.env.RAZORPAY_KEY_ID,
-              key_secret: process.env.RAZORPAY_KEY_SECRET,
+          // Create Razorpay order
+          const Razorpay = require('razorpay');
+          const keyId = process.env.RAZORPAY_KEY_ID;
+          const keySecret = process.env.RAZORPAY_KEY_SECRET;
+          if (!keyId || !keySecret) {
+            console.error("❌ [DEBUG] Missing Razorpay keys. RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET not set.");
+            throw new Error("Payment gateway configuration missing. Please set Razorpay keys.");
+          }
+          const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
+
+          console.log("🔧 [DEBUG] Creating Razorpay order...");
+          let razorpayOrder;
+          try {
+            const shortReceipt = `ord_${String(conversationId).slice(0,8)}_${Math.floor(Date.now()/1000)}`;
+            razorpayOrder = await razorpay.orders.create({
+              amount: paymentAmountPaise,
+              currency: 'INR',
+              receipt: shortReceipt,
+              notes: {
+                conversation_id: conversationId,
+                conversation_type: conversation.campaign_id ? "campaign" : "bid",
+                brand_owner_id: conversation.brand_owner_id,
+                influencer_id: conversation.influencer_id
+              }
             });
+          } catch (rpErr) {
+            console.error("❌ [DEBUG] Razorpay order creation failed:", rpErr);
+            throw new Error(`Payment order creation failed at gateway: ${rpErr?.message || rpErr}`);
           }
 
-          if (!razorpay) {
-            throw new Error("Payment service is not configured");
-          }
+          console.log("✅ [DEBUG] Razorpay order created:", razorpayOrder.id);
 
-          // Create Razorpay order
-          const orderOptions = {
-            amount: Math.round(agreedAmount * 100), // Convert to paise
-            currency: "INR",
-            receipt: `rec_${Date.now().toString().slice(-8)}_${Math.random()
-              .toString(36)
-              .substr(2, 3)}`,
-            notes: {
+          // Create payment order in database
+          console.log("🗃️  [DEBUG] Inserting payment_order row...");
+          const { data: paymentOrder, error: orderError } = await supabaseAdmin
+            .from("payment_orders")
+            .insert({
               conversation_id: conversationId,
-              bid_id: conversation.bid_id,
-              influencer_id: conversation.influencer_id,
-              brand_owner_id: conversation.brand_owner_id,
-              payment_type: "bid_collaboration",
-            },
-          };
-
-          const razorpayOrder = await razorpay.orders.create(orderOptions);
-
-          // Validate required fields before creating transaction
-          if (!conversation.bid_id && !conversation.campaign_id) {
-            throw new Error("Missing bid_id or campaign_id in conversation");
-          }
-          if (!conversation.influencer_id) {
-            throw new Error("Missing influencer_id in conversation");
-          }
-          if (!conversation.brand_owner_id) {
-            throw new Error("Missing brand_owner_id in conversation");
-          }
-
-          // Get or create wallet for the influencer
-          let { data: wallet, error: walletError } = await supabaseAdmin
-            .from("wallets")
-            .select("*")
-            .eq("user_id", conversation.influencer_id)
+              amount_paise: paymentAmountPaise,
+              currency: "INR",
+              status: "created",
+              razorpay_order_id: razorpayOrder.id,
+              metadata: {
+                conversation_type: conversation.campaign_id ? "campaign" : "bid",
+                brand_owner_id: conversation.brand_owner_id,
+                influencer_id: conversation.influencer_id,
+                razorpay_receipt: razorpayOrder.receipt
+              }
+            })
+            .select()
             .single();
 
-          if (walletError && walletError.code === "PGRST116") {
-            // Wallet doesn't exist, create one
-            const { data: newWallet, error: createWalletError } =
-              await supabaseAdmin
-                .from("wallets")
-                .insert({
-                  user_id: conversation.influencer_id,
-                  balance: 0.0,
-                })
-                .select()
-                .single();
-
-            if (createWalletError) {
-              console.error("Failed to create wallet:", createWalletError);
-              throw new Error(
-                `Failed to create wallet: ${createWalletError.message}`
-              );
-            }
-            wallet = newWallet;
-          } else if (walletError) {
-            console.error("Failed to get wallet:", walletError);
-            throw new Error(`Failed to get wallet: ${walletError.message}`);
+          if (orderError) {
+            console.error("❌ [DEBUG] Payment order creation failed:", orderError);
+            throw new Error(`Failed to create payment order: ${orderError.message}`);
           }
 
-          console.log("Creating transaction with data:", {
-            conversation_id: conversationId,
-            bid_id: conversation.bid_id,
-            campaign_id: conversation.campaign_id,
-            influencer_id: conversation.influencer_id,
-            brand_owner_id: conversation.brand_owner_id,
-            amount: agreedAmount,
-            razorpay_order_id: razorpayOrder.id,
-            wallet_id: wallet.id,
-          });
+          console.log("✅ [DEBUG] Payment order created in database:", paymentOrder.id);
 
-          // Create transaction record in database
-          const transactionData = {
-            wallet_id: wallet.id,
-            amount: agreedAmount,
-            payment_amount: agreedAmount,
-            type: "credit",
-            status: "pending",
-            razorpay_order_id: razorpayOrder.id,
-          };
-
-          // Set the appropriate source ID
-          if (conversation.bid_id) {
-            transactionData.bid_id = conversation.bid_id;
-          } else if (conversation.campaign_id) {
-            transactionData.campaign_id = conversation.campaign_id;
-          }
-
-          const { data: transaction, error: transactionError } =
-            await supabaseAdmin
-              .from("transactions")
-              .insert(transactionData)
-              .select()
-              .single();
-
-          if (transactionError) {
-            console.error("Transaction creation error:", transactionError);
-            console.error("Error details:", {
-              message: transactionError.message,
-              details: transactionError.details,
-              hint: transactionError.hint,
-              code: transactionError.code,
-              fullError: transactionError,
-            });
-            throw new Error(
-              `Failed to create transaction: ${
-                transactionError.message ||
-                transactionError.details ||
-                transactionError.hint ||
-                JSON.stringify(transactionError)
-              }`
-            );
-          }
-
-          // Update bid/campaign status to 'pending' (payment initiated)
-          if (conversation.bid_id) {
-            const { error: bidUpdateError } = await supabaseAdmin
-              .from("bids")
-              .update({ status: "pending" })
-              .eq("id", conversation.bid_id);
-
-            if (bidUpdateError) {
-              console.warn(
-                `Failed to update bid status: ${bidUpdateError.message}`
-              );
-            }
-          } else if (conversation.campaign_id) {
-            const { error: campaignUpdateError } = await supabaseAdmin
-              .from("campaigns")
-              .update({ status: "pending" })
-              .eq("id", conversation.campaign_id);
-
-            if (campaignUpdateError) {
-              console.warn(
-                `Failed to update campaign status: ${campaignUpdateError.message}`
-              );
-            }
-          }
-
+          console.log("✉️  [DEBUG] Preparing payment prompt message for chat...");
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💳 **Payment Initiated**\n\nPayment order has been created for **₹${agreedAmount}**.\n\nOrder ID: \`${razorpayOrder.id}\`\n\nPlease complete the payment to finalize the collaboration.`,
-            message_type: "automated",
-            action_required: false,
+            message: `💳 **Payment Required**\n\nPlease complete the payment of ₹${paymentAmount} to proceed with the collaboration.`,
+            message_type: "brand_owner_payment",
+            action_required: true,
             action_data: {
+              title: "🎯 **Payment Required**",
+              subtitle: "Complete the payment to finalize the collaboration:",
+              flow_state: "payment_pending",
+              visible_to: "brand_owner",
+              message_type: "brand_owner_payment",
               payment_order: {
-                id: transaction.id,
-                razorpay_order_id: razorpayOrder.id,
-                amount: agreedAmount,
-                currency: "INR",
                 razorpay_config: {
-                  key_id: process.env.RAZORPAY_KEY_ID,
-                  amount: Math.round(agreedAmount * 100),
-                  currency: "INR",
                   order_id: razorpayOrder.id,
-                  name: "Stoory Collaboration",
-                  description: `Payment for bid collaboration - ₹${agreedAmount}`,
+                  amount: paymentAmountPaise,
+                  currency: "INR",
+                  key_id: process.env.RAZORPAY_KEY_ID,
+                  name: "Stoory Platform",
+                  description: "Payment for Campaign Collaboration",
                   prefill: {
-                    email: "", // Will be filled by frontend
-                    contact: "", // Will be filled by frontend
+                    name: "Brand Owner",
+                    email: "brand@example.com",
+                    contact: "9876543210"
                   },
                   theme: {
-                    color: "#3399cc",
-                  },
-                },
+                    color: "#3B82F6"
+                  }
+                }
               },
-            },
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Payment Order Created**\n\nPayment order created successfully for ₹${agreedAmount}.\n\nOrder ID: \`${razorpayOrder.id}\`\n\nPlease complete the payment to finalize the collaboration.`,
-            message_type: "audit",
-            action_required: false,
+              buttons: [
+                {
+                  id: "pay_now",
+                  text: "Pay Now",
+                  action: "proceed_to_payment",
+                  style: "primary"
+                }
+              ]
+            }
           };
           break;
 
@@ -836,18 +752,9 @@ class AutomatedFlowService {
         awaiting_role: newAwaitingRole,
       };
 
-      // Update flow_data for actions that modify it
-      if (action === "send_price_offer") {
-        updateData.flow_data = priceOfferFlowData;
-      } else if (action === "send_negotiated_price") {
-        updateData.flow_data = negotiatedPriceFlowData;
-      } else if (action === "accept_price") {
-        updateData.flow_data = acceptedFlowData;
-      } else if (
-        action === "accept_negotiated_price" ||
-        action === "accept_final_price"
-      ) {
-        updateData.flow_data = negotiatedAcceptedFlowData;
+      // For proceed_to_payment, also update current_action_data with payment order
+      if (action === "proceed_to_payment" && newMessage.action_data) {
+        updateData.current_action_data = newMessage.action_data;
       }
 
       const { error: updateError } = await supabaseAdmin
@@ -876,16 +783,25 @@ class AutomatedFlowService {
         throw new Error(`Failed to create messages: ${messageError.message}`);
       }
 
-      return {
+      const result = {
         success: true,
         conversation: {
           id: conversationId,
           flow_state: newFlowState,
           awaiting_role: newAwaitingRole,
+          current_action_data: action === "proceed_to_payment" ? newMessage.action_data : {},
         },
         message: createdMessages[0],
         audit_message: auditMessage ? createdMessages[1] : null,
       };
+
+      console.log("✅ [DEBUG] Brand owner action completed successfully:");
+      console.log("  - Flow state:", newFlowState);
+      console.log("  - Awaiting role:", newAwaitingRole);
+      console.log("  - Has current_action_data:", !!result.conversation.current_action_data);
+      console.log("  - Message created:", !!result.message);
+
+      return result;
     } catch (error) {
       console.error("❌ Failed to handle brand owner action:", error);
       throw error;
@@ -905,7 +821,7 @@ class AutomatedFlowService {
       // Get conversation details
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
-        .select("*, flow_data")
+        .select("*")
         .eq("id", conversationId)
         .single();
 
@@ -914,10 +830,6 @@ class AutomatedFlowService {
       }
 
       let newFlowState, newAwaitingRole, newMessage, auditMessage;
-      let priceOfferFlowData,
-        negotiatedPriceFlowData,
-        acceptedFlowData,
-        negotiatedAcceptedFlowData;
 
       switch (action) {
         case "accept":
@@ -1060,20 +972,52 @@ class AutomatedFlowService {
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
 
-          // Update conversation flow_data with the agreed amount
-          const acceptedFlowData = {
+          // Determine agreed price: prefer requests.proposed_amount if present
+          let agreedPrice = parseFloat(data.price) || 0;
+          if (!agreedPrice && conversation.request_id) {
+            const { data: reqForAccept } = await supabaseAdmin
+              .from("requests")
+              .select("proposed_amount")
+              .eq("id", conversation.request_id)
+              .single();
+            if (reqForAccept?.proposed_amount) {
+              agreedPrice = parseFloat(reqForAccept.proposed_amount);
+            }
+          }
+
+          // Store the agreed price in flow_data for later retrieval
+          const updatedFlowData = {
             ...conversation.flow_data,
-            agreed_amount:
-              conversation.flow_data?.price_offer ||
-              conversation.flow_data?.proposed_amount,
+            agreed_amount: agreedPrice,
             agreement_timestamp: new Date().toISOString(),
+            negotiation_completed: true
           };
+
+          // If a request exists, move proposed_amount to final_agreed_amount when accepted
+          if (conversation.request_id) {
+            // Read proposed_amount first
+            const { data: reqRow } = await supabaseAdmin
+              .from("requests")
+              .select("proposed_amount")
+              .eq("id", conversation.request_id)
+              .single();
+            const finalAmount = (reqRow?.proposed_amount && parseFloat(reqRow.proposed_amount) > 0)
+              ? parseFloat(reqRow.proposed_amount)
+              : agreedPrice;
+            await supabaseAdmin
+              .from("requests")
+              .update({
+                final_agreed_amount: finalAmount,
+                status: "finalized"
+              })
+              .eq("id", conversation.request_id);
+          }
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Price Offer Accepted**\n\nInfluencer has agreed to the offer. Please proceed with payment to complete the collaboration.`,
+            message: `✅ **Price Offer Accepted**\n\nInfluencer has agreed to the offer of ₹${data.price || 'the proposed amount'}. Please proceed with payment to complete the collaboration.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -1092,6 +1036,18 @@ class AutomatedFlowService {
               visible_to: "brand_owner",
             },
           };
+
+          // Update conversation with agreed price
+          const { error: flowDataError } = await supabaseAdmin
+            .from("conversations")
+            .update({ flow_data: updatedFlowData })
+            .eq("id", conversationId);
+
+          if (flowDataError) {
+            console.error("❌ [DEBUG] Failed to update flow_data:", flowDataError);
+          } else {
+            console.log("✅ [DEBUG] Updated flow_data with agreed price:", agreedPrice);
+          }
 
           auditMessage = {
             conversation_id: conversationId,
@@ -1180,16 +1136,6 @@ class AutomatedFlowService {
           // Influencer accepts negotiated price
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
-
-          // Update conversation flow_data with the agreed amount
-          const negotiatedAcceptedFlowData = {
-            ...conversation.flow_data,
-            agreed_amount:
-              conversation.flow_data?.negotiated_price ||
-              conversation.flow_data?.price_offer ||
-              conversation.flow_data?.proposed_amount,
-            agreement_timestamp: new Date().toISOString(),
-          };
 
           newMessage = {
             conversation_id: conversationId,
@@ -1565,6 +1511,240 @@ class AutomatedFlowService {
     } catch (error) {
       console.error("❌ Failed to get conversation flow context:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Handle work submission in automated flow
+   */
+  async handleWorkSubmission(conversationId, submissionData) {
+    try {
+      // Get conversation details
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", conversationId)
+        .single();
+
+      if (convError || !conversation) {
+        throw new Error("Conversation not found");
+      }
+
+      // Update conversation to work_submitted state
+      const { error: updateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "work_submitted",
+          awaiting_role: "brand_owner",
+          work_submission: submissionData,
+          work_submitted: true,
+          submission_date: submissionData.submitted_at
+        })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        throw new Error(`Failed to update conversation: ${updateError.message}`);
+      }
+
+      // Create work submission message
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          sender_id: conversation.influencer_id,
+          receiver_id: conversation.brand_owner_id,
+          message: `📤 **Work Submitted**\n\n**Deliverables:** ${submissionData.deliverables}\n\n**Description:** ${submissionData.description}\n\n${submissionData.submission_notes ? `**Notes:** ${submissionData.submission_notes}` : ''}`,
+          message_type: "system",
+          action_required: true,
+          action_data: {
+            title: "🎯 **Work Review Required**",
+            subtitle: "Please review the submitted work and provide feedback:",
+            work_submission: submissionData,
+            buttons: [
+              {
+                id: "approve_work",
+                text: "Approve Work",
+                action: "approve_work",
+                style: "success"
+              },
+              {
+                id: "request_revision",
+                text: "Request Revision",
+                action: "request_revision",
+                style: "warning"
+              }
+            ]
+          }
+        })
+        .select()
+        .single();
+
+      if (messageError) {
+        throw new Error(`Failed to create message: ${messageError.message}`);
+      }
+
+      // Update request status to work_submitted if exists
+      if (conversation.request_id) {
+        await supabaseAdmin
+          .from("requests")
+          .update({
+            status: "work_submitted",
+            work_submission_link: submissionData.deliverables,
+            work_description: submissionData.description,
+            work_submission_date: submissionData.submitted_at
+          })
+          .eq("id", conversation.request_id);
+      }
+
+      return {
+        success: true,
+        flow_state: "work_submitted",
+        awaiting_role: "brand_owner",
+        message: message
+      };
+    } catch (error) {
+      console.error("❌ Failed to handle work submission:", error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Handle work review in automated flow
+   */
+  async handleWorkReview(conversationId, action, feedback = "") {
+    try {
+      // Get conversation details
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", conversationId)
+        .single();
+
+      if (convError || !conversation) {
+        throw new Error("Conversation not found");
+      }
+
+      let newFlowState, newAwaitingRole, messageText, actionData;
+
+      if (action === "approve_work") {
+        newFlowState = "work_approved";
+        newAwaitingRole = null; // Work completed, no further action needed
+        
+        messageText = `✅ **Work Approved!**\n\nGreat work! The collaboration has been completed successfully.${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`;
+        
+        actionData = {
+          title: "🎉 **Collaboration Completed**",
+          subtitle: "The work has been approved and the collaboration is now complete.",
+          buttons: []
+        };
+
+        // Update request status to completed
+        if (conversation.request_id) {
+          await supabaseAdmin
+            .from("requests")
+            .update({ status: "completed" })
+            .eq("id", conversation.request_id);
+        }
+
+        // Update campaign/bid status to closed
+        if (conversation.campaign_id) {
+          await supabaseAdmin
+            .from("campaigns")
+            .update({ status: "closed" })
+            .eq("id", conversation.campaign_id);
+        } else if (conversation.bid_id) {
+          await supabaseAdmin
+            .from("bids")
+            .update({ status: "closed" })
+            .eq("id", conversation.bid_id);
+        }
+
+        // Unfreeze escrow payment
+        if (conversation.request_id) {
+          const { error: unfreezeError } = await supabaseAdmin.rpc(
+            "unfreeze_payment",
+            {
+              request_uuid: conversation.request_id,
+              influencer_uuid: conversation.influencer_id,
+              amount: 0 // Will be calculated by the RPC function
+            }
+          );
+
+          if (unfreezeError) {
+            console.error("Escrow unfreeze error:", unfreezeError);
+          }
+        }
+
+      } else if (action === "request_revision") {
+        newFlowState = "work_in_progress";
+        newAwaitingRole = "influencer";
+        
+        messageText = `🔄 **Revision Requested**\n\nPlease make the following changes and resubmit your work:${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`;
+        
+        actionData = {
+          title: "📝 **Work Revision Required**",
+          subtitle: "Please address the feedback and resubmit your work:",
+          buttons: [
+            {
+              id: "resubmit_work",
+              text: "Resubmit Work",
+              action: "resubmit_work",
+              style: "primary"
+            }
+          ]
+        };
+      } else {
+        throw new Error(`Unknown review action: ${action}`);
+      }
+
+      // Update conversation state
+      const { error: updateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: newFlowState,
+          awaiting_role: newAwaitingRole,
+          work_status: action === "approve_work" ? "approved" : "revision_requested"
+        })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        throw new Error(`Failed to update conversation: ${updateError.message}`);
+      }
+
+      // Create review message
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          sender_id: conversation.brand_owner_id,
+          receiver_id: conversation.influencer_id,
+          message: messageText,
+          message_type: "system",
+          action_required: actionData.buttons.length > 0,
+          action_data: actionData
+        })
+        .select()
+        .single();
+
+      if (messageError) {
+        throw new Error(`Failed to create message: ${messageError.message}`);
+      }
+
+      return {
+        success: true,
+        flow_state: newFlowState,
+        awaiting_role: newAwaitingRole,
+        message: message
+      };
+    } catch (error) {
+      console.error("❌ Failed to handle work review:", error);
+      return {
+        success: false,
+        error: error.message
+      };
     }
   }
 }

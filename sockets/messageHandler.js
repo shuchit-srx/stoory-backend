@@ -83,9 +83,23 @@ class MessageHandler {
                 });
 
                 // Emit notification to receiver
-                socket.to(`user_${receiverId}`).emit('message_notification', {
-                    message: savedMessage,
-                    senderId
+                this.io.to(`user_${receiverId}`).emit('notification', {
+                    type: 'message',
+                    data: {
+                        id: savedMessage.id,
+                        title: 'New message',
+                        body: savedMessage.message,
+                        created_at: savedMessage.created_at,
+                        payload: { 
+                            conversation_id: conversationId, 
+                            message_id: savedMessage.id, 
+                            sender_id: senderId 
+                        },
+                        conversation_id: conversationId,
+                        message: savedMessage,
+                        sender_id: senderId,
+                        receiver_id: receiverId
+                    }
                 });
 
                 // Stop typing indicator

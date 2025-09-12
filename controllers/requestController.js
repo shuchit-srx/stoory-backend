@@ -179,36 +179,9 @@ class RequestController {
         }
       }
 
-      // Create conversation automatically
-      const conversationData = {
-        brand_owner_id: source.created_by,
-        influencer_id: userId,
-      };
-
-      if (sourceType === "campaign") {
-        conversationData.campaign_id = sourceId;
-      } else {
-        conversationData.bid_id = sourceId;
-      }
-
-      const { data: conversation, error: conversationError } =
-        await supabaseAdmin
-          .from("conversations")
-          .insert(conversationData)
-          .select()
-          .single();
-
-      if (conversationError) {
-        console.error("Failed to create conversation:", conversationError);
-        // Don't fail the request creation, just log the error
-      }
-
-      // Conversation created successfully - no automated messages needed
-
       res.status(201).json({
         success: true,
         request: request,
-        conversation: conversation,
         message: "Application submitted successfully",
       });
     } catch (error) {
@@ -1197,25 +1170,7 @@ class RequestController {
         });
       }
 
-      // Create conversation if it doesn't exist
-      const { data: existingConversation } = await supabaseAdmin
-        .from("conversations")
-        .select("id")
-        .eq("request_id", id)
-        .single();
-
-      if (!existingConversation) {
-        await supabaseAdmin.from("conversations").insert({
-          brand_owner_id: request.brand_owner_id,
-          influencer_id: request.influencer_id,
-          campaign_id: request.campaign_id,
-          bid_id: request.bid_id,
-          request_id: id,
-          chat_status: "realtime",
-          payment_required: true,
-          payment_completed: false,
-        });
-      }
+      // Do not auto-create conversations here; conversation is created later (e.g., after payment)
 
       res.json({
         success: true,

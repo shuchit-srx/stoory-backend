@@ -507,9 +507,21 @@ class MessageController {
       // Emit real-time update
       const io = req.app.get("io");
       if (io) {
-        io.to(conversationId).emit("new_message", {
+        // Emit to conversation room
+        io.to(`conversation_${conversationId}`).emit("new_message", {
           conversation_id: conversationId,
           message: newMessage,
+        });
+
+        // Emit notification to receiver's personal room
+        io.to(`user_${receiverId}`).emit("notification", {
+          type: "message",
+          data: {
+            conversation_id: conversationId,
+            message: newMessage,
+            sender_id: senderId,
+            receiver_id: receiverId,
+          },
         });
       }
 
@@ -1408,6 +1420,32 @@ class MessageController {
           message: newMessage,
           flow_update: flowUpdate,
           conversationId: conversation_id,
+        });
+
+        // Also emit standard new_message for clients that only listen to new_message
+        io.to(`conversation_${conversation_id}`).emit("new_message", {
+          conversation_id,
+          message: newMessage,
+        });
+
+        // Emit notification to the receiver
+        const receiverId = conversation.brand_owner_id === userId
+          ? conversation.influencer_id
+          : conversation.brand_owner_id;
+
+        io.to(`user_${receiverId}`).emit("notification", {
+          type: "message",
+          data: {
+            id: newMessage.id,
+            title: "New message",
+            body: newMessage.message,
+            created_at: newMessage.created_at,
+            payload: { conversation_id, message_id: newMessage.id, sender_id: userId },
+            conversation_id,
+            message: newMessage,
+            sender_id: userId,
+            receiver_id: receiverId,
+          },
         });
       }
 

@@ -59,6 +59,10 @@ app.use(morgan("combined"));
 // Make Socket.IO available to controllers
 app.set("io", io);
 
+// Set socket for automated flow service
+const automatedFlowService = require('./services/automatedFlowService');
+automatedFlowService.setSocket(io);
+
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/campaigns", campaignRoutes);
