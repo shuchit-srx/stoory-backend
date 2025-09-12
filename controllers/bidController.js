@@ -736,25 +736,28 @@ class BidController {
       const io = req.app.get("io");
       if (io) {
         // Emit conversation_updated event
-        io.to(`conversation_${result.conversation.id}`).emit("conversation_updated", {
-          conversation_id: result.conversation.id,
-          flow_state: result.conversation.flow_state,
-          awaiting_role: result.conversation.awaiting_role,
-          chat_status: result.conversation.chat_status
-        });
+        io.to(`conversation_${result.conversation.id}`).emit(
+          "conversation_updated",
+          {
+            conversation_id: result.conversation.id,
+            flow_state: result.conversation.flow_state,
+            awaiting_role: result.conversation.awaiting_role,
+            chat_status: result.conversation.chat_status,
+          }
+        );
 
         // Emit new_message events for each message created
         if (result.message) {
           io.to(`conversation_${result.conversation.id}`).emit("new_message", {
             conversation_id: result.conversation.id,
-            message: result.message
+            message: result.message,
           });
         }
 
         if (result.audit_message) {
           io.to(`conversation_${result.conversation.id}`).emit("new_message", {
             conversation_id: result.conversation.id,
-            message: result.audit_message
+            message: result.audit_message,
           });
         }
       }
@@ -818,25 +821,28 @@ class BidController {
         const io = req.app.get("io");
         if (io) {
           // Emit conversation_updated event
-          io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
-            conversation_id: conversation_id,
-            flow_state: result.conversation.flow_state,
-            awaiting_role: result.conversation.awaiting_role,
-            chat_status: result.conversation.chat_status
-          });
+          io.to(`conversation_${conversation_id}`).emit(
+            "conversation_updated",
+            {
+              conversation_id: conversation_id,
+              flow_state: result.conversation.flow_state,
+              awaiting_role: result.conversation.awaiting_role,
+              chat_status: result.conversation.chat_status,
+            }
+          );
 
           // Emit new_message events for each message created
           if (result.message) {
             io.to(`conversation_${conversation_id}`).emit("new_message", {
               conversation_id: conversation_id,
-              message: result.message
+              message: result.message,
             });
           }
 
           if (result.audit_message) {
             io.to(`conversation_${conversation_id}`).emit("new_message", {
               conversation_id: conversation_id,
-              message: result.audit_message
+              message: result.audit_message,
             });
           }
         }
@@ -895,25 +901,28 @@ class BidController {
         const io = req.app.get("io");
         if (io) {
           // Emit conversation_updated event
-          io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
-            conversation_id: conversation_id,
-            flow_state: result.conversation.flow_state,
-            awaiting_role: result.conversation.awaiting_role,
-            chat_status: result.conversation.chat_status
-          });
+          io.to(`conversation_${conversation_id}`).emit(
+            "conversation_updated",
+            {
+              conversation_id: conversation_id,
+              flow_state: result.conversation.flow_state,
+              awaiting_role: result.conversation.awaiting_role,
+              chat_status: result.conversation.chat_status,
+            }
+          );
 
           // Emit new_message events for each message created
           if (result.message) {
             io.to(`conversation_${conversation_id}`).emit("new_message", {
               conversation_id: conversation_id,
-              message: result.message
+              message: result.message,
             });
           }
 
           if (result.audit_message) {
             io.to(`conversation_${conversation_id}`).emit("new_message", {
               conversation_id: conversation_id,
-              message: result.audit_message
+              message: result.audit_message,
             });
           }
         }
@@ -989,31 +998,122 @@ class BidController {
         throw new Error(`Failed to get wallet: ${walletError.message}`);
       }
 
-      // Create transaction record
-      const transactionData = {
-        wallet_id: wallet.id,
-        amount: conversation.flow_data?.agreed_amount || 0,
-        payment_amount: conversation.flow_data?.agreed_amount || 0,
-        type: "credit",
-        status: "pending",
-      };
+      // Get or create brand owner wallet for debit transaction
+      let { data: brandOwnerWallet, error: brandOwnerWalletError } =
+        await supabaseAdmin
+          .from("wallets")
+          .select("*")
+          .eq("user_id", conversation.brand_owner_id)
+          .single();
+
+      if (brandOwnerWalletError && brandOwnerWalletError.code === "PGRST116") {
+        // Create brand owner wallet if it doesn't exist
+        const {
+          data: newBrandOwnerWallet,
+          error: createBrandOwnerWalletError,
+        } = await supabaseAdmin
+          .from("wallets")
+          .insert({
+            user_id: conversation.brand_owner_id,
+            balance: 0.0,
+            balance_paise: 0,
+            frozen_balance_paise: 0,
+          })
+          .select()
+          .single();
+
+        if (createBrandOwnerWalletError) {
+          throw new Error(
+            `Failed to create brand owner wallet: ${createBrandOwnerWalletError.message}`
+          );
+        }
+        brandOwnerWallet = newBrandOwnerWallet;
+      } else if (brandOwnerWalletError) {
+        throw new Error(
+          `Failed to get brand owner wallet: ${brandOwnerWalletError.message}`
+        );
+      }
+
+      const agreedAmount = conversation.flow_data?.agreed_amount || 0;
+      const sourceData = {};
 
       // Set the appropriate source ID
       if (conversation.bid_id) {
-        transactionData.bid_id = conversation.bid_id;
+        sourceData.bid_id = conversation.bid_id;
       } else if (conversation.campaign_id) {
-        transactionData.campaign_id = conversation.campaign_id;
+        sourceData.campaign_id = conversation.campaign_id;
       }
 
-      const { data: transaction, error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert(transactionData)
-        .select()
+      // Get user names for better transaction tracking
+      const { data: brandOwner, error: brandOwnerError } = await supabaseAdmin
+        .from("users")
+        .select("name, phone")
+        .eq("id", conversation.brand_owner_id)
         .single();
 
-      if (transactionError) {
+      const { data: influencer, error: influencerError } = await supabaseAdmin
+        .from("users")
+        .select("name, phone")
+        .eq("id", conversation.influencer_id)
+        .single();
+
+      const brandOwnerName =
+        brandOwner?.name || `+${brandOwner?.phone?.slice(-4)}` || "Brand Owner";
+      const influencerName =
+        influencer?.name || `+${influencer?.phone?.slice(-4)}` || "Influencer";
+
+      // Create CREDIT transaction for influencer
+      const influencerTransactionData = {
+        wallet_id: wallet.id,
+        user_id: conversation.influencer_id,
+        amount: agreedAmount,
+        payment_amount: agreedAmount,
+        type: "credit",
+        status: "pending",
+        notes: `Payment pending from ${brandOwnerName} for campaign collaboration`,
+        sender_id: conversation.brand_owner_id,
+        receiver_id: conversation.influencer_id,
+        ...sourceData,
+      };
+
+      // Create DEBIT transaction for brand owner
+      const brandOwnerTransactionData = {
+        wallet_id: brandOwnerWallet.id,
+        user_id: conversation.brand_owner_id,
+        amount: agreedAmount,
+        payment_amount: agreedAmount,
+        type: "debit",
+        status: "pending",
+        notes: `Payment pending to ${influencerName} for campaign collaboration`,
+        sender_id: conversation.brand_owner_id,
+        receiver_id: conversation.influencer_id,
+        ...sourceData,
+      };
+
+      // Insert both transactions
+      const { data: influencerTransaction, error: influencerTransactionError } =
+        await supabaseAdmin
+          .from("transactions")
+          .insert(influencerTransactionData)
+          .select()
+          .single();
+
+      if (influencerTransactionError) {
         throw new Error(
-          `Failed to create transaction: ${transactionError.message}`
+          `Failed to create influencer transaction: ${influencerTransactionError.message}`
+        );
+      }
+
+      const { data: brandOwnerTransaction, error: brandOwnerTransactionError } =
+        await supabaseAdmin
+          .from("transactions")
+          .insert(brandOwnerTransactionData)
+          .select()
+          .single();
+
+      if (brandOwnerTransactionError) {
+        throw new Error(
+          `Failed to create brand owner transaction: ${brandOwnerTransactionError.message}`
         );
       }
 
@@ -1034,8 +1134,11 @@ class BidController {
 
       res.json({
         success: true,
-        message: "Transaction created successfully",
-        transaction: transaction,
+        message: "Dual transactions created successfully",
+        transactions: {
+          influencer: influencerTransaction,
+          brand_owner: brandOwnerTransaction,
+        },
         conversation: {
           id: conversation_id,
           flow_state: "payment_pending",
@@ -1057,18 +1160,23 @@ class BidController {
    */
   async verifyAutomatedFlowPayment(req, res) {
     try {
-      const { 
-        razorpay_order_id, 
-        razorpay_payment_id, 
-        razorpay_signature, 
-        conversation_id 
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        conversation_id,
       } = req.body;
       const userId = req.user.id;
 
-      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !conversation_id) {
+      if (
+        !razorpay_order_id ||
+        !razorpay_payment_id ||
+        !razorpay_signature ||
+        !conversation_id
+      ) {
         return res.status(400).json({
           success: false,
-          message: "Missing required payment verification parameters"
+          message: "Missing required payment verification parameters",
         });
       }
 
@@ -1083,22 +1191,22 @@ class BidController {
       if (convError || !conversation) {
         return res.status(403).json({
           success: false,
-          message: "Access denied or conversation not found"
+          message: "Access denied or conversation not found",
         });
       }
 
       // Verify Razorpay signature
-      const crypto = require('crypto');
+      const crypto = require("crypto");
       const text = `${razorpay_order_id}|${razorpay_payment_id}`;
       const expectedSignature = crypto
-        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
         .update(text)
-        .digest('hex');
+        .digest("hex");
 
       if (razorpay_signature !== expectedSignature) {
         return res.status(400).json({
           success: false,
-          message: "Invalid payment signature"
+          message: "Invalid payment signature",
         });
       }
 
@@ -1112,23 +1220,25 @@ class BidController {
       if (existingTransaction) {
         return res.status(400).json({
           success: false,
-          message: "Payment already processed"
+          message: "Payment already processed",
         });
       }
 
       // Get payment amount and request details
       let paymentAmount = 1000; // Default amount in paise
       let request = null;
-      
+
       if (conversation.request_id) {
         const { data: requestData } = await supabaseAdmin
           .from("requests")
           .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
           .eq("id", conversation.request_id)
           .single();
-        
+
         request = requestData;
-        paymentAmount = Math.round((request?.final_agreed_amount || 1000) * 100); // Convert to paise
+        paymentAmount = Math.round(
+          (request?.final_agreed_amount || 1000) * 100
+        ); // Convert to paise
       }
 
       // Get influencer's wallet
@@ -1142,7 +1252,7 @@ class BidController {
         console.error("Wallet error:", walletError);
         return res.status(500).json({
           success: false,
-          message: "Failed to get influencer wallet"
+          message: "Failed to get influencer wallet",
         });
       }
 
@@ -1150,9 +1260,9 @@ class BidController {
       const newBalance = (wallet.balance_paise || 0) + paymentAmount;
       const { error: walletUpdateError } = await supabaseAdmin
         .from("wallets")
-        .update({ 
+        .update({
           balance_paise: newBalance,
-          balance: newBalance / 100 // Keep old balance field for compatibility
+          balance: newBalance / 100, // Keep old balance field for compatibility
         })
         .eq("id", wallet.id);
 
@@ -1160,7 +1270,7 @@ class BidController {
         console.error("Wallet update error:", walletUpdateError);
         return res.status(500).json({
           success: false,
-          message: "Failed to update wallet balance"
+          message: "Failed to update wallet balance",
         });
       }
 
@@ -1173,69 +1283,81 @@ class BidController {
 
       let paymentOrder;
       if (existingOrder) {
-        const { data: updatedOrder, error: updateOrderError } = await supabaseAdmin
-          .from("payment_orders")
-          .update({
-            conversation_id: conversation_id,
-            amount_paise: paymentAmount,
-            currency: "INR",
-            status: "verified",
-            razorpay_payment_id: razorpay_payment_id,
-            razorpay_signature: razorpay_signature,
-            metadata: {
-              conversation_type: conversation.campaign_id ? "campaign" : "bid",
-              brand_owner_id: conversation.brand_owner_id,
-              influencer_id: conversation.influencer_id
-            }
-          })
-          .eq("id", existingOrder.id)
-          .select()
-          .single();
+        const { data: updatedOrder, error: updateOrderError } =
+          await supabaseAdmin
+            .from("payment_orders")
+            .update({
+              conversation_id: conversation_id,
+              amount_paise: paymentAmount,
+              currency: "INR",
+              status: "verified",
+              razorpay_payment_id: razorpay_payment_id,
+              razorpay_signature: razorpay_signature,
+              metadata: {
+                conversation_type: conversation.campaign_id
+                  ? "campaign"
+                  : "bid",
+                brand_owner_id: conversation.brand_owner_id,
+                influencer_id: conversation.influencer_id,
+              },
+            })
+            .eq("id", existingOrder.id)
+            .select()
+            .single();
 
         if (updateOrderError) {
           console.error("Payment order update error:", updateOrderError);
-          return res.status(500).json({ success: false, message: "Failed to update payment order" });
+          return res.status(500).json({
+            success: false,
+            message: "Failed to update payment order",
+          });
         }
         paymentOrder = updatedOrder;
       } else {
-        const { data: insertedOrder, error: insertOrderError } = await supabaseAdmin
-          .from("payment_orders")
-          .insert({
-            conversation_id: conversation_id,
-            amount_paise: paymentAmount,
-            currency: "INR",
-            status: "verified",
-            razorpay_order_id: razorpay_order_id,
-            razorpay_payment_id: razorpay_payment_id,
-            razorpay_signature: razorpay_signature,
-            metadata: {
-              conversation_type: conversation.campaign_id ? "campaign" : "bid",
-              brand_owner_id: conversation.brand_owner_id,
-              influencer_id: conversation.influencer_id
-            }
-          })
-          .select()
-          .single();
+        const { data: insertedOrder, error: insertOrderError } =
+          await supabaseAdmin
+            .from("payment_orders")
+            .insert({
+              conversation_id: conversation_id,
+              amount_paise: paymentAmount,
+              currency: "INR",
+              status: "verified",
+              razorpay_order_id: razorpay_order_id,
+              razorpay_payment_id: razorpay_payment_id,
+              razorpay_signature: razorpay_signature,
+              metadata: {
+                conversation_type: conversation.campaign_id
+                  ? "campaign"
+                  : "bid",
+                brand_owner_id: conversation.brand_owner_id,
+                influencer_id: conversation.influencer_id,
+              },
+            })
+            .select()
+            .single();
 
         if (insertOrderError) {
           console.error("Payment order creation error:", insertOrderError);
-          return res.status(500).json({ success: false, message: "Failed to create payment order" });
+          return res.status(500).json({
+            success: false,
+            message: "Failed to create payment order",
+          });
         }
         paymentOrder = insertedOrder;
       }
 
       // Create escrow hold record after payment order is created
-      let escrowHold = null;
+      let oldEscrowHold = null;
       if (request) {
         const { data: newEscrowHold, error: escrowError } = await supabaseAdmin
-          .from('escrow_holds')
+          .from("escrow_holds")
           .insert({
             conversation_id: conversation_id,
             payment_order_id: paymentOrder.id,
             amount_paise: paymentAmount,
-            status: 'held',
-            release_reason: 'Payment held in escrow until work completion',
-            created_at: new Date().toISOString()
+            status: "held",
+            release_reason: "Payment held in escrow until work completion",
+            created_at: new Date().toISOString(),
           })
           .select()
           .single();
@@ -1244,21 +1366,29 @@ class BidController {
           console.error("Escrow hold creation error:", escrowError);
           // Continue anyway as the payment is processed
         } else {
-          escrowHold = newEscrowHold;
+          oldEscrowHold = newEscrowHold;
         }
       }
 
       // Ensure wallet exists (create if needed)
       let walletId = wallet?.id;
       if (!walletId) {
-        const { data: newWallet, error: createWalletError } = await supabaseAdmin
-          .from("wallets")
-          .insert({ user_id: conversation.influencer_id, balance: 0, balance_paise: 0, frozen_balance_paise: 0 })
-          .select()
-          .single();
+        const { data: newWallet, error: createWalletError } =
+          await supabaseAdmin
+            .from("wallets")
+            .insert({
+              user_id: conversation.influencer_id,
+              balance: 0,
+              balance_paise: 0,
+              frozen_balance_paise: 0,
+            })
+            .select()
+            .single();
         if (createWalletError) {
           console.error("Wallet create error:", createWalletError);
-          return res.status(500).json({ success: false, message: "Failed to ensure wallet" });
+          return res
+            .status(500)
+            .json({ success: false, message: "Failed to ensure wallet" });
         }
         walletId = newWallet.id;
       }
@@ -1272,79 +1402,83 @@ class BidController {
       if (curWalletErr) {
         console.error("Wallet read error:", curWalletErr);
       }
-      
-      // Add payment to available balance first, then move to escrow
-      const currentBalancePaise = Number(curWallet?.balance_paise || 0);
-      const currentFrozenPaise = Number(curWallet?.frozen_balance_paise || 0);
-      
-      // First add to available balance
-      const newBalancePaise = currentBalancePaise + paymentAmount;
-      // Then move to frozen balance (escrow)
-      const newFrozenPaise = currentFrozenPaise + paymentAmount;
-      const newAvailableBalance = newBalancePaise - paymentAmount; // Remove from available
-      
-      const { error: walletUpdateErr } = await supabaseAdmin
-        .from("wallets")
-        .update({ 
-          balance_paise: newAvailableBalance,
-          frozen_balance_paise: newFrozenPaise,
-          balance: newAvailableBalance / 100, // Keep old balance field for compatibility
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", walletId);
-      if (walletUpdateErr) {
-        console.error("Wallet update error (frozen balance):", walletUpdateErr);
-        // Do not fail the flow; continue
-      }
 
-      // Create transaction record for escrow hold
-      const transactionData = {
-        wallet_id: walletId,
-        user_id: conversation.influencer_id,
-        amount: paymentAmount / 100, // compatibility
-        amount_paise: paymentAmount,
-        type: "credit",
-        direction: "credit",
-        status: "completed",
-        stage: "escrow_hold", // This is an escrow hold transaction
-        razorpay_order_id: razorpay_order_id,
-        razorpay_payment_id: razorpay_payment_id,
-        related_payment_order_id: paymentOrder.id,
-        notes: `Payment held in escrow for collaboration${escrowHold ? ` (Escrow ID: ${escrowHold.id})` : ''}`
-      };
+      // Use balance service for proper escrow management
+      const balanceService = require("../utils/balanceService");
 
-      // Add source reference (campaign or bid)
-      if (request) {
-        if (request.campaign_id) {
-          transactionData.campaign_id = request.campaign_id;
-        } else if (request.bid_id) {
-          transactionData.bid_id = request.bid_id;
+      // First add funds to influencer's wallet
+      const addFundsResult = await balanceService.addFunds(
+        conversation.influencer_id,
+        paymentAmount,
+        {
+          razorpay_order_id: razorpay_order_id,
+          razorpay_payment_id: razorpay_payment_id,
+          related_payment_order_id: paymentOrder.id,
+          notes: `Payment received from brand owner for collaboration`,
+          sender_id: conversation.brand_owner_id,
+          receiver_id: conversation.influencer_id,
+          ...sourceData,
         }
-        transactionData.request_id = request.id;
-      } else if (conversation.campaign_id) {
-        transactionData.campaign_id = conversation.campaign_id;
-      } else if (conversation.bid_id) {
-        transactionData.bid_id = conversation.bid_id;
+      );
+
+      if (!addFundsResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to add funds to influencer wallet",
+          error: addFundsResult.error,
+        });
       }
 
-      const { data: transaction, error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert(transactionData)
-        .select()
-        .single();
+      // Create escrow hold
+      const escrowResult = await balanceService.createEscrowHold(
+        conversation_id,
+        paymentOrder.id,
+        paymentAmount,
+        "Payment held in escrow until work completion"
+      );
 
-      if (transactionError) {
-        console.error("Transaction creation error:", transactionError);
-        return res.status(500).json({ success: false, message: "Failed to create transaction record", details: transactionError.message || transactionError });
+      if (!escrowResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to create escrow hold",
+          error: escrowResult.error,
+        });
       }
+
+      // Freeze the funds in escrow
+      const freezeResult = await balanceService.freezeFunds(
+        conversation.influencer_id,
+        paymentAmount,
+        escrowResult.escrow_hold.id,
+        {
+          razorpay_order_id: razorpay_order_id,
+          razorpay_payment_id: razorpay_payment_id,
+          related_payment_order_id: paymentOrder.id,
+          notes: `Funds frozen in escrow for collaboration`,
+          sender_id: conversation.brand_owner_id,
+          receiver_id: conversation.influencer_id,
+          ...sourceData,
+        }
+      );
+
+      if (!freezeResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to freeze funds in escrow",
+          error: freezeResult.error,
+        });
+      }
+
+      // Transactions are now handled by the balance service
+      const escrowHoldData = escrowResult.escrow_hold;
 
       // Update request status to "paid" if request exists
       if (request) {
         const { error: requestUpdateError } = await supabaseAdmin
           .from("requests")
-          .update({ 
+          .update({
             status: "paid",
-            payment_date: new Date().toISOString()
+            payment_date: new Date().toISOString(),
           })
           .eq("id", request.id);
 
@@ -1368,31 +1502,32 @@ class BidController {
       }
 
       // Update conversation to work_in_progress (enable chat) and store escrow hold ID
-      const { data: updatedConversation, error: updateError } = await supabaseAdmin
-        .from("conversations")
-        .update({
-          flow_state: "work_in_progress",
-          awaiting_role: "influencer", // Influencer's turn to work
-          chat_status: "real_time",
-          conversation_type: conversation.campaign_id ? "campaign" : "bid",
-          escrow_hold_id: escrowHold?.id, // Store escrow hold ID for later reference
-          flow_data: {
-            agreed_amount: paymentAmount / 100,
-            agreement_timestamp: new Date().toISOString(),
-            payment_completed: true,
-            payment_timestamp: new Date().toISOString()
-          },
-          current_action_data: {}
-        })
-        .eq("id", conversation_id)
-        .select()
-        .single();
+      const { data: updatedConversation, error: updateError } =
+        await supabaseAdmin
+          .from("conversations")
+          .update({
+            flow_state: "work_in_progress",
+            awaiting_role: "influencer", // Influencer's turn to work
+            chat_status: "real_time",
+            conversation_type: conversation.campaign_id ? "campaign" : "bid",
+            escrow_hold_id: escrowHoldData?.id, // Store escrow hold ID for later reference
+            flow_data: {
+              agreed_amount: paymentAmount / 100,
+              agreement_timestamp: new Date().toISOString(),
+              payment_completed: true,
+              payment_timestamp: new Date().toISOString(),
+            },
+            current_action_data: {},
+          })
+          .eq("id", conversation_id)
+          .select()
+          .single();
 
       if (updateError) {
         console.error("Conversation update error:", updateError);
         return res.status(500).json({
           success: false,
-          message: "Failed to update conversation state"
+          message: "Failed to update conversation state",
         });
       }
 
@@ -1403,9 +1538,10 @@ class BidController {
           conversation_id: conversation_id,
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
-          message: "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.",
+          message:
+            "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.",
           message_type: "system",
-          action_required: false
+          action_required: false,
         })
         .select()
         .single();
@@ -1418,14 +1554,14 @@ class BidController {
           conversation_id: conversation_id,
           flow_state: "work_in_progress",
           awaiting_role: null,
-          chat_status: "real_time"
+          chat_status: "real_time",
         });
 
         // Emit new_message event
         if (successMessage) {
           io.to(`conversation_${conversation_id}`).emit("new_message", {
             conversation_id: conversation_id,
-            message: successMessage
+            message: successMessage,
           });
         }
       }
@@ -1442,33 +1578,32 @@ class BidController {
           flow_data: updatedConversation.flow_data,
           current_action_data: updatedConversation.current_action_data,
           created_at: updatedConversation.created_at,
-          updated_at: updatedConversation.updated_at
+          updated_at: updatedConversation.updated_at,
         },
         payment_status: {
           status: "verified",
           razorpay_payment_id: razorpay_payment_id,
           razorpay_order_id: razorpay_order_id,
           amount: paymentAmount,
-          currency: "INR"
+          currency: "INR",
         },
         wallet_updates: {
           brand_owner: {
             balance_paise: 0, // Brand owner's balance would be updated separately
-            frozen_balance_paise: 0
+            frozen_balance_paise: 0,
           },
           influencer: {
             balance_paise: newBalance,
-            frozen_balance_paise: paymentAmount
-          }
-        }
+            frozen_balance_paise: paymentAmount,
+          },
+        },
       });
-
     } catch (error) {
       console.error("❌ Error verifying automated flow payment:", error);
       res.status(500).json({
         success: false,
         message: "Failed to verify payment",
-        error: error.message
+        error: error.message,
       });
     }
   }
@@ -1590,14 +1725,14 @@ class BidController {
           conversation_id: conversation_id,
           flow_state: result.flow_state,
           awaiting_role: result.awaiting_role,
-          chat_status: "work_submitted"
+          chat_status: "work_submitted",
         });
 
         // Emit new_message event
         if (result.message) {
           io.to(`conversation_${conversation_id}`).emit("new_message", {
             conversation_id: conversation_id,
-            message: result.message
+            message: result.message,
           });
         }
       }
@@ -1682,24 +1817,30 @@ class BidController {
           conversation_id: conversation_id,
           flow_state: result.flow_state,
           awaiting_role: result.awaiting_role,
-          chat_status: result.flow_state === "work_approved" ? "completed" : "work_in_progress"
+          chat_status:
+            result.flow_state === "work_approved"
+              ? "completed"
+              : "work_in_progress",
         });
 
         // Emit new_message event
         if (result.message) {
           io.to(`conversation_${conversation_id}`).emit("new_message", {
             conversation_id: conversation_id,
-            message: result.message
+            message: result.message,
           });
         }
 
         // Emit payment status update if work is approved
         if (result.flow_state === "work_approved") {
-          io.to(`conversation_${conversation_id}`).emit("payment_status_update", {
-            conversation_id: conversation_id,
-            status: "released",
-            message: "Payment has been released from escrow"
-          });
+          io.to(`conversation_${conversation_id}`).emit(
+            "payment_status_update",
+            {
+              conversation_id: conversation_id,
+              status: "released",
+              message: "Payment has been released from escrow",
+            }
+          );
         }
       }
 

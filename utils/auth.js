@@ -160,6 +160,24 @@ class AuthService {
    */
   async sendOTP(phone) {
     try {
+      // Validate phone number format
+      if (!phone.startsWith("+")) {
+        return {
+          success: false,
+          message: "Phone number must include country code (e.g., +1234567890)",
+        };
+      }
+
+      // Check if it's a valid international format (7-15 digits after +)
+      const phoneRegex = /^\+[1-9]\d{6,14}$/;
+      if (!phoneRegex.test(phone)) {
+        return {
+          success: false,
+          message:
+            "Invalid phone number format. Use international format: +[country code][number]",
+        };
+      }
+
       // Handle mock phone numbers
       if (
         phone === this.mockPhone ||
@@ -210,6 +228,24 @@ class AuthService {
    */
   async sendRegistrationOTP(phone) {
     try {
+      // Validate phone number format
+      if (!phone.startsWith("+")) {
+        return {
+          success: false,
+          message: "Phone number must include country code (e.g., +1234567890)",
+        };
+      }
+
+      // Check if it's a valid international format (7-15 digits after +)
+      const phoneRegex = /^\+[1-9]\d{6,14}$/;
+      if (!phoneRegex.test(phone)) {
+        return {
+          success: false,
+          message:
+            "Invalid phone number format. Use international format: +[country code][number]",
+        };
+      }
+
       // Handle mock phone numbers
       if (
         phone === this.mockPhone ||
@@ -421,9 +457,10 @@ class AuthService {
           .single();
 
         if (createError) {
+          console.error("User creation error:", createError);
           return {
             success: false,
-            message: "Failed to create user profile",
+            message: `Failed to create user profile: ${createError.message}`,
           };
         }
 
