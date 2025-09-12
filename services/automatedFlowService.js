@@ -1,6 +1,5 @@
 const { supabaseAdmin } = require('../supabase/client');
 const stateMachineService = require('./stateMachineService');
-const paymentService = require('./paymentService');
 const escrowService = require('./escrowService');
 
 class AutomatedFlowService {

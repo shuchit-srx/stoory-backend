@@ -17,27 +17,34 @@ Authorization: Bearer <jwt_token>
   "success": true,
   "message": "Wallet balance retrieved successfully",
   "data": {
-    "available_balance": 3200.00,        // Withdrawable amount (in rupees)
+    "withdrawable_balance": 3200.00,     // Withdrawable amount (in rupees)
     "frozen_balance": 500.00,            // Onhold amount (in rupees)
-    "total_balance": 3700.00,            // Total balance (available + frozen)
-    "balance_paise": 320000,             // Withdrawable amount (in paise)
-    "frozen_balance_paise": 50000        // Onhold amount (in paise)
+    "total_balance": 3700.00,            // Total balance (withdrawable + frozen)
+    "withdrawable_balance_paise": 320000, // Withdrawable amount (in paise)
+    "frozen_balance_paise": 50000,       // Onhold amount (in paise)
+    "total_balance_paise": 370000,       // Total balance (in paise)
+    
+    // Legacy fields for compatibility
+    "available_balance": 3200.00,        // Same as withdrawable_balance
+    "balance_paise": 320000              // Same as withdrawable_balance_paise
   }
 }
 ```
 
 ## Balance Types Explained
 
-### 1. Available Balance (Withdrawable)
-- **Field**: `available_balance` / `balance_paise`
+### 1. Withdrawable Balance (Available)
+- **Field**: `withdrawable_balance` / `withdrawable_balance_paise` (or legacy `available_balance` / `balance_paise`)
 - **Description**: Money that can be withdrawn immediately
 - **Source**: Completed payments that are not held in escrow
+- **Database**: Stored in `wallets.balance_paise`
 - **Usage**: Show this as the primary "Withdrawable" amount
 
-### 2. Frozen Balance (Onhold)
+### 2. Frozen Balance (Onhold/Escrow)
 - **Field**: `frozen_balance` / `frozen_balance_paise`
 - **Description**: Money held in escrow during collaboration
 - **Source**: Payments that are being held until work is approved
+- **Database**: Stored in `wallets.frozen_balance_paise`
 - **Usage**: Show this as "On Hold" or "Pending Release"
 
 ### 3. Total Balance

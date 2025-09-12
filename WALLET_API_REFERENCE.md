@@ -24,11 +24,16 @@ Get current wallet balance including available and frozen amounts.
   "success": true,
   "message": "Wallet balance retrieved successfully",
   "data": {
-    "available_balance": 3200.00,        // Withdrawable amount (rupees)
+    "withdrawable_balance": 3200.00,     // Withdrawable amount (rupees)
     "frozen_balance": 500.00,            // Onhold amount (rupees)
     "total_balance": 3700.00,            // Total balance (rupees)
-    "balance_paise": 320000,             // Withdrawable amount (paise)
-    "frozen_balance_paise": 50000        // Onhold amount (paise)
+    "withdrawable_balance_paise": 320000, // Withdrawable amount (paise)
+    "frozen_balance_paise": 50000,       // Onhold amount (paise)
+    "total_balance_paise": 370000,       // Total balance (paise)
+    
+    // Legacy fields for compatibility
+    "available_balance": 3200.00,        // Same as withdrawable_balance
+    "balance_paise": 320000              // Same as withdrawable_balance_paise
   }
 }
 ```

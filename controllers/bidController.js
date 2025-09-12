@@ -1128,30 +1128,6 @@ class BidController {
         });
       }
 
-      // Create escrow hold record first
-      let escrowHold = null;
-      if (request) {
-        const { data: newEscrowHold, error: escrowError } = await supabaseAdmin
-          .from('escrow_holds')
-          .insert({
-            conversation_id: conversation_id,
-            payment_order_id: paymentOrder.id,
-            amount_paise: paymentAmount,
-            status: 'held',
-            release_reason: 'Payment held in escrow until work completion',
-            created_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-
-        if (escrowError) {
-          console.error("Escrow hold creation error:", escrowError);
-          // Continue anyway as the payment is processed
-        } else {
-          escrowHold = newEscrowHold;
-        }
-      }
-
       // Upsert payment order: update if order already exists
       const { data: existingOrder } = await supabaseAdmin
         .from("payment_orders")
@@ -1212,6 +1188,30 @@ class BidController {
         paymentOrder = insertedOrder;
       }
 
+      // Create escrow hold record after payment order is created
+      let escrowHold = null;
+      if (request) {
+        const { data: newEscrowHold, error: escrowError } = await supabaseAdmin
+          .from('escrow_holds')
+          .insert({
+            conversation_id: conversation_id,
+            payment_order_id: paymentOrder.id,
+            amount_paise: paymentAmount,
+            status: 'held',
+            release_reason: 'Payment held in escrow until work completion',
+            created_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+
+        if (escrowError) {
+          console.error("Escrow hold creation error:", escrowError);
+          // Continue anyway as the payment is processed
+        } else {
+          escrowHold = newEscrowHold;
+        }
+      }
+
       // Ensure wallet exists (create if needed)
       let walletId = wallet?.id;
       if (!walletId) {
@@ -1237,13 +1237,22 @@ class BidController {
         console.error("Wallet read error:", curWalletErr);
       }
       
-      // Add payment to frozen balance (escrow hold)
+      // Add payment to available balance first, then move to escrow
+      const currentBalancePaise = Number(curWallet?.balance_paise || 0);
       const currentFrozenPaise = Number(curWallet?.frozen_balance_paise || 0);
+      
+      // First add to available balance
+      const newBalancePaise = currentBalancePaise + paymentAmount;
+      // Then move to frozen balance (escrow)
       const newFrozenPaise = currentFrozenPaise + paymentAmount;
+      const newAvailableBalance = newBalancePaise - paymentAmount; // Remove from available
+      
       const { error: walletUpdateErr } = await supabaseAdmin
         .from("wallets")
         .update({ 
+          balance_paise: newAvailableBalance,
           frozen_balance_paise: newFrozenPaise,
+          balance: newAvailableBalance / 100, // Keep old balance field for compatibility
           updated_at: new Date().toISOString()
         })
         .eq("id", walletId);

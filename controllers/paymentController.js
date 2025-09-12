@@ -692,12 +692,27 @@ class PaymentController {
         });
       }
 
+      // Calculate proper balance breakdown
+      const withdrawableAmountPaise = wallet.balance_paise || 0;
+      const frozenAmountPaise = wallet.frozen_balance_paise || 0;
+      const totalAmountPaise = withdrawableAmountPaise + frozenAmountPaise;
+      
       const balanceInfo = {
-        available_balance: wallet.balance || 0,
-        frozen_balance: (wallet.frozen_balance_paise || 0) / 100,
-        total_balance: (wallet.balance || 0) + ((wallet.frozen_balance_paise || 0) / 100),
-        balance_paise: wallet.balance_paise || 0,
-        frozen_balance_paise: wallet.frozen_balance_paise || 0,
+        // Withdrawable amounts (money user can withdraw)
+        withdrawable_balance: withdrawableAmountPaise / 100,
+        withdrawable_balance_paise: withdrawableAmountPaise,
+        
+        // Frozen amounts (money held in escrow)
+        frozen_balance: frozenAmountPaise / 100,
+        frozen_balance_paise: frozenAmountPaise,
+        
+        // Total amounts (withdrawable + frozen)
+        total_balance: totalAmountPaise / 100,
+        total_balance_paise: totalAmountPaise,
+        
+        // Legacy fields for compatibility
+        available_balance: withdrawableAmountPaise / 100,
+        balance_paise: withdrawableAmountPaise,
       };
 
       res.json({
