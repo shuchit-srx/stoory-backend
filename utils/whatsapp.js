@@ -183,7 +183,7 @@ class WhatsAppService {
               parameters: [
                 {
                   type: "text",
-                  text: "12345", // Dynamic URL parameter value
+                  text: otp, // Use actual OTP for copy code
                 },
               ],
             },
@@ -387,7 +387,7 @@ class WhatsAppService {
               parameters: [
                 {
                   type: "text",
-                  text: "12345", // Dynamic URL parameter value
+                  text: otp, // Use actual OTP for copy code
                 },
               ],
             },
@@ -441,13 +441,23 @@ class WhatsAppService {
     // Remove any non-digit characters except +
     let formatted = phone.replace(/[^\d+]/g, "");
 
-    // If phone doesn't start with +, assume it's a local number and add country code
+    // Ensure phone starts with + for proper international format
     if (!formatted.startsWith("+")) {
-      // You can customize this based on your default country
-      formatted = "+91" + formatted; // Default to India (+91)
+      // If no country code provided, this is an error - require proper format
+      throw new Error(
+        "Phone number must include country code (e.g., +1234567890)"
+      );
     }
 
-    // Remove the + for Facebook Graph API
+    // Validate the international format
+    const phoneRegex = /^\+[1-9]\d{6,14}$/;
+    if (!phoneRegex.test(formatted)) {
+      throw new Error(
+        "Invalid phone number format. Use international format: +[country code][number]"
+      );
+    }
+
+    // Remove the + for Facebook Graph API (WhatsApp requires format without +)
     return formatted.replace("+", "");
   }
 

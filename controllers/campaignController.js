@@ -819,12 +819,11 @@ class CampaignController {
         });
       }
 
-      const result =
-        await automatedFlowService.handleCampaignInfluencerResponse(
-          conversation_id,
-          action,
-          data
-        );
+      const result = await automatedFlowService.handleInfluencerAction(
+        conversation_id,
+        action,
+        data
+      );
 
       if (!result.success) {
         return res.status(500).json({
@@ -894,7 +893,7 @@ class CampaignController {
         });
       }
 
-      const result = await automatedFlowService.handleCampaignBrandOwnerAction(
+      const result = await automatedFlowService.handleBrandOwnerAction(
         conversation_id,
         action,
         data

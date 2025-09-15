@@ -18,6 +18,7 @@ const userRoutes = require("./routes/users");
 const messageRoutes = require("./routes/messages");
 const paymentRoutes = require("./routes/payments");
 const subscriptionRoutes = require("./routes/subscriptions");
+const socialPlatformRoutes = require("./routes/socialPlatforms");
 
 const app = express();
 const server = http.createServer(app);
@@ -60,7 +61,7 @@ app.use(morgan("combined"));
 app.set("io", io);
 
 // Set socket for automated flow service
-const automatedFlowService = require('./services/automatedFlowService');
+const automatedFlowService = require("./services/automatedFlowService");
 automatedFlowService.setSocket(io);
 
 // API routes
@@ -73,6 +74,7 @@ app.use("/api/conversations", conversationRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
+app.use("/api/social-platforms", socialPlatformRoutes);
 
 // 404 handler for API routes
 app.use("/api/*", (req, res) => {
