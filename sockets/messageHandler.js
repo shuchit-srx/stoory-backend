@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require('../supabase/client');
+const fcmService = require('../services/fcmService');
 
 class MessageHandler {
     constructor(io) {
@@ -57,6 +58,20 @@ class MessageHandler {
         socket.on('send_message', async (data) => {
             try {
                 const { conversationId, senderId, receiverId, message, mediaUrl } = data;
+                console.log("🔍 [DEBUG] Socket send_message received:", { conversationId, senderId, receiverId });
+
+                // Get conversation context first
+                const { data: conversation, error: convError } = await supabaseAdmin
+                    .from('conversations')
+                    .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+                    .eq('id', conversationId)
+                    .single();
+
+                if (convError) {
+                    console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
+                    socket.emit('message_error', { error: 'Failed to fetch conversation context' });
+                    return;
+                }
 
                 // Save message to database
                 const { data: savedMessage, error } = await supabaseAdmin
@@ -72,17 +87,35 @@ class MessageHandler {
                     .single();
 
                 if (error) {
+                    console.error("❌ [DEBUG] Failed to save message via socket:", error);
                     socket.emit('message_error', { error: 'Failed to save message' });
                     return;
                 }
 
-                // Emit message to conversation room
+                console.log("✅ [DEBUG] Message saved via socket, emitting events");
+
+                // Prepare conversation context
+                const conversationContext = {
+                    id: conversation.id,
+                    chat_status: conversation.chat_status,
+                    flow_state: conversation.flow_state,
+                    awaiting_role: conversation.awaiting_role,
+                    conversation_type: conversation.campaign_id ? 'campaign' : 
+                                      conversation.bid_id ? 'bid' : 'direct',
+                    automation_enabled: conversation.automation_enabled || false,
+                    current_action_data: conversation.current_action_data
+                };
+
+                // Emit message to conversation room with context
+                console.log(`📡 [DEBUG] Socket emitting new_message to conversation_${conversationId}`);
                 this.io.to(`conversation_${conversationId}`).emit('new_message', {
+                    conversation_id: conversationId,
                     message: savedMessage,
-                    conversationId
+                    conversation_context: conversationContext
                 });
 
-                // Emit notification to receiver
+                // Emit notification to receiver with context
+                console.log(`📡 [DEBUG] Socket emitting notification to user_${receiverId}`);
                 this.io.to(`user_${receiverId}`).emit('notification', {
                     type: 'message',
                     data: {
@@ -90,6 +123,7 @@ class MessageHandler {
                         title: 'New message',
                         body: savedMessage.message,
                         created_at: savedMessage.created_at,
+                        conversation_context: conversationContext,
                         payload: { 
                             conversation_id: conversationId, 
                             message_id: savedMessage.id, 
@@ -100,6 +134,22 @@ class MessageHandler {
                         sender_id: senderId,
                         receiver_id: receiverId
                     }
+                });
+
+                // Send FCM push notification
+                fcmService.sendMessageNotification(
+                    conversationId,
+                    savedMessage,
+                    senderId,
+                    receiverId
+                ).then(result => {
+                    if (result.success) {
+                        console.log(`✅ FCM notification sent: ${result.sent} successful, ${result.failed} failed`);
+                    } else {
+                        console.error(`❌ FCM notification failed:`, result.error);
+                    }
+                }).catch(error => {
+                    console.error(`❌ FCM notification error:`, error);
                 });
 
                 // Stop typing indicator
@@ -231,6 +281,51 @@ class MessageHandler {
      */
     isUserOnline(userId) {
         return Array.from(this.onlineUsers.values()).includes(userId);
+    }
+
+    /**
+     * Emit conversation state change event
+     */
+    emitConversationStateChange(conversationId, stateChange) {
+        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+            conversation_id: conversationId,
+            previous_state: stateChange.from,
+            new_state: stateChange.to,
+            reason: stateChange.reason,
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    /**
+     * Get conversation context for emits
+     */
+    async getConversationContext(conversationId) {
+        try {
+            const { data: conversation, error } = await supabaseAdmin
+                .from('conversations')
+                .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+                .eq('id', conversationId)
+                .single();
+
+            if (error || !conversation) {
+                console.error("❌ Failed to fetch conversation context:", error);
+                return null;
+            }
+
+            return {
+                id: conversation.id,
+                chat_status: conversation.chat_status,
+                flow_state: conversation.flow_state,
+                awaiting_role: conversation.awaiting_role,
+                conversation_type: conversation.campaign_id ? 'campaign' : 
+                                  conversation.bid_id ? 'bid' : 'direct',
+                automation_enabled: conversation.automation_enabled || false,
+                current_action_data: conversation.current_action_data
+            };
+        } catch (error) {
+            console.error("❌ Error getting conversation context:", error);
+            return null;
+        }
     }
 }
 

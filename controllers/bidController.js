@@ -1377,11 +1377,21 @@ class BidController {
       // Emit realtime events
       const io = req.app.get("io");
       if (io) {
-        // Emit conversation_updated event
+        // Emit conversation_updated event with correct state
         io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
           conversation_id: conversation_id,
           flow_state: "work_in_progress",
           awaiting_role: null,
+          chat_status: "real_time",
+          payment_completed: true
+        });
+
+        // Emit payment status update event
+        io.to(`conversation_${conversation_id}`).emit("payment_status_update", {
+          conversation_id: conversation_id,
+          status: "completed",
+          message: "Payment has been successfully processed",
+          flow_state: "work_in_progress",
           chat_status: "real_time"
         });
 
@@ -1392,6 +1402,27 @@ class BidController {
             message: successMessage
           });
         }
+
+        // Send individual notifications to both users
+        io.to(`user_${conversation.brand_owner_id}`).emit("notification", {
+          type: "payment_completed",
+          data: {
+            conversation_id: conversation_id,
+            message: "Payment completed successfully",
+            flow_state: "work_in_progress",
+            chat_status: "real_time"
+          }
+        });
+
+        io.to(`user_${conversation.influencer_id}`).emit("notification", {
+          type: "payment_completed", 
+          data: {
+            conversation_id: conversation_id,
+            message: "Payment completed successfully",
+            flow_state: "work_in_progress",
+            chat_status: "real_time"
+          }
+        });
       }
 
       res.json({
@@ -1646,7 +1677,7 @@ class BidController {
           conversation_id: conversation_id,
           flow_state: result.flow_state,
           awaiting_role: result.awaiting_role,
-          chat_status: result.flow_state === "work_approved" ? "completed" : "work_in_progress"
+          chat_status: result.flow_state === "work_approved" ? "real_time" : "real_time" // FIXED: Use 'real_time' to match database constraint
         });
 
         // Emit new_message event

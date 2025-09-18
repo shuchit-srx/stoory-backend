@@ -1263,6 +1263,21 @@ class AutomatedFlowService {
         );
       }
 
+      // Send FCM notification for flow state change
+      const fcmService = require('../services/fcmService');
+      const targetUserId = newAwaitingRole === 'influencer' ? conversation.influencer_id : conversation.brand_owner_id;
+      if (targetUserId) {
+        fcmService.sendFlowStateNotification(conversationId, targetUserId, newFlowState).then(result => {
+          if (result.success) {
+            console.log(`✅ FCM flow state notification sent: ${result.sent} successful, ${result.failed} failed`);
+          } else {
+            console.error(`❌ FCM flow state notification failed:`, result.error);
+          }
+        }).catch(error => {
+          console.error(`❌ FCM flow state notification error:`, error);
+        });
+      }
+
       // Create messages (INFLUENCER ACTION HANDLER)
       const messagesToCreate = [newMessage];
       if (auditMessage) {
@@ -1418,11 +1433,11 @@ class AutomatedFlowService {
   }
 
   /**
-   * Handle payment completion and transition to real-time chat
+   * Handle payment completion and transition to payment_completed state
    */
   async handlePaymentCompletion(conversationId, paymentData) {
     try {
-      // Update conversation to real-time chat
+      // Update conversation to payment_completed state
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
         .select("*")
@@ -1433,11 +1448,18 @@ class AutomatedFlowService {
         throw new Error("Conversation not found");
       }
 
+      // Store previous state for state change event
+      const previousState = {
+        chat_status: conversation.chat_status,
+        flow_state: conversation.flow_state,
+        awaiting_role: conversation.awaiting_role
+      };
+
       const { error: updateError } = await supabaseAdmin
         .from("conversations")
         .update({
-          flow_state: "real_time",
-          awaiting_role: null,
+          flow_state: "payment_completed",
+          awaiting_role: "influencer", // Influencer needs to start work
           chat_status: "active",
         })
         .eq("id", conversationId);
@@ -1453,20 +1475,183 @@ class AutomatedFlowService {
         conversation_id: conversationId,
         sender_id: SYSTEM_USER_ID,
         receiver_id: conversation.brand_owner_id,
-        message: `✅ **Payment Completed Successfully**\n\nPayment of ₹${paymentData.amount} has been processed. The collaboration is now active and you can communicate in real-time.`,
+        message: `✅ **Payment Completed Successfully**\n\nPayment of ₹${paymentData.amount} has been processed. The collaboration is now active and work can begin.`,
+        message_type: "automated",
+        action_required: false,
+      };
+
+      // Create work start message for influencer
+      const workStartMessage = {
+        conversation_id: conversationId,
+        sender_id: SYSTEM_USER_ID,
+        receiver_id: conversation.influencer_id,
+        message: `🎯 **Work Phase Started**\n\nPayment has been completed! You can now start working on the project. Please begin your work and submit it when ready.`,
+        message_type: "automated",
+        action_required: true,
+        action_data: {
+          title: "🚀 **Start Working**",
+          subtitle: "Payment completed! You can now begin your work on this project.",
+          buttons: [
+            {
+              id: "start_work",
+              text: "Start Working",
+              style: "success",
+              action: "start_work"
+            }
+          ],
+          flow_state: "payment_completed",
+          message_type: "work_start_prompt",
+          visible_to: "influencer"
+        }
+      };
+
+      const { data: messages, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert([confirmationMessage, workStartMessage])
+        .select();
+
+      if (messageError) {
+        throw new Error(
+          `Failed to create confirmation messages: ${messageError.message}`
+        );
+      }
+
+      return {
+        success: true,
+        conversation: {
+          id: conversationId,
+          flow_state: "payment_completed",
+          awaiting_role: "influencer",
+          chat_status: "active",
+        },
+        message: messages[0], // Confirmation message
+        work_start_message: messages[1], // Work start message
+      };
+    } catch (error) {
+      console.error("❌ Failed to handle payment completion:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle work start - transition from payment_completed to work_in_progress
+   */
+  async handleWorkStart(conversationId) {
+    try {
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", conversationId)
+        .single();
+
+      if (convError || !conversation) {
+        throw new Error("Conversation not found");
+      }
+
+      // Update conversation to work_in_progress state
+      const { error: updateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "work_in_progress",
+          awaiting_role: "influencer", // Influencer is working
+          chat_status: "active",
+        })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        throw new Error(
+          `Failed to update conversation: ${updateError.message}`
+        );
+      }
+
+      // Create work started message
+      const workStartedMessage = {
+        conversation_id: conversationId,
+        sender_id: conversation.influencer_id,
+        receiver_id: conversation.brand_owner_id,
+        message: `🚀 **Work Started**\n\nI've started working on the project. I'll submit the completed work when ready.`,
         message_type: "automated",
         action_required: false,
       };
 
       const { data: message, error: messageError } = await supabaseAdmin
         .from("messages")
-        .insert(confirmationMessage)
+        .insert(workStartedMessage)
         .select()
         .single();
 
       if (messageError) {
         throw new Error(
-          `Failed to create confirmation message: ${messageError.message}`
+          `Failed to create work started message: ${messageError.message}`
+        );
+      }
+
+      return {
+        success: true,
+        conversation: {
+          id: conversationId,
+          flow_state: "work_in_progress",
+          awaiting_role: "influencer",
+          chat_status: "active",
+        },
+        message: message,
+      };
+    } catch (error) {
+      console.error("❌ Failed to handle work start:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle work completion and transition to real-time chat
+   */
+  async handleWorkCompletion(conversationId) {
+    try {
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", conversationId)
+        .single();
+
+      if (convError || !conversation) {
+        throw new Error("Conversation not found");
+      }
+
+      // Update conversation to real-time chat
+      const { error: updateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "real_time",
+          awaiting_role: null, // No specific role needs to act
+          chat_status: "active",
+        })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        throw new Error(
+          `Failed to update conversation: ${updateError.message}`
+        );
+      }
+
+      // Create work completion message
+      const workCompletionMessage = {
+        conversation_id: conversationId,
+        sender_id: SYSTEM_USER_ID,
+        receiver_id: conversation.brand_owner_id,
+        message: `🎉 **Work Completed Successfully**\n\nThe collaboration work has been completed! You can now communicate in real-time for any follow-up discussions.`,
+        message_type: "automated",
+        action_required: false,
+      };
+
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert(workCompletionMessage)
+        .select()
+        .single();
+
+      if (messageError) {
+        throw new Error(
+          `Failed to create work completion message: ${messageError.message}`
         );
       }
 
@@ -1481,7 +1666,7 @@ class AutomatedFlowService {
         message: message,
       };
     } catch (error) {
-      console.error("❌ Failed to handle payment completion:", error);
+      console.error("❌ Failed to handle work completion:", error);
       throw error;
     }
   }

@@ -381,18 +381,58 @@ class PaymentController {
       }
 
       // Enable real-time chat
-      const { error: chatError } = await supabaseAdmin
+      const { data: conversation, error: chatError } = await supabaseAdmin
         .from("conversations")
         .update({
-          chat_status: "realtime",
+          chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
           payment_completed: true,
         })
-        .eq("request_id", request_id);
+        .eq("request_id", request_id)
+        .select("id, brand_owner_id, influencer_id")
+        .single();
 
       if (chatError) {
         return res.status(500).json({
           success: false,
           message: "Failed to enable real-time chat",
+        });
+      }
+
+      // Emit WebSocket events for payment completion
+      const io = req.app.get("io");
+      if (io && conversation) {
+        // Emit conversation_updated event
+        io.to(`conversation_${conversation.id}`).emit("conversation_updated", {
+          conversation_id: conversation.id,
+          chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
+          payment_completed: true
+        });
+
+        // Emit payment status update event
+        io.to(`conversation_${conversation.id}`).emit("payment_status_update", {
+          conversation_id: conversation.id,
+          status: "completed",
+          message: "Payment has been successfully processed and escrow activated",
+          chat_status: "real_time" // FIXED: Use 'real_time' to match database constraint
+        });
+
+        // Send individual notifications to both users
+        io.to(`user_${conversation.brand_owner_id}`).emit("notification", {
+          type: "payment_completed",
+          data: {
+            conversation_id: conversation.id,
+            message: "Payment completed successfully",
+            chat_status: "real_time" // FIXED: Use 'real_time' to match database constraint
+          }
+        });
+
+        io.to(`user_${conversation.influencer_id}`).emit("notification", {
+          type: "payment_completed", 
+          data: {
+            conversation_id: conversation.id,
+            message: "Payment completed successfully",
+            chat_status: "real_time" // FIXED: Use 'real_time' to match database constraint
+          }
         });
       }
 
@@ -649,7 +689,7 @@ class PaymentController {
         .from("conversations")
         .update({
           payment_completed: true,
-          chat_status: "realtime",
+          chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
         })
         .eq("request_id", request_id);
 

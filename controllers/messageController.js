@@ -409,7 +409,7 @@ class MessageController {
               req.user.role === "brand_owner" ? senderId : receiver_id,
             influencer_id:
               req.user.role === "influencer" ? senderId : receiver_id,
-            chat_status: "realtime",
+            chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
             payment_required: false,
             payment_completed: false,
           };
@@ -506,23 +506,59 @@ class MessageController {
 
       // Emit real-time update
       const io = req.app.get("io");
+      console.log("🔍 [DEBUG] Socket.IO emit check:", {
+        hasIo: !!io,
+        conversationId,
+        receiverId,
+        senderId
+      });
+      
       if (io) {
-        // Emit to conversation room
+        // Get conversation context for emit
+        const { data: conversation, error: convError } = await supabaseAdmin
+          .from("conversations")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
+          .eq("id", conversationId)
+          .single();
+
+        if (convError) {
+          console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
+        }
+
+        // Prepare conversation context
+        const conversationContext = conversation ? {
+          id: conversation.id,
+          chat_status: conversation.chat_status,
+          flow_state: conversation.flow_state,
+          awaiting_role: conversation.awaiting_role,
+          conversation_type: conversation.campaign_id ? 'campaign' : 
+                            conversation.bid_id ? 'bid' : 'direct',
+          automation_enabled: conversation.automation_enabled || false,
+          current_action_data: conversation.current_action_data
+        } : null;
+
+        // Emit to conversation room with context
+        console.log(`📡 [DEBUG] Emitting new_message to conversation_${conversationId}`);
         io.to(`conversation_${conversationId}`).emit("new_message", {
           conversation_id: conversationId,
           message: newMessage,
+          conversation_context: conversationContext,
         });
 
-        // Emit notification to receiver's personal room
+        // Emit notification to receiver's personal room with context
+        console.log(`📡 [DEBUG] Emitting notification to user_${receiverId}`);
         io.to(`user_${receiverId}`).emit("notification", {
           type: "message",
           data: {
             conversation_id: conversationId,
             message: newMessage,
+            conversation_context: conversationContext,
             sender_id: senderId,
             receiver_id: receiverId,
           },
         });
+      } else {
+        console.error("❌ [DEBUG] Socket.IO not available for realtime emit");
       }
 
       console.log(
@@ -752,6 +788,7 @@ class MessageController {
       }
 
       // Check if direct connection already exists
+      // Direct connections should be UNIQUE per user pair (one direct conversation per pair)
       const { data: existingConnection, error: existingError } =
         await supabaseAdmin
           .from("conversations")
@@ -764,10 +801,12 @@ class MessageController {
           .single();
 
       if (existingConnection) {
-        return res.status(409).json({
-          success: false,
-          message: "Direct connection already exists",
-          data: { conversation_id: existingConnection.id },
+        // Return existing direct connection instead of error
+        return res.status(200).json({
+          success: true,
+          conversation: existingConnection,
+          conversation_id: existingConnection.id,
+          message: "Direct connection already exists, returning existing conversation",
         });
       }
 
@@ -778,15 +817,41 @@ class MessageController {
           .insert({
             brand_owner_id: brandOwnerId,
             influencer_id: influencerId,
-            chat_status: "realtime",
-            payment_required: false,
-            payment_completed: false,
+            chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
+            flow_state: "real_time", // FIXED: Use 'real_time' instead of 'direct_chat' to match database constraint
+            awaiting_role: null,
+            conversation_type: "direct"
           })
           .select()
           .single();
 
       if (conversationError) {
         console.error("Failed to create conversation:", conversationError);
+        
+        // If it's a duplicate key error, try to find the existing conversation
+        if (conversationError.code === '23505') {
+          console.log("Duplicate key error - looking for existing conversation");
+          
+          const { data: existingConv, error: findError } = await supabaseAdmin
+            .from("conversations")
+            .select("*")
+            .or(
+              `and(brand_owner_id.eq.${brandOwnerId},influencer_id.eq.${influencerId}),and(brand_owner_id.eq.${influencerId},influencer_id.eq.${brandOwnerId})`
+            )
+            .is("campaign_id", null)
+            .is("bid_id", null)
+            .single();
+          
+          if (existingConv) {
+            return res.status(200).json({
+              success: true,
+              conversation: existingConv,
+              conversation_id: existingConv.id,
+              message: "Direct connection already exists, returning existing conversation",
+            });
+          }
+        }
+        
         return res.status(500).json({
           success: false,
           message: "Failed to create direct connection",
@@ -808,6 +873,65 @@ class MessageController {
           console.error("Failed to create initial message:", messageError);
           // Don't fail the conversation creation, just log the error
         }
+      }
+
+      // Emit WebSocket events for direct connection
+      const io = req.app.get("io");
+      if (io && conversation) {
+        // Prepare conversation context
+        const conversationContext = {
+          id: conversation.id,
+          chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
+          flow_state: "real_time", // FIXED: Use 'real_time' instead of 'direct_chat' to match database constraint
+          awaiting_role: null,
+          conversation_type: "direct",
+          automation_enabled: false,
+          current_action_data: null
+        };
+
+        // Emit conversation state change event
+        io.to(`conversation_${conversation.id}`).emit("conversation_state_changed", {
+          conversation_id: conversation.id,
+          previous_state: null, // New conversation
+          new_state: {
+            chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
+            flow_state: "real_time", // FIXED: Use 'real_time' instead of 'direct_chat' to match database constraint
+            awaiting_role: null
+          },
+          reason: "direct_connection_created",
+          timestamp: new Date().toISOString()
+        });
+
+        // Emit conversation_updated event with context
+        io.to(`conversation_${conversation.id}`).emit("conversation_updated", {
+          conversation_id: conversation.id,
+          flow_state: "real_time", // FIXED: Use 'real_time' instead of 'direct_chat' to match database constraint
+          awaiting_role: null,
+          chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
+          conversation_type: "direct",
+          conversation_context: conversationContext
+        });
+
+        // Send individual notifications to both users with context
+        io.to(`user_${brandOwnerId}`).emit("notification", {
+          type: "direct_connection_created",
+          data: {
+            conversation_id: conversation.id,
+            message: "Direct connection established",
+            chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
+            conversation_context: conversationContext
+          }
+        });
+
+        io.to(`user_${influencerId}`).emit("notification", {
+          type: "direct_connection_created", 
+          data: {
+            conversation_id: conversation.id,
+            message: "Direct connection established",
+            chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
+            conversation_context: conversationContext
+          }
+        });
       }
 
       res.status(201).json({
@@ -1363,7 +1487,7 @@ class MessageController {
               additional_data?.response || "Here's my answer to your question.";
             message = `Here's my answer: ${response}`;
             flowUpdate = {
-              chat_status: "realtime",
+              chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
               awaiting_role: "brand_owner",
             };
             break;
@@ -1415,17 +1539,37 @@ class MessageController {
       // Emit real-time update
       const io = req.app.get("io");
       if (io) {
+        // Get updated conversation context after flow update
+        const { data: updatedConversation, error: convError } = await supabaseAdmin
+          .from("conversations")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
+          .eq("id", conversation_id)
+          .single();
+
+        const conversationContext = updatedConversation ? {
+          id: updatedConversation.id,
+          chat_status: updatedConversation.chat_status,
+          flow_state: updatedConversation.flow_state,
+          awaiting_role: updatedConversation.awaiting_role,
+          conversation_type: updatedConversation.campaign_id ? 'campaign' : 
+                            updatedConversation.bid_id ? 'bid' : 'direct',
+          automation_enabled: updatedConversation.automation_enabled || false,
+          current_action_data: updatedConversation.current_action_data
+        } : null;
+
         io.to(`conversation_${conversation_id}`).emit("button_action", {
           button_id,
           message: newMessage,
           flow_update: flowUpdate,
           conversationId: conversation_id,
+          conversation_context: conversationContext,
         });
 
         // Also emit standard new_message for clients that only listen to new_message
         io.to(`conversation_${conversation_id}`).emit("new_message", {
           conversation_id,
           message: newMessage,
+          conversation_context: conversationContext,
         });
 
         // Emit notification to the receiver
@@ -1440,6 +1584,7 @@ class MessageController {
             title: "New message",
             body: newMessage.message,
             created_at: newMessage.created_at,
+            conversation_context: conversationContext,
             payload: { conversation_id, message_id: newMessage.id, sender_id: userId },
             conversation_id,
             message: newMessage,
@@ -1541,7 +1686,7 @@ class MessageController {
         case "response":
           message = `My response: ${text}`;
           flowUpdate = {
-            chat_status: "realtime",
+            chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
             awaiting_role:
               currentUser.role === "brand_owner" ? "influencer" : "brand_owner",
           };

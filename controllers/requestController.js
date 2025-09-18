@@ -1562,7 +1562,7 @@ class RequestController {
         work_description: request.work_description,
         work_submission_link: request.work_submission_link,
         work_files: request.work_files || [],
-        chat_status: conversation?.chat_status || "realtime",
+        chat_status: conversation?.chat_status || "real_time", // FIXED: Use 'real_time' to match database constraint
         payment_completed: conversation?.payment_completed || false,
       };
 

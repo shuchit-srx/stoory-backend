@@ -19,6 +19,7 @@ const messageRoutes = require("./routes/messages");
 const paymentRoutes = require("./routes/payments");
 const subscriptionRoutes = require("./routes/subscriptions");
 const socialPlatformRoutes = require("./routes/socialPlatforms");
+const fcmRoutes = require("./routes/fcm");
 
 const app = express();
 const server = http.createServer(app);
@@ -50,6 +51,25 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Socket.IO test endpoint
+app.get("/test-socket", (req, res) => {
+  const io = app.get("io");
+  const testMessage = {
+    success: true,
+    message: "Socket.IO test message",
+    timestamp: new Date().toISOString(),
+    hasIo: !!io,
+    connectedClients: io.engine.clientsCount || 0
+  };
+  
+  // Emit test message to all connected clients
+  if (io) {
+    io.emit("test_message", testMessage);
+  }
+  
+  res.json(testMessage);
+});
+
 // Setup security middleware
 setupSecurityMiddleware(app);
 
@@ -75,6 +95,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
 app.use("/api/social-platforms", socialPlatformRoutes);
+app.use("/api/fcm", fcmRoutes);
 
 // 404 handler for API routes
 app.use("/api/*", (req, res) => {
@@ -96,8 +117,18 @@ app.use("*", (req, res) => {
 const messageHandler = new MessageHandler(io);
 
 io.on("connection", (socket) => {
-  console.log("New client connected:", socket.id);
+  console.log("🔌 [DEBUG] New client connected:", socket.id);
+  console.log("🔌 [DEBUG] Socket.IO instance available:", !!io);
   messageHandler.handleConnection(socket);
+});
+
+// Add debugging for Socket.IO events
+io.engine.on("connection_error", (err) => {
+  console.error("❌ [DEBUG] Socket.IO connection error:", err);
+});
+
+io.on("error", (err) => {
+  console.error("❌ [DEBUG] Socket.IO error:", err);
 });
 
 // Graceful shutdown

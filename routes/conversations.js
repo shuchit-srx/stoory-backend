@@ -51,6 +51,30 @@ router.patch("/:conversation_id/state", async (req, res) => {
       awaiting_role,
     });
 
+    // Send FCM notification for flow state change
+    const fcmService = require('../services/fcmService');
+    const conversation = data[0];
+    
+    // Determine which user should receive the notification
+    let targetUserId = null;
+    if (awaiting_role === 'influencer' && conversation.influencer_id) {
+      targetUserId = conversation.influencer_id;
+    } else if (awaiting_role === 'brand_owner' && conversation.brand_owner_id) {
+      targetUserId = conversation.brand_owner_id;
+    }
+
+    if (targetUserId) {
+      fcmService.sendFlowStateNotification(conversation_id, targetUserId, flow_state).then(result => {
+        if (result.success) {
+          console.log(`✅ FCM flow state notification sent: ${result.sent} successful, ${result.failed} failed`);
+        } else {
+          console.error(`❌ FCM flow state notification failed:`, result.error);
+        }
+      }).catch(error => {
+        console.error(`❌ FCM flow state notification error:`, error);
+      });
+    }
+
     return res.json({
       success: true,
       conversation: data[0],

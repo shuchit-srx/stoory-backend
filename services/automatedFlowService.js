@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require('../supabase/client');
 const stateMachineService = require('./stateMachineService');
 const escrowService = require('./escrowService');
+const fcmService = require('./fcmService');
 
 class AutomatedFlowService {
   constructor() {
@@ -12,17 +13,45 @@ class AutomatedFlowService {
   }
 
   /**
+   * Emit conversation state change event
+   */
+  emitConversationStateChange(conversationId, stateChange) {
+    if (this.io) {
+      this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+        conversation_id: conversationId,
+        previous_state: stateChange.from,
+        new_state: stateChange.to,
+        reason: stateChange.reason,
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+
+  /**
    * Emit socket events for automated messages
    */
   emitMessageEvents(conversation, message, receiverId) {
     if (this.io) {
-      // Emit to conversation room
+      // Prepare conversation context
+      const conversationContext = {
+        id: conversation.id,
+        chat_status: conversation.chat_status,
+        flow_state: conversation.flow_state,
+        awaiting_role: conversation.awaiting_role,
+        conversation_type: conversation.campaign_id ? 'campaign' : 
+                          conversation.bid_id ? 'bid' : 'direct',
+        automation_enabled: conversation.automation_enabled || true, // Automated flow is always enabled
+        current_action_data: conversation.current_action_data
+      };
+
+      // Emit to conversation room with context
       this.io.to(`conversation_${conversation.id}`).emit('new_message', {
         conversation_id: conversation.id,
         message: message,
+        conversation_context: conversationContext,
       });
 
-      // Emit notification to receiver
+      // Emit notification to receiver with context
       this.io.to(`user_${receiverId}`).emit('notification', {
         type: 'message',
         data: {
@@ -30,6 +59,7 @@ class AutomatedFlowService {
           title: 'New message',
           body: message.message,
           created_at: message.created_at,
+          conversation_context: conversationContext,
           payload: { 
             conversation_id: conversation.id, 
             message_id: message.id, 
@@ -744,6 +774,21 @@ class AutomatedFlowService {
           };
           break;
 
+        case 'start_work':
+          newFlowState = 'work_in_progress';
+          newAwaitingRole = 'influencer';
+          
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.influencer_id,
+            receiver_id: conversation.brand_owner_id,
+            message: '🚀 **Work Started**\n\nI\'ve started working on the project. I\'ll submit the completed work when ready.',
+            message_type: 'system',
+            is_automated: true,
+            action_required: false
+          };
+          break;
+
         default:
           throw new Error(`Unknown action: ${action}`);
       }
@@ -868,6 +913,13 @@ class AutomatedFlowService {
         throw new Error('Conversation not found');
       }
 
+      // Store previous state for state change event
+      const previousState = {
+        chat_status: conversation.chat_status,
+        flow_state: conversation.flow_state,
+        awaiting_role: conversation.awaiting_role
+      };
+
       // Update conversation state
       const { error: updateError } = await supabaseAdmin
         .from('conversations')
@@ -885,6 +937,17 @@ class AutomatedFlowService {
       if (updateError) {
         throw new Error(`Failed to update conversation: ${updateError.message}`);
       }
+
+      // Emit conversation state change event
+      this.emitConversationStateChange(conversationId, {
+        from: previousState,
+        to: {
+          chat_status: conversation.chat_status,
+          flow_state: 'work_submitted',
+          awaiting_role: 'brand_owner'
+        },
+        reason: 'work_submitted'
+      });
 
       // Create message
       const { data: message, error: messageError } = await supabaseAdmin
@@ -960,7 +1023,7 @@ class AutomatedFlowService {
       let newFlowState, newAwaitingRole, newMessage;
 
       if (action === 'approve_work') {
-        newFlowState = 'work_approved';
+        newFlowState = 'real_time'; // Transition to real-time chat after work approval
         newAwaitingRole = null;
         
         // Release escrow funds
@@ -994,7 +1057,7 @@ class AutomatedFlowService {
           conversation_id: conversationId,
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
-          message: 'Excellent work! I approve the submission. Payment has been released.',
+          message: '🎉 **Work Approved!**\n\nExcellent work! I approve the submission. Payment has been released. You can now communicate in real-time for any follow-up discussions.',
           message_type: 'system',
           is_automated: true,
           action_required: false
@@ -1028,6 +1091,13 @@ class AutomatedFlowService {
         throw new Error(`Unknown review action: ${action}`);
       }
 
+      // Store previous state for state change event
+      const previousState = {
+        chat_status: conversation.chat_status,
+        flow_state: conversation.flow_state,
+        awaiting_role: conversation.awaiting_role
+      };
+
       // Update conversation state
       const { error: updateError } = await supabaseAdmin
         .from('conversations')
@@ -1041,6 +1111,30 @@ class AutomatedFlowService {
       if (updateError) {
         throw new Error(`Failed to update conversation: ${updateError.message}`);
       }
+
+      // Emit conversation state change event
+      this.emitConversationStateChange(conversationId, {
+        from: previousState,
+        to: {
+          chat_status: conversation.chat_status,
+          flow_state: newFlowState,
+          awaiting_role: newAwaitingRole
+        },
+        reason: action === 'approve_work' ? 'work_approved' : 'revision_requested'
+      });
+
+      // Send FCM notification for flow state change
+      const fcmService = require('./fcmService');
+      const targetUserId = action === 'approve_work' ? conversation.influencer_id : conversation.influencer_id;
+      fcmService.sendFlowStateNotification(conversationId, targetUserId, newFlowState).then(result => {
+        if (result.success) {
+          console.log(`✅ FCM flow state notification sent: ${result.sent} successful, ${result.failed} failed`);
+        } else {
+          console.error(`❌ FCM flow state notification failed:`, result.error);
+        }
+      }).catch(error => {
+        console.error(`❌ FCM flow state notification error:`, error);
+      });
 
       // Create message
       const { data: createdMessage, error: messageError } = await supabaseAdmin

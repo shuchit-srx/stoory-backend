@@ -1,0 +1,62 @@
+{
+  "project_info": {
+    "project_number": "628453246024",
+    "project_id": "stoory-e54ed",
+    "storage_bucket": "stoory-e54ed.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:628453246024:android:1324f6e76bac349515447d",
+        "android_client_info": {
+          "package_name": "com.example.stoorymvp0"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "628453246024-3v73nk3d20373scgk7uqcongfrmcujae.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.stoorymvp0",
+            "certificate_hash": "b7919cbfd6067a202b149ad7619b454a1df0cc14"
+          }
+        },
+        {
+          "client_id": "628453246024-ecrd9t3iosff4caijn2iq6ptfufff309.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.stoorymvp0",
+            "certificate_hash": "30a1ac954a5bdf5dcb6da57e544512164f42cd70"
+          }
+        },
+        {
+          "client_id": "628453246024-sbaksmjr7cuh8q2na2ilrsav5kb1gih4.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCNacE-M_hYUBw34fpXxTzqXT0IrigGCXY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "628453246024-sbaksmjr7cuh8q2na2ilrsav5kb1gih4.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "628453246024-h58qha39dbdm4pb3fpr0p86m03ja7vpj.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.stoorymvp0"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
