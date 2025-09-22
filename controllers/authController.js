@@ -1,6 +1,7 @@
 const authService = require("../utils/auth");
 const { supabaseAdmin } = require("../supabase/client");
 const { body, validationResult } = require("express-validator");
+const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
 
 class AuthController {
   /**
@@ -163,6 +164,38 @@ class AuthController {
       delete updateData.created_at;
       delete updateData.updated_at;
 
+      // Handle profile image upload if present
+      if (req.file) {
+        // Get current user to check for existing profile image
+        const { data: currentUser } = await supabaseAdmin
+          .from("users")
+          .select("profile_image_url")
+          .eq("id", userId)
+          .single();
+
+        // Upload new profile image
+        const { url, error: uploadError } = await uploadImageToStorage(
+          req.file.buffer,
+          req.file.originalname,
+          "profiles"
+        );
+
+        if (uploadError) {
+          return res.status(500).json({
+            success: false,
+            message: "Failed to upload profile image",
+            error: uploadError,
+          });
+        }
+
+        // Delete old profile image if it exists
+        if (currentUser?.profile_image_url) {
+          await deleteImageFromStorage(currentUser.profile_image_url);
+        }
+
+        updateData.profile_image_url = url;
+      }
+
       const { data: updatedUser, error } = await supabaseAdmin
         .from("users")
         .update(updateData)
@@ -181,6 +214,137 @@ class AuthController {
         success: true,
         user: updatedUser,
         message: "Profile updated successfully",
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Upload profile image only
+   */
+  async uploadProfileImage(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No image file provided",
+        });
+      }
+
+      const userId = req.user.id;
+
+      // Get current user to check for existing profile image
+      const { data: currentUser } = await supabaseAdmin
+        .from("users")
+        .select("profile_image_url")
+        .eq("id", userId)
+        .single();
+
+      // Upload new profile image
+      const { url, error: uploadError } = await uploadImageToStorage(
+        req.file.buffer,
+        req.file.originalname,
+        "profiles"
+      );
+
+      if (uploadError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload profile image",
+          error: uploadError,
+        });
+      }
+
+      // Delete old profile image if it exists
+      if (currentUser?.profile_image_url) {
+        await deleteImageFromStorage(currentUser.profile_image_url);
+      }
+
+      // Update user profile with new image URL
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
+        .from("users")
+        .update({ profile_image_url: url })
+        .eq("id", userId)
+        .select()
+        .single();
+
+      if (updateError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update profile image",
+        });
+      }
+
+      res.json({
+        success: true,
+        user: updatedUser,
+        message: "Profile image uploaded successfully",
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Delete profile image
+   */
+  async deleteProfileImage(req, res) {
+    try {
+      const userId = req.user.id;
+
+      // Get current user to check for existing profile image
+      const { data: currentUser } = await supabaseAdmin
+        .from("users")
+        .select("profile_image_url")
+        .eq("id", userId)
+        .single();
+
+      if (!currentUser?.profile_image_url) {
+        return res.status(404).json({
+          success: false,
+          message: "No profile image found",
+        });
+      }
+
+      // Delete image from storage
+      const { success, error: deleteError } = await deleteImageFromStorage(
+        currentUser.profile_image_url
+      );
+
+      if (!success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to delete profile image from storage",
+          error: deleteError,
+        });
+      }
+
+      // Update user profile to remove image URL
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
+        .from("users")
+        .update({ profile_image_url: null })
+        .eq("id", userId)
+        .select()
+        .single();
+
+      if (updateError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update profile",
+        });
+      }
+
+      res.json({
+        success: true,
+        user: updatedUser,
+        message: "Profile image deleted successfully",
       });
     } catch (error) {
       res.status(500).json({

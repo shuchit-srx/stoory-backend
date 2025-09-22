@@ -37,6 +37,11 @@ async function setupStorage() {
     console.log('3. Policy: (bucket_id = \'images\')');
     console.log('4. Permissions: INSERT, SELECT, UPDATE, DELETE');
     console.log('5. Target roles: authenticated');
+    
+    console.log('\nFolder structure in images bucket:');
+    console.log('- campaigns/ (for campaign images)');
+    console.log('- bids/ (for bid images)');
+    console.log('- profiles/ (for user profile images) - will be created automatically');
 
   } catch (error) {
     console.error('Error setting up storage:', error);
