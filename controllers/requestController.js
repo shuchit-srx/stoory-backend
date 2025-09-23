@@ -210,20 +210,17 @@ class RequestController {
                         status,
                         created_by_user:users!campaigns_created_by_fkey (
                             id,
-                            phone,
-                            email,
                             role
                         )
                     ),
                     influencer:users!requests_influencer_id_fkey (
                         id,
-                        phone,
-                        email,
                         role,
                         languages,
                         categories,
                         min_range,
-                        max_range
+                        max_range,
+                        profile_image_url
                     )
                 `);
 
@@ -253,20 +250,17 @@ class RequestController {
                             status,
                             created_by_user:users!campaigns_created_by_fkey (
                                 id,
-                                phone,
-                                email,
                                 role
                             )
                         ),
                         influencer:users!requests_influencer_id_fkey (
                             id,
-                            phone,
-                            email,
                             role,
                             languages,
                             categories,
                             min_range,
-                            max_range
+                            max_range,
+                            profile_image_url
                         )
                     `
           )
@@ -339,20 +333,17 @@ class RequestController {
                         created_by,
                         created_by_user:users!campaigns_created_by_fkey (
                             id,
-                            phone,
-                            email,
                             role
                         )
                     ),
                     influencer:users!requests_influencer_id_fkey (
                         id,
-                        phone,
-                        email,
                         role,
                         languages,
                         categories,
                         min_range,
-                        max_range
+                        max_range,
+                        profile_image_url
                     ),
                     conversations (
                         id,
@@ -866,14 +857,13 @@ class RequestController {
                     created_at,
                     influencer:users!requests_influencer_id_fkey (
                         id,
-                        phone,
-                        email,
                         name,
                         languages,
                         categories,
                         min_range,
                         max_range,
-                        role
+                        role,
+                        profile_image_url
                     )
                 `
         )
@@ -956,14 +946,13 @@ class RequestController {
                     created_at,
                     influencer:users!requests_influencer_id_fkey (
                         id,
-                        phone,
-                        email,
                         name,
                         languages,
                         categories,
                         min_range,
                         max_range,
-                        role
+                        role,
+                        profile_image_url
                     )
                 `
         )

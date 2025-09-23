@@ -143,8 +143,6 @@ class BidController {
                     *,
                     created_by_user:users!bids_created_by_fkey (
                         id,
-                        phone,
-                        email,
                         role
                     ),
                     requests_count:requests(count)
@@ -366,8 +364,6 @@ class BidController {
                     *,
                     created_by_user:users!bids_created_by_fkey (
                         id,
-                        phone,
-                        email,
                         role
                     ),
                     requests (
@@ -378,14 +374,13 @@ class BidController {
                         created_at,
                         influencer:users!requests_influencer_id_fkey (
                             id,
-                            phone,
-                            email,
                             name,
                             role,
                             languages,
                             categories,
                             min_range,
-                            max_range
+                            max_range,
+                            profile_image_url
                         )
                     )
                 `

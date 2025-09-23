@@ -53,29 +53,28 @@ class UserController {
             // Build query based on subscription status
             let selectFields = `
                 id,
-                phone,
                 role,
                 languages,
                 categories,
                 min_range,
                 max_range,
                 created_at,
+                profile_image_url,
                 social_platforms (*)
             `;
 
-            // Add name and email only for premium users or non-brand owners
+            // Add name only for premium users or non-brand owners
             if (hasPremiumAccess || userRole !== 'brand_owner') {
                 selectFields = `
                     id,
-                    phone,
                     name,
-                    email,
                     role,
                     languages,
                     categories,
                     min_range,
                     max_range,
                     created_at,
+                    profile_image_url,
                     social_platforms (*)
                 `;
             }
@@ -86,14 +85,14 @@ class UserController {
                 .eq('role', 'influencer')
                 .eq('is_deleted', false);
 
-            // Search across name, email, phone (only if premium access)
+            // Search across name only (only if premium access)
             if (search && String(search).trim().length > 0) {
                 const term = String(search).trim();
                 if (hasPremiumAccess || userRole !== 'brand_owner') {
-                    query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`);
+                    query = query.ilike('name', `%${term}%`);
                 } else {
-                    // For non-premium brand owners, only search by phone
-                    query = query.ilike('phone', `%${term}%`);
+                    // For non-premium brand owners, no search available
+                    // (since we don't expose name, phone, or email)
                 }
             }
 
@@ -134,9 +133,7 @@ class UserController {
                 // Mask sensitive data for non-premium brand owners
                 processedInfluencers = processedInfluencers.map(influencer => ({
                     ...influencer,
-                    name: null,
-                    email: null,
-                    phone: influencer.phone ? influencer.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') : null
+                    name: null
                 }));
             }
 
