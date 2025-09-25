@@ -78,12 +78,18 @@ setupSecurityMiddleware(app);
 app.use(compression());
 app.use(morgan("combined"));
 
+// Add general request logging
+app.use((req, res, next) => {
+  console.log("🚀 [DEBUG] Request received:", req.method, req.url);
+  next();
+});
+
 // Make Socket.IO available to controllers
 app.set("io", io);
 
 // Set socket for automated flow service
-const automatedFlowService = require("./services/automatedFlowService");
-automatedFlowService.setSocket(io);
+const automatedFlowService = require("./utils/automatedFlowService");
+automatedFlowService.setIO(io);
 
 // Test endpoint for FCM status (no auth required)
 app.get("/test-fcm", (req, res) => {
