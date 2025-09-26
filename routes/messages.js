@@ -7,7 +7,10 @@ const {
 } = require("../controllers/messageController");
 
 // All routes require authentication
-router.use(authService.authenticateToken);
+router.use((req, res, next) => {
+  console.log("🚀 [DEBUG] Messages route middleware hit for:", req.method, req.url);
+  next();
+}, authService.authenticateToken);
 
 // Conversation routes - Role-based filtering
 router.get("/conversations", MessageController.getConversations); // Campaign/Bid conversations only
@@ -26,9 +29,22 @@ router.get(
   MessageController.getConversationContext
 );
 
+// Test endpoint for button clicks
+router.post("/test-button-click", (req, res) => {
+  console.log("🚀 [DEBUG] Test button click endpoint hit!");
+  console.log("🚀 [DEBUG] Request body:", req.body);
+  res.json({ success: true, message: "Test button click received", data: req.body });
+});
+
 // Button and text input handling
 router.post(
   "/conversations/:conversation_id/button-click",
+  (req, res, next) => {
+    console.log("🚀 [DEBUG] Button click route hit!");
+    console.log("🚀 [DEBUG] Route params:", req.params);
+    console.log("🚀 [DEBUG] Route body:", req.body);
+    next();
+  },
   MessageController.handleButtonClick
 );
 router.post(

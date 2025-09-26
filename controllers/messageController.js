@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require("../supabase/client");
 const { body, validationResult } = require("express-validator");
+const AutomatedFlowService = require("../utils/automatedFlowService");
 
 class MessageController {
   /**
@@ -1389,9 +1390,25 @@ class MessageController {
    */
   async handleButtonClick(req, res) {
     try {
+      console.log("🚀 [DEBUG] handleButtonClick function called!");
+      console.log("🚀 [DEBUG] Request method:", req.method);
+      console.log("🚀 [DEBUG] Request URL:", req.url);
+      console.log("🚀 [DEBUG] Request headers:", req.headers);
+      console.log("🚀 [DEBUG] Request body:", req.body);
+      console.log("🚀 [DEBUG] Request params:", req.params);
+      
       const { conversation_id } = req.params;
       const { button_id, additional_data } = req.body;
       const userId = req.user.id;
+      
+      console.log("🔍 [DEBUG] Button click received:", {
+        conversation_id,
+        button_id,
+        additional_data,
+        userId
+      });
+      
+      console.log("🔍 [DEBUG] Full request body:", req.body);
 
       // Get conversation
       const { data: conversation, error: convError } = await supabaseAdmin
@@ -1436,6 +1453,143 @@ class MessageController {
           success: false,
           message: "Failed to fetch user details",
         });
+      }
+
+      // Check if this is an automated flow conversation
+      console.log("🔍 [DEBUG] Checking conversation type:", {
+        chat_status: conversation.chat_status,
+        flow_state: conversation.flow_state,
+        is_automated: conversation.chat_status === 'automated',
+        has_flow_state: !!conversation.flow_state
+      });
+      
+      if (conversation.chat_status === 'automated' && conversation.flow_state) {
+        console.log("🔄 [DEBUG] Routing to automated flow handler for button:", button_id);
+        console.log("🔄 [DEBUG] Current conversation state:", {
+          chat_status: conversation.chat_status,
+          flow_state: conversation.flow_state,
+          awaiting_role: conversation.awaiting_role,
+          user_role: currentUser.role
+        });
+        
+        // Route to appropriate automated flow handler
+        const automatedFlowService = require('../utils/automatedFlowService');
+        
+        try {
+          let result;
+          
+          if (currentUser.role === 'brand_owner') {
+            // Map button IDs to automated flow actions
+            let action = button_id;
+            let data = {};
+            
+            // Handle special button mappings
+            console.log("🔍 [DEBUG] Processing brand owner button mapping for:", button_id);
+            
+            if (button_id === 'agree_negotiation') {
+              action = 'handle_negotiation';
+              data = { action: 'agree' };
+              console.log("🔄 [DEBUG] Mapped agree_negotiation to handle_negotiation with action: agree");
+              console.log("🔄 [DEBUG] Original additional_data was:", additional_data);
+              console.log("🔄 [DEBUG] Mapped data is:", data);
+            } else if (button_id === 'reject_negotiation') {
+              action = 'handle_negotiation';
+              data = { action: 'reject' };
+              console.log("🔄 [DEBUG] Mapped reject_negotiation to handle_negotiation with action: reject");
+            } else if (button_id === 'send_negotiated_price') {
+              action = 'send_negotiated_price';
+              data = { price: additional_data?.price };
+              console.log("🔄 [DEBUG] Mapped send_negotiated_price with price:", additional_data?.price);
+            } else if (button_id === 'send_price_offer') {
+              action = 'send_price_offer';
+              data = { price: additional_data?.price };
+              console.log("🔄 [DEBUG] Mapped send_price_offer with price:", additional_data?.price);
+            } else if (button_id === 'proceed_to_payment') {
+              action = 'proceed_to_payment';
+              data = additional_data || {};
+              console.log("🔄 [DEBUG] Mapped proceed_to_payment");
+            } else if (button_id === 'accept_counter_offer') {
+              action = 'accept_counter_offer';
+              data = additional_data || {};
+              console.log("🔄 [DEBUG] Mapped accept_counter_offer");
+            } else if (button_id === 'reject_counter_offer') {
+              action = 'reject_counter_offer';
+              data = additional_data || {};
+              console.log("🔄 [DEBUG] Mapped reject_counter_offer");
+            } else if (button_id === 'make_final_offer') {
+              action = 'make_final_offer';
+              data = additional_data || {};
+              console.log("🔄 [DEBUG] Mapped make_final_offer");
+            } else {
+              console.log("⚠️ [DEBUG] No special mapping found for button:", button_id);
+              // Use additional_data for unmapped buttons
+              data = additional_data || {};
+            }
+            
+            console.log("🔄 [DEBUG] Calling automated flow service with:", { action, data });
+            
+            result = await automatedFlowService.handleBrandOwnerAction(conversation_id, action, data);
+          } else if (currentUser.role === 'influencer') {
+            // Map button IDs to automated flow actions
+            let action = button_id;
+            let data = additional_data || {};
+            
+            // Handle special button mappings for influencer
+            if (button_id === 'accept_connection') {
+              action = 'accept_connection';
+            } else if (button_id === 'reject_connection') {
+              action = 'reject_connection';
+            } else if (button_id === 'accept_project') {
+              action = 'accept_project';
+            } else if (button_id === 'reject_project') {
+              action = 'reject_project';
+            } else if (button_id === 'accept_price') {
+              action = 'accept_price';
+            } else if (button_id === 'reject_price') {
+              action = 'reject_price';
+            } else if (button_id === 'negotiate_price') {
+              action = 'negotiate_price';
+            } else if (button_id === 'accept_negotiated_price') {
+              action = 'accept_negotiated_price';
+            } else if (button_id === 'reject_negotiated_price') {
+              action = 'reject_negotiated_price';
+            } else if (button_id === 'continue_negotiate') {
+              action = 'continue_negotiate';
+            } else if (button_id === 'send_counter_offer') {
+              action = 'send_counter_offer';
+              data = { price: additional_data?.price };
+            } else if (button_id === 'accept_final_offer') {
+              action = 'accept_final_offer';
+              data = additional_data || {};
+            } else if (button_id === 'reject_final_offer') {
+              action = 'reject_final_offer';
+              data = additional_data || {};
+            }
+            
+            result = await automatedFlowService.handleInfluencerAction(conversation_id, action, data);
+          }
+          
+          if (result && result.success) {
+            console.log("✅ [DEBUG] Automated flow handler succeeded:", {
+              flow_state: result.conversation?.flow_state,
+              awaiting_role: result.conversation?.awaiting_role,
+              has_message: !!result.message,
+              has_audit_message: !!result.audit_message
+            });
+            console.log("✅ [DEBUG] Full result:", JSON.stringify(result, null, 2));
+            return res.json(result);
+          } else {
+            console.log("❌ [DEBUG] Automated flow handler failed or returned no result:", result);
+            console.log("❌ [DEBUG] Result details:", {
+              success: result?.success,
+              error: result?.error,
+              conversation: result?.conversation
+            });
+          }
+        } catch (automatedError) {
+          console.error("❌ [DEBUG] Automated flow handler failed:", automatedError);
+          // Fall through to old handler as backup
+        }
       }
 
       // Handle button actions based on role and button ID

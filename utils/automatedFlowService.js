@@ -5,6 +5,17 @@ const SYSTEM_USER_ID =
   process.env.SYSTEM_USER_ID || "00000000-0000-0000-0000-000000000000";
 
 class AutomatedFlowService {
+  constructor() {
+    this.io = null;
+  }
+
+  /**
+   * Set the socket.io instance
+   */
+  setIO(io) {
+    this.io = io;
+  }
+
   /**
    * Initialize automated conversation for a bid application
    */
@@ -408,6 +419,8 @@ Please respond to confirm your interest and availability for this campaign.`,
       console.log("  - data:", data);
 
       // Get conversation details
+      console.log("🔍 [DEBUG] Fetching conversation:", conversationId);
+      
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
         .select("*")
@@ -418,8 +431,15 @@ Please respond to confirm your interest and availability for this campaign.`,
         console.error("❌ [DEBUG] Conversation not found:", convError);
         throw new Error("Conversation not found");
       }
-
-      console.log("✅ [DEBUG] Conversation found:", conversation.id);
+      
+      console.log("✅ [DEBUG] Conversation found:", {
+        id: conversation.id,
+        chat_status: conversation.chat_status,
+        flow_state: conversation.flow_state,
+        awaiting_role: conversation.awaiting_role,
+        brand_owner_id: conversation.brand_owner_id,
+        influencer_id: conversation.influencer_id
+      });
 
       let newFlowState, newAwaitingRole, newMessage, auditMessage;
 
@@ -580,39 +600,61 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "handle_negotiation":
           // Brand owner handles negotiation
+          console.log("🔄 [DEBUG] Handling negotiation with data:", data);
+          console.log("🔄 [DEBUG] Data action:", data.action);
+          console.log("🔄 [DEBUG] Data action type:", typeof data.action);
+          console.log("🔄 [DEBUG] Data action === 'agree':", data.action === "agree");
+          console.log("🔄 [DEBUG] Full data object:", JSON.stringify(data, null, 2));
+          
           if (data.action === "agree") {
-            newFlowState = "negotiation_input";
-            newAwaitingRole = "brand_owner";
+            console.log("✅ [DEBUG] Brand owner agreed to negotiate - setting state to influencer_price_response");
+            newFlowState = "influencer_price_response";
+            newAwaitingRole = "influencer";
 
             newMessage = {
               conversation_id: conversationId,
               sender_id: conversation.brand_owner_id,
               receiver_id: conversation.influencer_id,
-              message: `🤝 **Negotiation Accepted**\n\nBrand owner has agreed to negotiate. Please enter a new price offer.`,
+              message: `🤝 **Negotiation Accepted**\n\nBrand owner has agreed to negotiate. Please set your new price offer.`,
               message_type: "automated",
               action_required: true,
               action_data: {
-                title: "🎯 **New Price Offer**",
-                subtitle:
-                  "Enter a new price offer (must be different from the previous offer):",
+                title: "💰 **Set Your Price Offer**",
+                subtitle: "What's your new price for this project?",
                 input_field: {
-                  id: "new_price",
+                  id: "counter_price",
                   type: "number",
-                  placeholder: "Enter new price amount",
+                  placeholder: "Enter your counter offer amount",
                   required: true,
                   min: 1,
                 },
-                submit_button: {
-                  text: "Send New Offer",
-                  style: "success",
-                },
-                flow_state: "negotiation_input",
-                message_type: "brand_owner_negotiation_input",
-                visible_to: "brand_owner",
+                buttons: [
+                  {
+                    id: "send_counter_offer",
+                    text: "Send Counter Offer",
+                    style: "success",
+                    action: "send_counter_offer",
+                  },
+                ],
+                flow_state: "influencer_price_response",
+                message_type: "influencer_counter_offer",
+                visible_to: "influencer",
               },
+            };
+
+            auditMessage = {
+              conversation_id: conversationId,
+              sender_id: SYSTEM_USER_ID,
+              receiver_id: conversation.brand_owner_id,
+              message: `✅ **Action Taken: Negotiation Accepted**\n\nYou have agreed to negotiate. Please wait for the influencer's counter offer.`,
+              message_type: "audit",
+              action_required: false,
             };
           } else {
             // Reject negotiation
+            console.log("❌ [DEBUG] Brand owner rejected negotiation - setting state to chat_closed");
+            console.log("❌ [DEBUG] Data action was:", data.action);
+            console.log("❌ [DEBUG] This is why chat is closing!");
             newFlowState = "chat_closed";
             newAwaitingRole = null;
 
@@ -961,6 +1003,116 @@ Please respond to confirm your interest and availability for this campaign.`,
           };
           break;
 
+        case "accept_counter_offer":
+          // Brand owner accepts counter offer
+          newFlowState = "payment_pending";
+          newAwaitingRole = "brand_owner";
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
+            message: `✅ **Counter Offer Accepted**\n\nBrand owner has accepted your counter offer of ₹${data.price}. Please proceed with payment to complete the collaboration.`,
+            message_type: "automated",
+            action_required: true,
+            action_data: {
+              title: "🎯 **Payment Required**",
+              subtitle: `Accepted amount: ₹${data.price}`,
+              buttons: [
+                {
+                  id: "proceed_to_payment",
+                  text: "Proceed to Payment",
+                  style: "success",
+                  action: "proceed_to_payment",
+                  data: { amount: data.price },
+                },
+              ],
+              flow_state: "payment_pending",
+              message_type: "brand_owner_payment",
+              visible_to: "brand_owner",
+            },
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.brand_owner_id,
+            message: `✅ **Action Taken: Counter Offer Accepted**\n\nYou have accepted the counter offer of ₹${data.price}.`,
+            message_type: "audit",
+            action_required: false,
+          };
+          break;
+
+        case "reject_counter_offer":
+          // Brand owner rejects counter offer
+          newFlowState = "chat_closed";
+          newAwaitingRole = null;
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
+            message: `❌ **Counter Offer Rejected**\n\nBrand owner has rejected your counter offer. The collaboration has been cancelled.`,
+            message_type: "automated",
+            action_required: false,
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.brand_owner_id,
+            message: `✅ **Action Taken: Counter Offer Rejected**\n\nYou have rejected the counter offer.`,
+            message_type: "audit",
+            action_required: false,
+          };
+          break;
+
+        case "make_final_offer":
+          // Brand owner makes final offer
+          newFlowState = "influencer_final_response";
+          newAwaitingRole = "influencer";
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
+            message: `💰 **Final Offer: ₹${data.price}**\n\nBrand owner has made a final offer. This is the last negotiation round.`,
+            message_type: "automated",
+            action_required: true,
+            action_data: {
+              title: "🎯 **Final Offer Response**",
+              subtitle: `Brand owner's final offer: ₹${data.price}`,
+              buttons: [
+                {
+                  id: "accept_final_offer",
+                  text: "Accept Final Offer",
+                  style: "success",
+                  action: "accept_final_offer",
+                  data: { price: data.price },
+                },
+                {
+                  id: "reject_final_offer",
+                  text: "Reject Final Offer",
+                  style: "danger",
+                  action: "reject_final_offer",
+                },
+              ],
+              flow_state: "influencer_final_response",
+              message_type: "influencer_final_response",
+              visible_to: "influencer",
+            },
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.brand_owner_id,
+            message: `✅ **Action Taken: Final Offer Made**\n\nYou have made a final offer of ₹${data.price}.`,
+            message_type: "audit",
+            action_required: false,
+          };
+          break;
+
         default:
           throw new Error(`Unknown action: ${action}`);
       }
@@ -976,15 +1128,20 @@ Please respond to confirm your interest and availability for this campaign.`,
         updateData.current_action_data = newMessage.action_data;
       }
 
+      console.log("🔄 [DEBUG] Updating conversation with data:", updateData);
+      
       const { error: updateError } = await supabaseAdmin
         .from("conversations")
         .update(updateData)
         .eq("id", conversationId);
 
       if (updateError) {
+        console.error("❌ [DEBUG] Failed to update conversation:", updateError);
         throw new Error(
           `Failed to update conversation: ${updateError.message}`
         );
+      } else {
+        console.log("✅ [DEBUG] Conversation updated successfully");
       }
 
       // Create messages
@@ -1015,10 +1172,69 @@ Please respond to confirm your interest and availability for this campaign.`,
       };
 
       console.log("✅ [DEBUG] Brand owner action completed successfully:");
+      console.log("  - Action:", action);
+      console.log("  - Data:", data);
       console.log("  - Flow state:", newFlowState);
       console.log("  - Awaiting role:", newAwaitingRole);
       console.log("  - Has current_action_data:", !!result.conversation.current_action_data);
       console.log("  - Message created:", !!result.message);
+      console.log("  - Audit message created:", !!result.audit_message);
+      console.log("✅ [DEBUG] Final result conversation:", result.conversation);
+      console.log("✅ [DEBUG] Final result message:", result.message ? "Present" : "Missing");
+
+      // Emit WebSocket events for real-time updates
+      if (this.io) {
+        try {
+          // Emit conversation state change
+          this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+            conversation_id: conversationId,
+            flow_state: newFlowState,
+            awaiting_role: newAwaitingRole,
+            chat_status: 'automated',
+            updated_at: new Date().toISOString()
+          });
+
+          // Emit new message to conversation room
+          if (result.message) {
+            this.io.to(`conversation_${conversationId}`).emit('new_message', {
+              conversation_id: conversationId,
+              message: result.message,
+              conversation_context: {
+                id: conversationId,
+                chat_status: 'automated',
+                flow_state: newFlowState,
+                awaiting_role: newAwaitingRole,
+                conversation_type: conversation.campaign_id ? 'campaign' : conversation.bid_id ? 'bid' : 'direct',
+                automation_enabled: true,
+                current_action_data: result.conversation.current_action_data
+              }
+            });
+          }
+
+          // Emit audit message if exists
+          if (result.audit_message) {
+            this.io.to(`conversation_${conversationId}`).emit('new_message', {
+              conversation_id: conversationId,
+              message: result.audit_message,
+              conversation_context: {
+                id: conversationId,
+                chat_status: 'automated',
+                flow_state: newFlowState,
+                awaiting_role: newAwaitingRole,
+                conversation_type: conversation.campaign_id ? 'campaign' : conversation.bid_id ? 'bid' : 'direct',
+                automation_enabled: true,
+                current_action_data: result.conversation.current_action_data
+              }
+            });
+          }
+
+          console.log("📡 [DEBUG] WebSocket events emitted for conversation:", conversationId);
+        } catch (socketError) {
+          console.error("❌ [DEBUG] WebSocket emit error:", socketError);
+        }
+      } else {
+        console.warn("⚠️ [DEBUG] WebSocket not available for real-time updates");
+      }
 
       return result;
     } catch (error) {
@@ -1350,6 +1566,122 @@ Please respond to confirm your interest and availability for this campaign.`,
           };
           break;
 
+        case "send_counter_offer":
+          // Influencer sends counter offer
+          newFlowState = "brand_owner_price_response";
+          newAwaitingRole = "brand_owner";
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.influencer_id,
+            receiver_id: conversation.brand_owner_id,
+            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer. Please respond to this offer.`,
+            message_type: "automated",
+            action_required: true,
+            action_data: {
+              title: "🎯 **Counter Offer Response**",
+              subtitle: `Influencer's counter offer: ₹${data.price}`,
+              buttons: [
+                {
+                  id: "accept_counter_offer",
+                  text: "Accept Counter Offer",
+                  style: "success",
+                  action: "accept_counter_offer",
+                  data: { price: data.price },
+                },
+                {
+                  id: "reject_counter_offer",
+                  text: "Reject Counter Offer",
+                  style: "danger",
+                  action: "reject_counter_offer",
+                },
+                {
+                  id: "make_final_offer",
+                  text: "Make Final Offer",
+                  style: "secondary",
+                  action: "make_final_offer",
+                },
+              ],
+              flow_state: "brand_owner_price_response",
+              message_type: "brand_owner_counter_response",
+              visible_to: "brand_owner",
+            },
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.influencer_id,
+            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price}.`,
+            message_type: "audit",
+            action_required: false,
+          };
+          break;
+
+        case "accept_final_offer":
+          // Influencer accepts final offer
+          newFlowState = "payment_pending";
+          newAwaitingRole = "brand_owner";
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.influencer_id,
+            receiver_id: conversation.brand_owner_id,
+            message: `✅ **Final Offer Accepted**\n\nInfluencer has accepted your final offer of ₹${data.price}. Please proceed with payment to complete the collaboration.`,
+            message_type: "automated",
+            action_required: true,
+            action_data: {
+              title: "🎯 **Payment Required**",
+              subtitle: `Accepted amount: ₹${data.price}`,
+              buttons: [
+                {
+                  id: "proceed_to_payment",
+                  text: "Proceed to Payment",
+                  style: "success",
+                  action: "proceed_to_payment",
+                  data: { amount: data.price },
+                },
+              ],
+              flow_state: "payment_pending",
+              message_type: "brand_owner_payment",
+              visible_to: "brand_owner",
+            },
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.influencer_id,
+            message: `✅ **Action Taken: Final Offer Accepted**\n\nYou have accepted the final offer of ₹${data.price}.`,
+            message_type: "audit",
+            action_required: false,
+          };
+          break;
+
+        case "reject_final_offer":
+          // Influencer rejects final offer
+          newFlowState = "chat_closed";
+          newAwaitingRole = null;
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.influencer_id,
+            receiver_id: conversation.brand_owner_id,
+            message: `❌ **Final Offer Rejected**\n\nInfluencer has rejected your final offer. The collaboration has been cancelled.`,
+            message_type: "automated",
+            action_required: false,
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.influencer_id,
+            message: `✅ **Action Taken: Final Offer Rejected**\n\nYou have rejected the final offer.`,
+            message_type: "audit",
+            action_required: false,
+          };
+          break;
+
         case "accept_negotiated_price":
         case "accept_final_price":
           // Influencer accepts negotiated price
@@ -1635,7 +1967,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         });
       }
 
-      return {
+      const result = {
         success: true,
         conversation: {
           id: conversationId,
@@ -1645,6 +1977,62 @@ Please respond to confirm your interest and availability for this campaign.`,
         message: createdMessages[0],
         audit_message: auditMessage ? createdMessages[1] : null,
       };
+
+      // Emit WebSocket events for real-time updates
+      if (this.io) {
+        try {
+          // Emit conversation state change
+          this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+            conversation_id: conversationId,
+            flow_state: newFlowState,
+            awaiting_role: newAwaitingRole,
+            chat_status: 'automated',
+            updated_at: new Date().toISOString()
+          });
+
+          // Emit new message to conversation room
+          if (result.message) {
+            this.io.to(`conversation_${conversationId}`).emit('new_message', {
+              conversation_id: conversationId,
+              message: result.message,
+              conversation_context: {
+                id: conversationId,
+                chat_status: 'automated',
+                flow_state: newFlowState,
+                awaiting_role: newAwaitingRole,
+                conversation_type: conversation.campaign_id ? 'campaign' : conversation.bid_id ? 'bid' : 'direct',
+                automation_enabled: true,
+                current_action_data: result.conversation.current_action_data
+              }
+            });
+          }
+
+          // Emit audit message if exists
+          if (result.audit_message) {
+            this.io.to(`conversation_${conversationId}`).emit('new_message', {
+              conversation_id: conversationId,
+              message: result.audit_message,
+              conversation_context: {
+                id: conversationId,
+                chat_status: 'automated',
+                flow_state: newFlowState,
+                awaiting_role: newAwaitingRole,
+                conversation_type: conversation.campaign_id ? 'campaign' : conversation.bid_id ? 'bid' : 'direct',
+                automation_enabled: true,
+                current_action_data: result.conversation.current_action_data
+              }
+            });
+          }
+
+          console.log("📡 [DEBUG] WebSocket events emitted for conversation:", conversationId);
+        } catch (socketError) {
+          console.error("❌ [DEBUG] WebSocket emit error:", socketError);
+        }
+      } else {
+        console.warn("⚠️ [DEBUG] WebSocket not available for real-time updates");
+      }
+
+      return result;
     } catch (error) {
       console.error("❌ Failed to handle influencer action:", error);
       throw error;
