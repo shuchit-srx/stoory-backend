@@ -15,6 +15,13 @@ class AuthService {
 
     // Additional test users for different roles
     this.testUsers = {
+      admin: {
+        phone: "9999999999",
+        otp: "123456",
+        role: "admin",
+        name: "Admin User",
+        email: "admin@stoory.com"
+      },
       brandOwner: {
         phone: "9876543211",
         otp: "123456",
@@ -188,10 +195,12 @@ class AuthService {
       const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
       if (
         phone === this.mockPhone ||
+        phone === this.testUsers.admin.phone ||
         phone === this.testUsers.brandOwner.phone ||
         phone === this.testUsers.brandOwner2.phone ||
         phone === this.testUsers.influencer.phone ||
         phoneWithoutCountryCode === this.mockPhone ||
+        phoneWithoutCountryCode === this.testUsers.admin.phone ||
         phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
         phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
         phoneWithoutCountryCode === this.testUsers.influencer.phone
@@ -262,10 +271,12 @@ class AuthService {
       const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
       if (
         phone === this.mockPhone ||
+        phone === this.testUsers.admin.phone ||
         phone === this.testUsers.brandOwner.phone ||
         phone === this.testUsers.brandOwner2.phone ||
         phone === this.testUsers.influencer.phone ||
         phoneWithoutCountryCode === this.mockPhone ||
+        phoneWithoutCountryCode === this.testUsers.admin.phone ||
         phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
         phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
         phoneWithoutCountryCode === this.testUsers.influencer.phone
@@ -316,12 +327,25 @@ class AuthService {
     try {
       // Handle mock phone numbers and OTP (with or without country code)
       const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
+      
+      console.log('🔍 [DEBUG] Mock OTP Check:', {
+        phone,
+        phoneWithoutCountryCode,
+        token,
+        isMockPhone: phone === this.mockPhone,
+        isAdminPhone: phone === this.testUsers.admin.phone,
+        isAdminPhoneWithoutCode: phoneWithoutCountryCode === this.testUsers.admin.phone,
+        isCorrectOTP: token === "123456"
+      });
+
       if (
         ((phone === this.mockPhone ||
+          phone === this.testUsers.admin.phone ||
           phone === this.testUsers.brandOwner.phone ||
           phone === this.testUsers.brandOwner2.phone ||
           phone === this.testUsers.influencer.phone) ||
          (phoneWithoutCountryCode === this.mockPhone ||
+          phoneWithoutCountryCode === this.testUsers.admin.phone ||
           phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
           phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
           phoneWithoutCountryCode === this.testUsers.influencer.phone)) &&
@@ -330,8 +354,14 @@ class AuthService {
         // Determine user role based on phone number
         let userRole = "influencer";
         let userName = "Mock Test User";
+        let userEmail = "mock@test.com";
 
-        if (phone === this.testUsers.brandOwner.phone || phoneWithoutCountryCode === this.testUsers.brandOwner.phone) {
+        if (phone === this.testUsers.admin.phone || phoneWithoutCountryCode === this.testUsers.admin.phone) {
+          userRole = "admin";
+          userName = "Admin User";
+          userEmail = "admin@stoory.com";
+          console.log('🔍 [DEBUG] Admin user detected:', { phone, phoneWithoutCountryCode, userRole });
+        } else if (phone === this.testUsers.brandOwner.phone || phoneWithoutCountryCode === this.testUsers.brandOwner.phone) {
           userRole = "brand_owner";
           userName = "Test Brand Owner";
         } else if (phone === this.testUsers.brandOwner2.phone || phoneWithoutCountryCode === this.testUsers.brandOwner2.phone) {
@@ -360,7 +390,7 @@ class AuthService {
             id: userId,
             phone: phone,
             name: userData?.name || userName,
-            email: userData?.email || `mock.${userRole}@test.com`,
+            email: userData?.email || userEmail,
             role: userData?.role || userRole,
             gender: userData?.gender || "other",
             languages: userData?.languages || ["English"],
@@ -369,6 +399,14 @@ class AuthService {
             max_range: userData?.max_range || 50000,
           };
 
+          console.log('🔍 [DEBUG] Creating new user:', {
+            userId,
+            phone,
+            role: userRole,
+            name: userName,
+            email: userEmail
+          });
+
           const { data: newUser, error: createError } = await supabaseAdmin
             .from("users")
             .insert(userCreateData)
@@ -376,11 +414,19 @@ class AuthService {
             .single();
 
           if (createError) {
+            console.error('❌ [ERROR] Failed to create user:', createError);
             return {
               success: false,
               message: "Failed to create mock user profile",
             };
           }
+
+          console.log('✅ [SUCCESS] User created successfully:', {
+            id: newUser.id,
+            phone: newUser.phone,
+            role: newUser.role,
+            name: newUser.name
+          });
 
           user = newUser;
         } else {
@@ -422,6 +468,14 @@ class AuthService {
           { expiresIn: this.jwtExpiry }
         );
 
+        console.log('✅ [SUCCESS] Mock authentication successful:', {
+          userId: user.id,
+          phone: user.phone,
+          role: user.role,
+          name: user.name,
+          email: user.email
+        });
+
         return {
           success: true,
           user: user,
@@ -443,6 +497,12 @@ class AuthService {
         .eq("phone", phone)
         .eq("is_deleted", false)
         .single();
+
+      console.log('🔍 [DEBUG] Database user lookup:', {
+        phone,
+        existingUser: existingUser ? { id: existingUser.id, role: existingUser.role, name: existingUser.name } : null,
+        error: userError?.message || null
+      });
 
       if (userError && userError.code !== "PGRST116") {
         return {
@@ -599,6 +659,14 @@ class AuthService {
         this.jwtSecret,
         { expiresIn: this.jwtExpiry }
       );
+
+      console.log('✅ [SUCCESS] Real user authentication successful:', {
+        userId: user.id,
+        phone: user.phone,
+        role: user.role,
+        name: user.name,
+        email: user.email
+      });
 
       return {
         success: true,

@@ -35,6 +35,7 @@ const io = socketIo(server, {
           "http://localhost:3001",
           "http://localhost:5173",
           "http://localhost:8081",
+          "http://localhost:8080",
           /^http:\/\/192\.168\.\d+\.\d+:\d+$/,
           /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/,
           /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+$/,
@@ -51,6 +52,17 @@ app.get("/health", (req, res) => {
     message: "Stoory Backend is running",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development",
+  });
+});
+
+// CORS debug endpoint
+app.get("/cors-debug", (req, res) => {
+  res.json({
+    success: true,
+    message: "CORS is working!",
+    origin: req.headers.origin,
+    userAgent: req.headers['user-agent'],
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -75,6 +87,45 @@ app.get("/test-socket", (req, res) => {
 
 // Setup security middleware
 setupSecurityMiddleware(app);
+
+// CORS test endpoint (after security middleware)
+app.get("/api/cors-test", (req, res) => {
+  res.json({
+    success: true,
+    message: "CORS is working from API!",
+    origin: req.headers.origin,
+    method: req.method,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Admin user check endpoint
+app.get("/api/admin-check", async (req, res) => {
+  try {
+    const { supabaseAdmin } = require('./supabase/client');
+    
+    // Check if any admin user exists
+    const { data: adminUsers, error } = await supabaseAdmin
+      .from("users")
+      .select("*")
+      .eq("role", "admin")
+      .eq("is_deleted", false);
+
+    res.json({
+      success: true,
+      adminUsers: adminUsers || [],
+      count: adminUsers?.length || 0,
+      error: error || null,
+      message: adminUsers?.length > 0 ? `${adminUsers.length} admin user(s) found` : "No admin users found"
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: "Error checking admin users"
+    });
+  }
+});
 
 // Additional middleware
 app.use(compression());
