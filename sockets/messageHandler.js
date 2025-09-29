@@ -37,28 +37,48 @@ class MessageHandler {
         socket.on('typing_start', (data) => {
             const { conversationId, userId } = data;
             this.typingUsers.set(`${conversationId}_${userId}`, true);
+            
+            // Emit to conversation room
             socket.to(`conversation_${conversationId}`).emit('user_typing', {
                 conversationId,
                 userId,
                 isTyping: true
+            });
+
+            // Emit to global update rooms for chat list
+            socket.to(`global_${userId}`).emit('typing_status_update', {
+                conversation_id: conversationId,
+                user_id: userId,
+                is_typing: true,
+                timestamp: new Date().toISOString()
             });
         });
 
         socket.on('typing_stop', (data) => {
             const { conversationId, userId } = data;
             this.typingUsers.delete(`${conversationId}_${userId}`);
+            
+            // Emit to conversation room
             socket.to(`conversation_${conversationId}`).emit('user_typing', {
                 conversationId,
                 userId,
                 isTyping: false
+            });
+
+            // Emit to global update rooms for chat list
+            socket.to(`global_${userId}`).emit('typing_status_update', {
+                conversation_id: conversationId,
+                user_id: userId,
+                is_typing: false,
+                timestamp: new Date().toISOString()
             });
         });
 
         // Handle sending message
         socket.on('send_message', async (data) => {
             try {
-                const { conversationId, senderId, receiverId, message, mediaUrl } = data;
-                console.log("🔍 [DEBUG] Socket send_message received:", { conversationId, senderId, receiverId });
+                const { conversationId, senderId, receiverId, message, mediaUrl, attachmentMetadata } = data;
+                console.log("🔍 [DEBUG] Socket send_message received:", { conversationId, senderId, receiverId, hasAttachment: !!mediaUrl });
 
                 // Get conversation context first
                 const { data: conversation, error: convError } = await supabaseAdmin
@@ -73,16 +93,24 @@ class MessageHandler {
                     return;
                 }
 
+                // Prepare message data
+                const messageData = {
+                    conversation_id: conversationId,
+                    sender_id: senderId,
+                    receiver_id: receiverId,
+                    message: message,
+                    media_url: mediaUrl
+                };
+
+                // Add attachment metadata if present
+                if (attachmentMetadata) {
+                    messageData.attachment_metadata = attachmentMetadata;
+                }
+
                 // Save message to database
                 const { data: savedMessage, error } = await supabaseAdmin
                     .from('messages')
-                    .insert({
-                        conversation_id: conversationId,
-                        sender_id: senderId,
-                        receiver_id: receiverId,
-                        message: message,
-                        media_url: mediaUrl
-                    })
+                    .insert(messageData)
                     .select()
                     .single();
 
@@ -227,10 +255,57 @@ class MessageHandler {
             console.log(`User left campaign room: ${campaignId}`);
         });
 
+        // Handle global conversation list updates
+        socket.on('join_global_updates', (userId) => {
+            socket.join(`global_${userId}`);
+            console.log(`User joined global updates: ${userId}`);
+            
+            // Emit current online status
+            socket.emit('user_status_update', {
+                user_id: userId,
+                status: 'online',
+                timestamp: new Date().toISOString()
+            });
+        });
+
+        socket.on('leave_global_updates', (userId) => {
+            socket.leave(`global_${userId}`);
+            console.log(`User left global updates: ${userId}`);
+        });
+
+        // Handle conversation list refresh requests
+        socket.on('refresh_conversation_list', async (userId) => {
+            try {
+                // Emit conversation list refresh event
+                socket.emit('conversation_list_refresh', {
+                    user_id: userId,
+                    timestamp: new Date().toISOString()
+                });
+            } catch (error) {
+                socket.emit('conversation_list_error', { error: error.message });
+            }
+        });
+
+        // Handle global notification requests
+        socket.on('request_global_notifications', (userId) => {
+            socket.join(`notifications_${userId}`);
+            console.log(`User joined global notifications: ${userId}`);
+        });
+
+        socket.on('leave_global_notifications', (userId) => {
+            socket.leave(`notifications_${userId}`);
+            console.log(`User left global notifications: ${userId}`);
+        });
+
         // Handle message seen
         socket.on('mark_seen', async (data) => {
             try {
-                const { messageId, userId } = data;
+                const { messageId, userId, conversationId } = data;
+
+                if (!messageId || !userId || !conversationId) {
+                    socket.emit('seen_error', { error: 'Missing required fields: messageId, userId, conversationId' });
+                    return;
+                }
 
                 // Update message seen status
                 const { error } = await supabaseAdmin
@@ -243,15 +318,60 @@ class MessageHandler {
                     return;
                 }
 
-                // Emit seen status to conversation
-                socket.to(`conversation_${data.conversationId}`).emit('message_seen', {
+                // Emit seen status to conversation room
+                this.io.to(`conversation_${conversationId}`).emit('message_seen', {
                     messageId,
-                    userId
+                    userId,
+                    conversationId,
+                    timestamp: new Date().toISOString()
                 });
 
+                // Emit to global update rooms for real-time chat list updates
+                this.io.to(`global_${userId}`).emit('message_seen_update', {
+                    messageId,
+                    conversationId,
+                    timestamp: new Date().toISOString()
+                });
+
+                console.log(`✅ Message ${messageId} marked as seen by user ${userId}`);
+
             } catch (error) {
+                console.error('❌ Error marking message as seen:', error);
                 socket.emit('seen_error', { error: error.message });
             }
+        });
+
+        // Handle attachment upload progress
+        socket.on('attachment_upload_progress', (data) => {
+            const { conversationId, progress, fileName } = data;
+            socket.to(`conversation_${conversationId}`).emit('attachment_upload_progress', {
+                conversationId,
+                progress,
+                fileName,
+                timestamp: new Date().toISOString()
+            });
+        });
+
+        // Handle attachment upload complete
+        socket.on('attachment_upload_complete', (data) => {
+            const { conversationId, attachment, fileName } = data;
+            socket.to(`conversation_${conversationId}`).emit('attachment_upload_complete', {
+                conversationId,
+                attachment,
+                fileName,
+                timestamp: new Date().toISOString()
+            });
+        });
+
+        // Handle attachment upload error
+        socket.on('attachment_upload_error', (data) => {
+            const { conversationId, error, fileName } = data;
+            socket.to(`conversation_${conversationId}`).emit('attachment_upload_error', {
+                conversationId,
+                error,
+                fileName,
+                timestamp: new Date().toISOString()
+            });
         });
 
         // Handle user status

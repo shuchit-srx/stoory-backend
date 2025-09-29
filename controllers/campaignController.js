@@ -1425,6 +1425,27 @@ class CampaignController {
           // Continue anyway as the payment is processed
         } else {
           escrowHold = newEscrowHold;
+          
+          // Use enhanced balance service to freeze funds in escrow
+          const freezeResult = await enhancedBalanceService.freezeFunds(
+            conversation.influencer_id,
+            paymentAmount,
+            newEscrowHold.id,
+            {
+              conversation_id: conversation_id,
+              payment_order_id: paymentOrder.id,
+              notes: `Funds frozen in escrow for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`,
+              sender_id: conversation.brand_owner_id,
+              receiver_id: conversation.influencer_id
+            }
+          );
+
+          if (!freezeResult.success) {
+            console.warn("⚠️ Escrow freeze failed:", freezeResult.error);
+            // Continue anyway as escrow hold is created
+          } else {
+            console.log("✅ Enhanced balance service: Funds frozen in escrow");
+          }
         }
       }
 
@@ -1443,37 +1464,8 @@ class CampaignController {
         return res.status(500).json({ success: false, message: "Failed to update conversation" });
       }
 
-      // Create transaction record
-      const transactionData = {
-        wallet_id: wallet.id,
-        user_id: conversation.influencer_id,
-        amount: paymentAmount / 100, // compatibility
-        amount_paise: paymentAmount,
-        type: "credit",
-        direction: "credit",
-        description: `Payment for campaign collaboration - Order: ${razorpay_order_id}`,
-        status: "completed",
-        razorpay_order_id: razorpay_order_id,
-        razorpay_payment_id: razorpay_payment_id,
-        razorpay_signature: razorpay_signature,
-        metadata: {
-          conversation_id: conversation_id,
-          campaign_id: conversation.campaign_id,
-          payment_order_id: paymentOrder.id,
-          escrow_hold_id: escrowHold?.id
-        }
-      };
-
-      const { data: transaction, error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert(transactionData)
-        .select()
-        .single();
-
-      if (transactionError) {
-        console.error("Transaction creation error:", transactionError);
-        // Continue anyway as the payment is processed
-      }
+      // Transaction records are already created by enhancedBalanceService.addFunds()
+      // and enhancedBalanceService.freezeFunds() calls above
 
       // Send FCM notification for payment completion
       const fcmService = require('../services/fcmService');

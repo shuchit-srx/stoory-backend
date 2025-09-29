@@ -189,7 +189,8 @@ class PaymentController {
       if (result.success) {
         res.json({
           success: true,
-          transaction: result.transaction,
+          payment_order: result.payment_order,
+          escrow_hold: result.escrow_hold,
           message: result.message,
         });
       } else {

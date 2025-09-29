@@ -183,11 +183,17 @@ class EscrowService {
           user_id: conversation.influencer_id,
           amount: releaseAmount / 100, // compatibility
           amount_paise: releaseAmount,
-          type: 'credit',
+          type: 'unfreeze',
           direction: 'credit',
           status: 'completed',
           stage: 'escrow_release',
-          notes: `Escrow funds released: ${reason}`
+          notes: `Escrow funds released: ${reason}`,
+          // Track who approved the release (brand owner) and who received the funds (influencer)
+          sender_id: conversation.brand_owner_id,
+          receiver_id: conversation.influencer_id,
+          // Link to conversation and escrow hold
+          conversation_id: conversationId,
+          escrow_hold_id: escrowHold.id
         });
 
       if (transactionError) {

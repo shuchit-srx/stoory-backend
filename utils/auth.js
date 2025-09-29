@@ -21,6 +21,12 @@ class AuthService {
         role: "brand_owner",
         name: "Test Brand Owner",
       },
+      brandOwner2: {
+        phone: "9988776655",
+        otp: "123456",
+        role: "brand_owner",
+        name: "Test Brand Owner 2",
+      },
       influencer: {
         phone: "9876543212",
         otp: "123456",
@@ -178,11 +184,17 @@ class AuthService {
         };
       }
 
-      // Handle mock phone numbers
+      // Handle mock phone numbers (with or without country code)
+      const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
       if (
         phone === this.mockPhone ||
         phone === this.testUsers.brandOwner.phone ||
-        phone === this.testUsers.influencer.phone
+        phone === this.testUsers.brandOwner2.phone ||
+        phone === this.testUsers.influencer.phone ||
+        phoneWithoutCountryCode === this.mockPhone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
+        phoneWithoutCountryCode === this.testUsers.influencer.phone
       ) {
         return {
           success: true,
@@ -246,11 +258,17 @@ class AuthService {
         };
       }
 
-      // Handle mock phone numbers
+      // Handle mock phone numbers (with or without country code)
+      const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
       if (
         phone === this.mockPhone ||
         phone === this.testUsers.brandOwner.phone ||
-        phone === this.testUsers.influencer.phone
+        phone === this.testUsers.brandOwner2.phone ||
+        phone === this.testUsers.influencer.phone ||
+        phoneWithoutCountryCode === this.mockPhone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
+        phoneWithoutCountryCode === this.testUsers.influencer.phone
       ) {
         return {
           success: true,
@@ -296,21 +314,30 @@ class AuthService {
    */
   async verifyOTP(phone, token, userData) {
     try {
-      // Handle mock phone numbers and OTP
+      // Handle mock phone numbers and OTP (with or without country code)
+      const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
       if (
-        (phone === this.mockPhone ||
+        ((phone === this.mockPhone ||
           phone === this.testUsers.brandOwner.phone ||
-          phone === this.testUsers.influencer.phone) &&
+          phone === this.testUsers.brandOwner2.phone ||
+          phone === this.testUsers.influencer.phone) ||
+         (phoneWithoutCountryCode === this.mockPhone ||
+          phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
+          phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
+          phoneWithoutCountryCode === this.testUsers.influencer.phone)) &&
         token === "123456"
       ) {
         // Determine user role based on phone number
         let userRole = "influencer";
         let userName = "Mock Test User";
 
-        if (phone === this.testUsers.brandOwner.phone) {
+        if (phone === this.testUsers.brandOwner.phone || phoneWithoutCountryCode === this.testUsers.brandOwner.phone) {
           userRole = "brand_owner";
           userName = "Test Brand Owner";
-        } else if (phone === this.testUsers.influencer.phone) {
+        } else if (phone === this.testUsers.brandOwner2.phone || phoneWithoutCountryCode === this.testUsers.brandOwner2.phone) {
+          userRole = "brand_owner";
+          userName = "Test Brand Owner 2";
+        } else if (phone === this.testUsers.influencer.phone || phoneWithoutCountryCode === this.testUsers.influencer.phone) {
           userRole = "influencer";
           userName = "Test Influencer";
         }
@@ -439,15 +466,42 @@ class AuthService {
 
         // Add userData fields if provided
         if (userData) {
+          // Basic profile fields
           if (userData.name) userCreateData.name = userData.name;
           if (userData.email) userCreateData.email = userData.email;
           if (userData.role) userCreateData.role = userData.role;
           if (userData.gender) userCreateData.gender = userData.gender;
           if (userData.languages) userCreateData.languages = userData.languages;
-          if (userData.categories)
-            userCreateData.categories = userData.categories;
+          if (userData.categories) userCreateData.categories = userData.categories;
           if (userData.min_range) userCreateData.min_range = userData.min_range;
           if (userData.max_range) userCreateData.max_range = userData.max_range;
+          
+          // Verification fields
+          if (userData.pan_number) userCreateData.pan_number = userData.pan_number;
+          if (userData.verification_image_url) userCreateData.verification_image_url = userData.verification_image_url;
+          if (userData.verification_document_type) userCreateData.verification_document_type = userData.verification_document_type;
+          if (userData.address_line1) userCreateData.address_line1 = userData.address_line1;
+          if (userData.address_line2) userCreateData.address_line2 = userData.address_line2;
+          if (userData.address_city) userCreateData.address_city = userData.address_city;
+          if (userData.address_state) userCreateData.address_state = userData.address_state;
+          if (userData.address_pincode) userCreateData.address_pincode = userData.address_pincode;
+          if (userData.address_country) userCreateData.address_country = userData.address_country;
+          if (userData.date_of_birth) userCreateData.date_of_birth = userData.date_of_birth;
+          if (userData.bio) userCreateData.bio = userData.bio;
+          if (userData.experience_years) userCreateData.experience_years = userData.experience_years;
+          if (userData.specializations) userCreateData.specializations = userData.specializations;
+          if (userData.portfolio_links) userCreateData.portfolio_links = userData.portfolio_links;
+          if (userData.emergency_contact_name) userCreateData.emergency_contact_name = userData.emergency_contact_name;
+          if (userData.emergency_contact_phone) userCreateData.emergency_contact_phone = userData.emergency_contact_phone;
+          if (userData.emergency_contact_relation) userCreateData.emergency_contact_relation = userData.emergency_contact_relation;
+          
+          // Business fields (for brand owners)
+          if (userData.business_name) userCreateData.business_name = userData.business_name;
+          if (userData.business_type) userCreateData.business_type = userData.business_type;
+          if (userData.gst_number) userCreateData.gst_number = userData.gst_number;
+          if (userData.business_registration_number) userCreateData.business_registration_number = userData.business_registration_number;
+          if (userData.business_address) userCreateData.business_address = userData.business_address;
+          if (userData.business_website) userCreateData.business_website = userData.business_website;
         }
 
         const { data: newUser, error: createError } = await supabaseAdmin
@@ -476,6 +530,7 @@ class AuthService {
         // If user exists, update with userData if provided
         if (userData && user) {
           const updateData = {
+            // Basic profile fields
             name: userData.name,
             email: userData.email,
             role: userData.role || user.role,
@@ -484,6 +539,33 @@ class AuthService {
             categories: userData.categories,
             min_range: userData.min_range,
             max_range: userData.max_range,
+            
+            // Verification fields
+            pan_number: userData.pan_number,
+            verification_image_url: userData.verification_image_url,
+            verification_document_type: userData.verification_document_type,
+            address_line1: userData.address_line1,
+            address_line2: userData.address_line2,
+            address_city: userData.address_city,
+            address_state: userData.address_state,
+            address_pincode: userData.address_pincode,
+            address_country: userData.address_country,
+            date_of_birth: userData.date_of_birth,
+            bio: userData.bio,
+            experience_years: userData.experience_years,
+            specializations: userData.specializations,
+            portfolio_links: userData.portfolio_links,
+            emergency_contact_name: userData.emergency_contact_name,
+            emergency_contact_phone: userData.emergency_contact_phone,
+            emergency_contact_relation: userData.emergency_contact_relation,
+            
+            // Business fields (for brand owners)
+            business_name: userData.business_name,
+            business_type: userData.business_type,
+            gst_number: userData.gst_number,
+            business_registration_number: userData.business_registration_number,
+            business_address: userData.business_address,
+            business_website: userData.business_website,
           };
 
           // Remove undefined values

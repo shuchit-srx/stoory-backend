@@ -207,6 +207,9 @@ class EnhancedBalanceService {
           balance_after_paise: newBalance,
           frozen_balance_after_paise: wallet.frozen_balance_paise,
           withdrawn_balance_after_paise: wallet.withdrawn_balance_paise,
+          // Track who sent and received the payment
+          sender_id: transactionData.brand_owner_id,
+          receiver_id: userId,
           // Link to conversation via bid_id or campaign_id
           ...(transactionData.bid_id ? 
             { bid_id: transactionData.bid_id } : 

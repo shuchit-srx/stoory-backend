@@ -116,46 +116,8 @@ class PaymentService {
         throw new Error(`Failed to create payment order: ${orderError.message}`);
       }
 
-      // Create transaction record
-      const transactionData = {
-        wallet_id: wallet.id,
-        user_id: conversation.influencer_id,
-        amount: paymentAmount / 100, // Keep old amount field for compatibility
-        amount_paise: paymentAmount,
-        type: "credit",
-        direction: "credit",
-        status: "completed",
-        stage: "verified",
-        razorpay_order_id: razorpay_order_id,
-        razorpay_payment_id: razorpay_payment_id,
-        related_payment_order_id: paymentOrder.id,
-        payment_stage: "bid_collaboration",
-        notes: "Payment for campaign collaboration"
-      };
-
-      // Add source reference (campaign or bid)
-      if (conversation.request) {
-        if (conversation.request.campaign_id) {
-          transactionData.campaign_id = conversation.request.campaign_id;
-        } else if (conversation.request.bid_id) {
-          transactionData.bid_id = conversation.request.bid_id;
-        }
-        transactionData.request_id = conversation.request.id;
-      } else if (conversation.campaign_id) {
-        transactionData.campaign_id = conversation.campaign_id;
-      } else if (conversation.bid_id) {
-        transactionData.bid_id = conversation.bid_id;
-      }
-
-      const { data: transaction, error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert(transactionData)
-        .select()
-        .single();
-
-      if (transactionError) {
-        throw new Error(`Failed to create transaction record: ${transactionError.message}`);
-      }
+      // Note: Transaction records will be created by the calling controller
+      // to avoid duplicate transaction creation
 
       // Update request status to "paid" if request exists
       if (conversation.request) {
@@ -205,7 +167,6 @@ class PaymentService {
 
       return {
         success: true,
-        transaction: transaction,
         payment_order: paymentOrder,
         escrow_hold: escrowHold,
         message: "Payment processed successfully",

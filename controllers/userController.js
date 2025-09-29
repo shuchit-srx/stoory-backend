@@ -155,6 +155,329 @@ class UserController {
             return res.status(500).json({ success: false, message: 'Internal server error' });
         }
     }
+
+    /**
+     * Get user verification status and details
+     */
+    async getVerificationStatus(req, res) {
+        try {
+            const userId = req.user.id;
+
+            const { data: user, error } = await supabaseAdmin
+                .from('users')
+                .select(`
+                    id,
+                    name,
+                    role,
+                    verification_status,
+                    is_verified,
+                    verification_priority,
+                    pan_number,
+                    verification_image_url,
+                    verification_document_type,
+                    address_line1,
+                    address_city,
+                    address_state,
+                    address_pincode,
+                    business_name,
+                    business_type,
+                    gst_number,
+                    bio,
+                    experience_years,
+                    specializations,
+                    portfolio_links,
+                    created_at,
+                    verified_at,
+                    verification_notes
+                `)
+                .eq('id', userId)
+                .single();
+
+            if (error) {
+                return res.status(500).json({ 
+                    success: false, 
+                    message: 'Failed to fetch verification status' 
+                });
+            }
+
+            // Get social platforms count
+            const { count: socialPlatformsCount } = await supabaseAdmin
+                .from('social_platforms')
+                .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId)
+                .eq('platform_is_active', true);
+
+            // Calculate verification completeness
+            const verificationFields = [
+                user.pan_number,
+                user.verification_image_url,
+                user.address_line1,
+                user.bio,
+                socialPlatformsCount > 0
+            ];
+            const completedFields = verificationFields.filter(Boolean).length;
+            const verificationCompleteness = (completedFields / verificationFields.length) * 100;
+
+            res.json({
+                success: true,
+                verification: {
+                    ...user,
+                    social_platforms_count: socialPlatformsCount || 0,
+                    verification_completeness: Math.round(verificationCompleteness),
+                    missing_fields: this.getMissingVerificationFields(user, socialPlatformsCount)
+                }
+            });
+        } catch (error) {
+            res.status(500).json({ 
+                success: false, 
+                message: 'Internal server error' 
+            });
+        }
+    }
+
+    /**
+     * Update user verification details
+     */
+    async updateVerificationDetails(req, res) {
+        try {
+            const userId = req.user.id;
+            const updateData = req.body;
+
+            // Remove fields that shouldn't be updated by users
+            const restrictedFields = [
+                'verification_status',
+                'is_verified',
+                'verified_at',
+                'verified_by',
+                'verification_notes',
+                'verification_priority'
+            ];
+            
+            restrictedFields.forEach(field => delete updateData[field]);
+
+            // Validate PAN number format if provided
+            if (updateData.pan_number && !this.validatePANNumber(updateData.pan_number)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid PAN number format'
+                });
+            }
+
+            // Validate GST number format if provided
+            if (updateData.gst_number && !this.validateGSTNumber(updateData.gst_number)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid GST number format'
+                });
+            }
+
+            const { data: updatedUser, error } = await supabaseAdmin
+                .from('users')
+                .update(updateData)
+                .eq('id', userId)
+                .select()
+                .single();
+
+            if (error) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to update verification details'
+                });
+            }
+
+            res.json({
+                success: true,
+                message: 'Verification details updated successfully',
+                user: updatedUser
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
+
+    /**
+     * Upload verification document
+     */
+    async uploadVerificationDocument(req, res) {
+        try {
+            const userId = req.user.id;
+            const { document_type } = req.body;
+
+            if (!req.file) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No file uploaded'
+                });
+            }
+
+            if (!document_type || !['pan_card', 'aadhaar_card', 'passport', 'driving_license', 'voter_id'].includes(document_type)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid document type'
+                });
+            }
+
+            // Upload file to storage
+            const { uploadImageToStorage, deleteImageFromStorage } = require('../utils/imageUpload');
+            
+            // Get current user to check for existing verification image
+            const { data: currentUser } = await supabaseAdmin
+                .from('users')
+                .select('verification_image_url')
+                .eq('id', userId)
+                .single();
+
+            // Upload new verification document
+            const { url, error: uploadError } = await uploadImageToStorage(
+                req.file.buffer,
+                `verification_${userId}_${Date.now()}.${req.file.originalname.split('.').pop()}`,
+                'verification-documents'
+            );
+
+            if (uploadError) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to upload verification document',
+                    error: uploadError
+                });
+            }
+
+            // Delete old verification image if it exists
+            if (currentUser?.verification_image_url) {
+                await deleteImageFromStorage(currentUser.verification_image_url);
+            }
+
+            // Update user with new verification document
+            const { data: updatedUser, error: updateError } = await supabaseAdmin
+                .from('users')
+                .update({
+                    verification_image_url: url,
+                    verification_document_type: document_type
+                })
+                .eq('id', userId)
+                .select()
+                .single();
+
+            if (updateError) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to update verification document'
+                });
+            }
+
+            res.json({
+                success: true,
+                message: 'Verification document uploaded successfully',
+                verification_image_url: url,
+                document_type: document_type
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
+
+    /**
+     * Get missing verification fields for a user
+     */
+    getMissingVerificationFields(user, socialPlatformsCount = 0) {
+        const missing = [];
+
+        if (!user.pan_number) missing.push('pan_number');
+        if (!user.verification_image_url) missing.push('verification_document');
+        if (!user.address_line1) missing.push('address');
+        if (!user.bio) missing.push('bio');
+        if (socialPlatformsCount === 0) missing.push('social_media_profiles');
+        
+        // Role-specific missing fields
+        if (user.role === 'brand_owner') {
+            if (!user.business_name) missing.push('business_name');
+            if (!user.business_type) missing.push('business_type');
+        } else if (user.role === 'influencer') {
+            if (!user.experience_years) missing.push('experience_years');
+            if (!user.specializations || user.specializations.length === 0) missing.push('specializations');
+        }
+
+        return missing;
+    }
+
+    /**
+     * Validate PAN number format
+     */
+    validatePANNumber(pan) {
+        const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+        return panRegex.test(pan);
+    }
+
+    /**
+     * Validate GST number format
+     */
+    validateGSTNumber(gst) {
+        const gstRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+        return gstRegex.test(gst);
+    }
+
+    /**
+     * Get user profile with verification details
+     */
+    async getUserProfile(req, res) {
+        try {
+            const userId = req.user.id;
+
+            const { data: user, error } = await supabaseAdmin
+                .from('users')
+                .select(`
+                    *,
+                    social_platforms (*)
+                `)
+                .eq('id', userId)
+                .single();
+
+            if (error) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch user profile'
+                });
+            }
+
+            // Get social platforms count
+            const { count: socialPlatformsCount } = await supabaseAdmin
+                .from('social_platforms')
+                .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId)
+                .eq('platform_is_active', true);
+
+            // Calculate verification completeness
+            const verificationFields = [
+                user.pan_number,
+                user.verification_image_url,
+                user.address_line1,
+                user.bio,
+                socialPlatformsCount > 0
+            ];
+            const completedFields = verificationFields.filter(Boolean).length;
+            const verificationCompleteness = (completedFields / verificationFields.length) * 100;
+
+            res.json({
+                success: true,
+                user: {
+                    ...user,
+                    verification_completeness: Math.round(verificationCompleteness),
+                    missing_verification_fields: this.getMissingVerificationFields(user, socialPlatformsCount)
+                }
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
 }
 
 module.exports = {

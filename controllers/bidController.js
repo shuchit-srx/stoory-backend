@@ -1392,7 +1392,9 @@ class BidController {
             {
               conversation_id: conversation_id,
               payment_order_id: paymentOrder.id,
-              notes: `Funds frozen in escrow for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`
+              notes: `Funds frozen in escrow for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`,
+              sender_id: conversation.brand_owner_id,
+              receiver_id: conversation.influencer_id
             }
           );
 
@@ -1454,45 +1456,56 @@ class BidController {
         // Do not fail the flow; continue
       }
 
-      // Create transaction record for escrow hold
-      const transactionData = {
+      // Credit transaction already created by enhancedBalanceService.addFunds()
+      // Only create the escrow freeze transaction
+
+      // Create escrow freeze transaction
+      const freezeTransactionData = {
         wallet_id: walletId,
         user_id: conversation.influencer_id,
-        amount: paymentAmount / 100, // compatibility
+        amount: paymentAmount / 100,
         amount_paise: paymentAmount,
-        type: "credit",
-        direction: "credit",
+        type: "freeze",
+        direction: "debit",
         status: "completed",
-        stage: "escrow_hold", // This is an escrow hold transaction
+        stage: "escrow_hold",
         razorpay_order_id: razorpay_order_id,
         razorpay_payment_id: razorpay_payment_id,
         related_payment_order_id: paymentOrder.id,
-        notes: `Payment held in escrow for collaboration${escrowHold ? ` (Escrow ID: ${escrowHold.id})` : ''}`
+        escrow_hold_id: escrowHold?.id,
+        is_escrow_frozen: true,
+        escrow_status: "active",
+        notes: `Funds frozen in escrow for collaboration${escrowHold ? ` (Escrow ID: ${escrowHold.id})` : ''}`,
+        balance_after_paise: paymentAmount,
+        frozen_balance_after_paise: paymentAmount,
+        // Track who initiated the freeze (brand owner) and who owns the wallet (influencer)
+        sender_id: conversation.brand_owner_id,
+        receiver_id: conversation.influencer_id
       };
 
-      // Add source reference (campaign or bid)
+      // Add source reference for freeze transaction
       if (request) {
         if (request.campaign_id) {
-          transactionData.campaign_id = request.campaign_id;
+          freezeTransactionData.campaign_id = request.campaign_id;
         } else if (request.bid_id) {
-          transactionData.bid_id = request.bid_id;
+          freezeTransactionData.bid_id = request.bid_id;
         }
-        transactionData.request_id = request.id;
+        freezeTransactionData.request_id = request.id;
       } else if (conversation.campaign_id) {
-        transactionData.campaign_id = conversation.campaign_id;
+        freezeTransactionData.campaign_id = conversation.campaign_id;
       } else if (conversation.bid_id) {
-        transactionData.bid_id = conversation.bid_id;
+        freezeTransactionData.bid_id = conversation.bid_id;
       }
 
-      const { data: transaction, error: transactionError } = await supabaseAdmin
+      const { data: freezeTransaction, error: freezeTransactionError } = await supabaseAdmin
         .from("transactions")
-        .insert(transactionData)
+        .insert(freezeTransactionData)
         .select()
         .single();
 
-      if (transactionError) {
-        console.error("Transaction creation error:", transactionError);
-        return res.status(500).json({ success: false, message: "Failed to create transaction record", details: transactionError.message || transactionError });
+      if (freezeTransactionError) {
+        console.error("Freeze transaction creation error:", freezeTransactionError);
+        // Don't fail the flow, just log the error
       }
 
       // Update request status to "paid" if request exists

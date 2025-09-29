@@ -224,6 +224,113 @@ class AuthController {
   }
 
   /**
+   * Upload verification document
+   */
+  async uploadVerificationDocument(req, res) {
+    try {
+      console.log('🔍 [VERIFICATION DEBUG] uploadVerificationDocument called');
+      console.log('🔍 [VERIFICATION DEBUG] Request body:', req.body);
+      console.log('🔍 [VERIFICATION DEBUG] File present:', !!req.file);
+      console.log('🔍 [VERIFICATION DEBUG] File details:', req.file ? {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      } : 'No file');
+
+      const userId = req.user.id;
+      const { document_type } = req.body;
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No file uploaded'
+        });
+      }
+
+      // Validate file type
+      const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      if (!allowedMimeTypes.includes(req.file.mimetype)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid file type. Only JPEG, PNG, and WebP images are allowed.'
+        });
+      }
+
+      // Validate file size (5MB limit)
+      if (req.file.size > 5 * 1024 * 1024) {
+        return res.status(400).json({
+          success: false,
+          message: 'File size too large. Maximum size is 5MB.'
+        });
+      }
+
+      if (!document_type || !['pan_card', 'aadhaar_card', 'passport', 'driving_license', 'voter_id'].includes(document_type)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid document type. Must be one of: pan_card, aadhaar_card, passport, driving_license, voter_id'
+        });
+      }
+
+      // Get current user to check for existing verification image
+      const { data: currentUser } = await supabaseAdmin
+        .from('users')
+        .select('verification_image_url')
+        .eq('id', userId)
+        .single();
+
+      // Upload new verification document
+      const { url, error: uploadError } = await uploadImageToStorage(
+        req.file.buffer,
+        `verification_${userId}_${Date.now()}.${req.file.originalname.split('.').pop()}`,
+        'verification-documents'
+      );
+
+      if (uploadError) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to upload verification document',
+          error: uploadError
+        });
+      }
+
+      // Delete old verification image if it exists
+      if (currentUser?.verification_image_url) {
+        await deleteImageFromStorage(currentUser.verification_image_url);
+      }
+
+      // Update user with new verification document
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
+        .from('users')
+        .update({
+          verification_image_url: url,
+          verification_document_type: document_type
+        })
+        .eq('id', userId)
+        .select()
+        .single();
+
+      if (updateError) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to update verification document'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Verification document uploaded successfully',
+        verification_image_url: url,
+        document_type: document_type
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error',
+      });
+    }
+  }
+
+  /**
    * Upload profile image only
    */
   async uploadProfileImage(req, res) {
@@ -451,6 +558,13 @@ class AuthController {
                 "Test brand owner account for testing campaigns and bids",
             },
             {
+              role: "Brand Owner 2",
+              phone: "9988776655",
+              otp: "123456",
+              description:
+                "Additional test brand owner account for testing campaigns and bids",
+            },
+            {
               role: "Influencer",
               phone: "9876543212",
               otp: "123456",
@@ -568,6 +682,127 @@ const validateUpdateProfile = [
     .optional()
     .isArray()
     .withMessage("Categories must be an array"),
+  // New verification fields
+  body("date_of_birth")
+    .optional()
+    .isISO8601()
+    .withMessage("Date of birth must be a valid date"),
+  body("pan_number")
+    .optional()
+    .matches(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/)
+    .withMessage("PAN number must be in format: AAAAA9999A"),
+  body("verification_document_type")
+    .optional()
+    .isIn(["pan_card", "aadhaar_card", "passport", "driving_license", "voter_id"])
+    .withMessage("Invalid verification document type"),
+  body("verification_status")
+    .optional()
+    .isIn(["pending", "under_review", "verified", "rejected"])
+    .withMessage("Invalid verification status"),
+  body("is_verified")
+    .optional()
+    .isBoolean()
+    .withMessage("is_verified must be a boolean"),
+  body("verification_profile")
+    .optional()
+    .isObject()
+    .withMessage("verification_profile must be an object"),
+];
+
+// Validation for verification details
+const validateVerificationDetails = [
+  body("pan_number")
+    .optional()
+    .matches(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/)
+    .withMessage("PAN number must be in format: AAAAA9999A"),
+  body("verification_document_type")
+    .optional()
+    .isIn(["pan_card", "aadhaar_card", "passport", "driving_license", "voter_id"])
+    .withMessage("Invalid verification document type"),
+  body("address_line1")
+    .optional()
+    .isLength({ min: 5, max: 200 })
+    .withMessage("Address line 1 must be between 5 and 200 characters"),
+  body("address_city")
+    .optional()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("City must be between 2 and 100 characters"),
+  body("address_state")
+    .optional()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("State must be between 2 and 100 characters"),
+  body("address_pincode")
+    .optional()
+    .matches(/^[1-9][0-9]{5}$/)
+    .withMessage("Pincode must be 6 digits and not start with 0"),
+  body("address_country")
+    .optional()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Country must be between 2 and 100 characters"),
+  body("date_of_birth")
+    .optional()
+    .isISO8601()
+    .withMessage("Date of birth must be a valid date"),
+  body("bio")
+    .optional()
+    .isLength({ min: 10, max: 1000 })
+    .withMessage("Bio must be between 10 and 1000 characters"),
+  body("experience_years")
+    .optional()
+    .isInt({ min: 0, max: 50 })
+    .withMessage("Experience years must be between 0 and 50"),
+  body("specializations")
+    .optional()
+    .isArray()
+    .withMessage("Specializations must be an array"),
+  body("portfolio_links")
+    .optional()
+    .isArray()
+    .withMessage("Portfolio links must be an array"),
+  body("emergency_contact_name")
+    .optional()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Emergency contact name must be between 2 and 100 characters"),
+  body("emergency_contact_phone")
+    .optional()
+    .isMobilePhone("any")
+    .withMessage("Emergency contact phone must be a valid phone number"),
+  body("emergency_contact_relation")
+    .optional()
+    .isLength({ min: 2, max: 50 })
+    .withMessage("Emergency contact relation must be between 2 and 50 characters"),
+  body("business_name")
+    .optional()
+    .isLength({ min: 2, max: 200 })
+    .withMessage("Business name must be between 2 and 200 characters"),
+  body("business_type")
+    .optional()
+    .isIn(["individual", "partnership", "private_limited", "public_limited", "llp", "sole_proprietorship"])
+    .withMessage("Invalid business type"),
+  body("gst_number")
+    .optional()
+    .matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/)
+    .withMessage("GST number must be in valid format"),
+  body("business_registration_number")
+    .optional()
+    .isLength({ min: 5, max: 50 })
+    .withMessage("Business registration number must be between 5 and 50 characters"),
+  body("business_address")
+    .optional()
+    .isLength({ min: 10, max: 500 })
+    .withMessage("Business address must be between 10 and 500 characters"),
+  body("business_website")
+    .optional()
+    .isURL()
+    .withMessage("Business website must be a valid URL"),
+];
+
+// Validation for verification document upload
+const validateVerificationDocument = [
+  body("document_type")
+    .optional()
+    .isIn(["pan_card", "aadhaar_card", "passport", "driving_license", "voter_id"])
+    .withMessage("Invalid document type"),
 ];
 
 module.exports = {
@@ -575,4 +810,6 @@ module.exports = {
   validateSendOTP,
   validateVerifyOTP,
   validateUpdateProfile,
+  validateVerificationDetails,
+  validateVerificationDocument,
 };

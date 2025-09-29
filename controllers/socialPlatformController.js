@@ -39,52 +39,74 @@ class SocialPlatformController {
    */
   async addSocialPlatform(req, res) {
     try {
+      console.log('🔍 [SOCIAL PLATFORM DEBUG] addSocialPlatform called');
+      console.log('🔍 [SOCIAL PLATFORM DEBUG] Request body:', req.body);
+      console.log('🔍 [SOCIAL PLATFORM DEBUG] User ID:', req.user.id);
+
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
+        console.log('🔍 [SOCIAL PLATFORM DEBUG] Validation errors:', errors.array());
         return res.status(400).json({ errors: errors.array() });
       }
 
       const userId = req.user.id;
-      const { platform_name, profile_link, followers_count, engagement_rate } =
-        req.body;
+      const { 
+        platform, 
+        username,
+        profile_link, 
+        followers_count,
+      } = req.body;
+
+      console.log('🔍 [SOCIAL PLATFORM DEBUG] Extracted data:', {
+        platform,
+        username,
+        profile_link,
+        followers_count
+      });
 
       // Check if platform already exists for this user
       const { data: existingPlatform, error: checkError } = await supabaseAdmin
         .from("social_platforms")
         .select("id")
         .eq("user_id", userId)
-        .eq("platform_name", platform_name)
+        .eq("platform_name", platform)
         .single();
 
       if (existingPlatform) {
+        console.log('🔍 [SOCIAL PLATFORM DEBUG] Platform already exists for user');
         return res.status(400).json({
           success: false,
           message: "Platform already exists for this user",
         });
       }
 
-      const { data: platform, error } = await supabaseAdmin
+      console.log('🔍 [SOCIAL PLATFORM DEBUG] Inserting platform data...');
+      const { data: platformData, error } = await supabaseAdmin
         .from("social_platforms")
         .insert({
           user_id: userId,
-          platform_name,
-          profile_link,
-          followers_count: followers_count ? parseInt(followers_count) : null,
-          engagement_rate: engagement_rate ? parseFloat(engagement_rate) : null,
+          platform_name: platform,  // Map frontend 'platform' to database 'platform_name'
+          username: username,        // Add username field for the constraint
+          profile_link: profile_link || `https://${platform}.com/${username}`, // Generate profile link if not provided
+          followers_count: parseInt(followers_count)
         })
         .select()
         .single();
 
+      console.log('🔍 [SOCIAL PLATFORM DEBUG] Insert result:', { platformData, error });
+
       if (error) {
+        console.error('Social platform insert error:', error);
         return res.status(500).json({
           success: false,
           message: "Failed to add social platform",
+          error: error.message
         });
       }
 
       res.status(201).json({
         success: true,
-        platform: platform,
+        platform: platformData,
         message: "Social platform added successfully",
       });
     } catch (error) {
@@ -282,25 +304,27 @@ class SocialPlatformController {
   }
 }
 
-// Validation middleware
+// Validation middleware - Match frontend field names
 const validateSocialPlatform = [
-  body("platform_name")
+  body("platform")
     .notEmpty()
-    .withMessage("Platform name is required")
+    .withMessage("Platform is required")
     .isLength({ min: 2, max: 50 })
-    .withMessage("Platform name must be between 2 and 50 characters"),
+    .withMessage("Platform must be between 2 and 50 characters"),
+  body("username")
+    .notEmpty()
+    .withMessage("Username is required")
+    .isLength({ min: 1, max: 100 })
+    .withMessage("Username must be between 1 and 100 characters"),
   body("profile_link")
     .optional()
     .isURL()
     .withMessage("Profile link must be a valid URL"),
   body("followers_count")
-    .optional()
+    .notEmpty()
+    .withMessage("Followers count is required")
     .isInt({ min: 0 })
     .withMessage("Followers count must be a non-negative integer"),
-  body("engagement_rate")
-    .optional()
-    .isFloat({ min: 0, max: 100 })
-    .withMessage("Engagement rate must be between 0 and 100"),
 ];
 
 const validateSocialPlatformUpdate = [

@@ -388,6 +388,28 @@ class FCMService {
   }
 
   /**
+   * Send global notification for conversation list updates
+   */
+  async sendGlobalNotification(userId, notificationData) {
+    try {
+      const notification = {
+        title: notificationData.title || 'New Update',
+        body: notificationData.body || 'You have a new update',
+        data: {
+          type: 'global_update',
+          ...notificationData.data
+        },
+        clickAction: notificationData.clickAction || '/conversations'
+      };
+
+      return await this.sendNotificationToUser(userId, notification);
+    } catch (error) {
+      console.error('❌ Error sending global notification:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
    * Clean up inactive tokens (older than 30 days)
    */
   async cleanupInactiveTokens() {

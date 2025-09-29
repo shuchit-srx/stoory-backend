@@ -17,6 +17,32 @@ class AutomatedFlowService {
   }
 
   /**
+   * Emit global conversation list updates
+   */
+  emitGlobalConversationUpdate(conversation, conversationId, updateData) {
+    if (!this.io) return;
+
+    try {
+      // Emit to both users' global update rooms
+      this.io.to(`global_${conversation.brand_owner_id}`).emit('conversation_list_updated', {
+        conversation_id: conversationId,
+        ...updateData,
+        timestamp: new Date().toISOString()
+      });
+
+      this.io.to(`global_${conversation.influencer_id}`).emit('conversation_list_updated', {
+        conversation_id: conversationId,
+        ...updateData,
+        timestamp: new Date().toISOString()
+      });
+
+      console.log("📡 [DEBUG] Global conversation list updates emitted");
+    } catch (error) {
+      console.error("❌ [DEBUG] Global update emit error:", error);
+    }
+  }
+
+  /**
    * Initialize automated conversation for a bid application
    */
   async initializeBidConversation(bidId, influencerId, proposedAmount) {
@@ -215,6 +241,23 @@ class AutomatedFlowService {
         );
       }
 
+      // Send FCM notification to influencer
+      const fcmService = require('../services/fcmService');
+      fcmService.sendFlowStateNotification(
+        conversation.id, 
+        influencerId, 
+        "influencer_responding",
+        "You have a new connection request"
+      ).then(result => {
+        if (result.success) {
+          console.log(`✅ FCM notification sent to influencer: ${result.sent} successful, ${result.failed} failed`);
+        } else {
+          console.error(`❌ FCM notification failed:`, result.error);
+        }
+      }).catch(error => {
+        console.error(`❌ FCM notification error:`, error);
+      });
+
       console.log(
         "✅ Bid conversation initialized successfully:",
         conversation.id
@@ -386,6 +429,23 @@ Please respond to confirm your interest and availability for this campaign.`,
           `Failed to create initial message: ${messageError.message}`
         );
       }
+
+      // Send FCM notification to influencer
+      const fcmService = require('../services/fcmService');
+      fcmService.sendFlowStateNotification(
+        conversation.id, 
+        influencerId, 
+        "influencer_responding",
+        "You have a new campaign connection request"
+      ).then(result => {
+        if (result.success) {
+          console.log(`✅ FCM notification sent to influencer: ${result.sent} successful, ${result.failed} failed`);
+        } else {
+          console.error(`❌ FCM notification failed:`, result.error);
+        }
+      }).catch(error => {
+        console.error(`❌ FCM notification error:`, error);
+      });
 
       console.log(
         "✅ Campaign conversation initialized successfully:",
@@ -1452,6 +1512,21 @@ Please respond to confirm your interest and availability for this campaign.`,
         audit_message: auditMessage ? createdMessages[1] : null,
       };
 
+      // Send FCM notification to the target user
+      const fcmService = require('../services/fcmService');
+      const targetUserId = newAwaitingRole === 'influencer' ? conversation.influencer_id : conversation.brand_owner_id;
+      if (targetUserId) {
+        fcmService.sendFlowStateNotification(conversationId, targetUserId, newFlowState).then(result => {
+          if (result.success) {
+            console.log(`✅ FCM brand owner action notification sent: ${result.sent} successful, ${result.failed} failed`);
+          } else {
+            console.error(`❌ FCM brand owner action notification failed:`, result.error);
+          }
+        }).catch(error => {
+          console.error(`❌ FCM brand owner action notification error:`, error);
+        });
+      }
+
       console.log("✅ [DEBUG] Brand owner action completed successfully:");
       console.log("  - Action:", action);
       console.log("  - Data:", data);
@@ -2442,6 +2517,14 @@ Please respond to confirm your interest and availability for this campaign.`,
             });
           }
 
+          // Emit global conversation list updates
+          this.emitGlobalConversationUpdate(conversation, conversationId, {
+            flow_state: newFlowState,
+            awaiting_role: newAwaitingRole,
+            chat_status: 'automated',
+            action: 'state_changed'
+          });
+
           console.log("📡 [DEBUG] WebSocket events emitted for conversation:", conversationId);
         } catch (socketError) {
           console.error("❌ [DEBUG] WebSocket emit error:", socketError);
@@ -2740,16 +2823,32 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error("Conversation not found");
       }
 
+      // Check if this is a resubmission
+      const isResubmission = conversation.flow_state === "work_in_progress" && conversation.revision_count > 0;
+      
       // Update conversation to work_submitted state
+      const updateData = {
+        flow_state: "work_submitted",
+        awaiting_role: "brand_owner",
+        work_submission: submissionData,
+        work_submitted: true,
+        submission_date: submissionData.submitted_at
+      };
+
+      // If this is a resubmission, update revision history
+      if (isResubmission) {
+        const revisionHistory = conversation.revision_history || [];
+        const lastRevision = revisionHistory[revisionHistory.length - 1];
+        if (lastRevision) {
+          lastRevision.submitted_at = new Date().toISOString();
+          lastRevision.status = "submitted";
+        }
+        updateData.revision_history = revisionHistory;
+      }
+
       const { error: updateError } = await supabaseAdmin
         .from("conversations")
-        .update({
-          flow_state: "work_submitted",
-          awaiting_role: "brand_owner",
-          work_submission: submissionData,
-          work_submitted: true,
-          submission_date: submissionData.submitted_at
-        })
+        .update(updateData)
         .eq("id", conversationId);
 
       if (updateError) {
@@ -2763,27 +2862,46 @@ Please respond to confirm your interest and availability for this campaign.`,
           conversation_id: conversationId,
           sender_id: conversation.influencer_id,
           receiver_id: conversation.brand_owner_id,
-          message: `📤 **Work Submitted**\n\n**Deliverables:** ${submissionData.deliverables}\n\n**Description:** ${submissionData.description}\n\n${submissionData.submission_notes ? `**Notes:** ${submissionData.submission_notes}` : ''}`,
+          message: `📤 **Work Submitted**${isResubmission ? ` (Revision ${conversation.revision_count || 0})` : ''}\n\n**Deliverables:** ${submissionData.deliverables}\n\n**Description:** ${submissionData.description}\n\n${submissionData.submission_notes ? `**Notes:** ${submissionData.submission_notes}` : ''}`,
           message_type: "system",
           action_required: true,
           action_data: {
             title: "🎯 **Work Review Required**",
             subtitle: "Please review the submitted work and provide feedback:",
             work_submission: submissionData,
-            buttons: [
-              {
-                id: "approve_work",
-                text: "Approve Work",
-                action: "approve_work",
-                style: "success"
-              },
-              {
-                id: "request_revision",
-                text: "Request Revision",
-                action: "request_revision",
-                style: "warning"
+            buttons: (() => {
+              const buttons = [
+                {
+                  id: "approve_work",
+                  text: "Approve Work",
+                  action: "approve_work",
+                  style: "success"
+                }
+              ];
+
+              // Check if this is final revision
+              const currentRevisionCount = conversation.revision_count || 0;
+              const maxRevisions = conversation.max_revisions || 3;
+              const isFinalRevision = currentRevisionCount >= (maxRevisions - 1);
+
+              if (isFinalRevision) {
+                buttons.push({
+                  id: "reject_final_work",
+                  text: "Reject Work (Final)",
+                  action: "reject_final_work",
+                  style: "danger"
+                });
+              } else {
+                buttons.push({
+                  id: "request_revision",
+                  text: "Request Revision",
+                  action: "request_revision",
+                  style: "warning"
+                });
               }
-            ]
+
+              return buttons;
+            })()
           }
         })
         .select()
@@ -2872,37 +2990,73 @@ Please respond to confirm your interest and availability for this campaign.`,
             .eq("id", conversation.bid_id);
         }
 
-        // Unfreeze escrow payment
+        // Release escrow funds using proper escrow service
         if (conversation.request_id) {
-          const { error: unfreezeError } = await supabaseAdmin.rpc(
-            "unfreeze_payment",
-            {
-              request_uuid: conversation.request_id,
-              influencer_uuid: conversation.influencer_id,
-              amount: 0 // Will be calculated by the RPC function
-            }
+          const escrowService = require('../services/escrowService');
+          const escrowResult = await escrowService.releaseEscrowFunds(
+            conversationId,
+            'Work approved by brand owner'
           );
 
-          if (unfreezeError) {
-            console.error("Escrow unfreeze error:", unfreezeError);
+          if (!escrowResult.success) {
+            console.error("Escrow release error:", escrowResult.error);
+          } else {
+            console.log("✅ Escrow funds released successfully");
           }
         }
 
       } else if (action === "request_revision") {
-        newFlowState = "work_in_progress";
+        // Get current revision count
+        const currentRevisionCount = conversation.revision_count || 0;
+        const maxRevisions = conversation.max_revisions || 3;
+        
+        // Check if this is the final revision
+        const isFinalRevision = currentRevisionCount >= (maxRevisions - 1);
+        
+        newFlowState = isFinalRevision ? "work_final_review" : "work_in_progress";
         newAwaitingRole = "influencer";
         
-        messageText = `🔄 **Revision Requested**\n\nPlease make the following changes and resubmit your work:${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`;
+        const revisionText = isFinalRevision 
+          ? `🔄 **Final Revision Requested** (${currentRevisionCount + 1}/${maxRevisions})\n\nThis is your final chance to make changes. Please address the feedback and resubmit your work:${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`
+          : `🔄 **Revision Requested** (${currentRevisionCount + 1}/${maxRevisions})\n\nPlease make the following changes and resubmit your work:${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`;
+        
+        messageText = revisionText;
         
         actionData = {
-          title: "📝 **Work Revision Required**",
-          subtitle: "Please address the feedback and resubmit your work:",
+          title: isFinalRevision ? "⚠️ **Final Revision Required**" : "📝 **Work Revision Required**",
+          subtitle: isFinalRevision 
+            ? "This is your final revision. Please address all feedback carefully:"
+            : "Please address the feedback and resubmit your work:",
           buttons: [
             {
               id: "resubmit_work",
-              text: "Resubmit Work",
+              text: isFinalRevision ? "Submit Final Revision" : "Resubmit Work",
               action: "resubmit_work",
+              style: isFinalRevision ? "warning" : "primary"
+            }
+          ]
+        };
+      } else if (action === "reject_final_work") {
+        newFlowState = "work_rejected";
+        newAwaitingRole = "influencer";
+        
+        messageText = `❌ **Work Rejected**\n\nAfter ${conversation.revision_count || 0} revision attempts, the work has been rejected. You can choose to continue working or reject the project.${feedback ? `\n\n**Final Feedback:** ${feedback}` : ''}`;
+        
+        actionData = {
+          title: "❌ **Work Rejected**",
+          subtitle: "The work has been rejected after maximum revisions. Choose your next action:",
+          buttons: [
+            {
+              id: "agree_continue_work",
+              text: "Agree to Continue Working",
+              action: "agree_continue_work",
               style: "primary"
+            },
+            {
+              id: "reject_project",
+              text: "Reject Project",
+              action: "reject_project",
+              style: "danger"
             }
           ]
         };
@@ -2910,14 +3064,33 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error(`Unknown review action: ${action}`);
       }
 
+      // Prepare update data
+      const updateData = {
+        flow_state: newFlowState,
+        awaiting_role: newAwaitingRole,
+        work_status: action === "approve_work" ? "approved" : "revision_requested"
+      };
+
+      // Update revision count if requesting revision
+      if (action === "request_revision") {
+        const currentRevisionCount = conversation.revision_count || 0;
+        updateData.revision_count = currentRevisionCount + 1;
+        
+        // Add to revision history
+        const revisionHistory = conversation.revision_history || [];
+        revisionHistory.push({
+          revision_number: currentRevisionCount + 1,
+          requested_at: new Date().toISOString(),
+          feedback: feedback || "",
+          status: "requested"
+        });
+        updateData.revision_history = revisionHistory;
+      }
+
       // Update conversation state
       const { error: updateError } = await supabaseAdmin
         .from("conversations")
-        .update({
-          flow_state: newFlowState,
-          awaiting_role: newAwaitingRole,
-          work_status: action === "approve_work" ? "approved" : "revision_requested"
-        })
+        .update(updateData)
         .eq("id", conversationId);
 
       if (updateError) {
@@ -2941,6 +3114,26 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       if (messageError) {
         throw new Error(`Failed to create message: ${messageError.message}`);
+      }
+
+      // Send FCM notification to influencer
+      const fcmService = require('../services/fcmService');
+      const targetUserId = newAwaitingRole === 'influencer' ? conversation.influencer_id : conversation.brand_owner_id;
+      if (targetUserId) {
+        fcmService.sendFlowStateNotification(
+          conversationId, 
+          targetUserId, 
+          newFlowState,
+          messageText
+        ).then(result => {
+          if (result.success) {
+            console.log(`✅ FCM work review notification sent: ${result.sent} successful, ${result.failed} failed`);
+          } else {
+            console.error(`❌ FCM work review notification failed:`, result.error);
+          }
+        }).catch(error => {
+          console.error(`❌ FCM work review notification error:`, error);
+        });
       }
 
       return {

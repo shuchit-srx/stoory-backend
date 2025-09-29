@@ -141,7 +141,7 @@ class MessageController {
       if (userIds.size > 0) {
         const { data: users, error: usersError } = await supabaseAdmin
           .from("users")
-          .select("id, name, role")
+          .select("id, name, role, profile_image_url")
           .in("id", Array.from(userIds));
 
         if (usersError) {
@@ -206,6 +206,7 @@ class MessageController {
                 id: otherUserId,
                 name: "Unknown User",
                 role: "unknown",
+                profile_image_url: null,
               },
               last_message: lastMessage || null,
               is_brand_owner: conv.brand_owner_id === userId,
@@ -221,6 +222,7 @@ class MessageController {
                 id: "unknown",
                 name: "Error Loading User",
                 role: "unknown",
+                profile_image_url: null,
               },
               last_message: null,
               is_brand_owner: conv.brand_owner_id === userId,
@@ -591,18 +593,39 @@ class MessageController {
       // Emit conversation list update to both users
       if (io) {
         console.log(`📡 [DEBUG] Socket emitting conversation_list_updated to both users`);
+        
+        // Emit to individual user rooms
         io.to(`user_${senderId}`).emit('conversation_list_updated', {
           conversation_id: conversationId,
           message: newMessage,
           conversation_context: conversationContext,
-          action: 'message_sent'
+          action: 'message_sent',
+          timestamp: new Date().toISOString()
         });
         
         io.to(`user_${receiverId}`).emit('conversation_list_updated', {
           conversation_id: conversationId,
           message: newMessage,
           conversation_context: conversationContext,
-          action: 'message_received'
+          action: 'message_received',
+          timestamp: new Date().toISOString()
+        });
+
+        // Emit to global update rooms
+        io.to(`global_${senderId}`).emit('conversation_list_updated', {
+          conversation_id: conversationId,
+          message: newMessage,
+          conversation_context: conversationContext,
+          action: 'message_sent',
+          timestamp: new Date().toISOString()
+        });
+        
+        io.to(`global_${receiverId}`).emit('conversation_list_updated', {
+          conversation_id: conversationId,
+          message: newMessage,
+          conversation_context: conversationContext,
+          action: 'message_received',
+          timestamp: new Date().toISOString()
         });
 
         // Emit unread count update to receiver
@@ -610,7 +633,24 @@ class MessageController {
         io.to(`user_${receiverId}`).emit('unread_count_updated', {
           conversation_id: conversationId,
           unread_count: 1, // Increment by 1
-          action: 'increment'
+          action: 'increment',
+          timestamp: new Date().toISOString()
+        });
+
+        // Emit global unread count update
+        io.to(`global_${receiverId}`).emit('unread_count_updated', {
+          conversation_id: conversationId,
+          unread_count: 1,
+          action: 'increment',
+          timestamp: new Date().toISOString()
+        });
+
+        // Emit typing status update
+        io.to(`global_${senderId}`).emit('typing_status_update', {
+          conversation_id: conversationId,
+          user_id: senderId,
+          is_typing: false,
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -677,6 +717,25 @@ class MessageController {
           success: false,
           message: "Failed to mark messages as seen",
         });
+      }
+
+      // Emit socket events for real-time updates
+      const io = req.app.get("io");
+      if (io) {
+        // Emit to conversation room
+        io.to(`conversation_${conversation_id}`).emit('messages_seen', {
+          conversationId: conversation_id,
+          userId: userId,
+          timestamp: new Date().toISOString()
+        });
+
+        // Emit to global update rooms
+        io.to(`global_${userId}`).emit('messages_seen_update', {
+          conversationId: conversation_id,
+          timestamp: new Date().toISOString()
+        });
+
+        console.log(`✅ Messages in conversation ${conversation_id} marked as seen by user ${userId}`);
       }
 
       res.json({
@@ -2045,7 +2104,7 @@ class MessageController {
       if (userIds.size > 0) {
         const { data: users, error: usersError } = await supabaseAdmin
           .from("users")
-          .select("id, name, role")
+          .select("id, name, role, profile_image_url")
           .in("id", Array.from(userIds));
 
         if (usersError) {
@@ -2211,7 +2270,7 @@ class MessageController {
       if (userIds.size > 0) {
         const { data: users, error: usersError } = await supabaseAdmin
           .from("users")
-          .select("id, name, role")
+          .select("id, name, role, profile_image_url")
           .in("id", Array.from(userIds));
 
         if (usersError) {
@@ -2398,7 +2457,7 @@ class MessageController {
       if (userIds.size > 0) {
         const { data: users, error: usersError } = await supabaseAdmin
           .from("users")
-          .select("id, name, role")
+          .select("id, name, role, profile_image_url")
           .in("id", Array.from(userIds));
 
         if (usersError) {
@@ -2539,6 +2598,7 @@ const validateSendMessage = [
     ),
 
   body("message")
+    .optional()
     .isString()
     .trim()
     .isLength({ min: 1, max: 1000 })
@@ -2548,6 +2608,19 @@ const validateSendMessage = [
     .optional()
     .isURL()
     .withMessage("Media URL must be a valid URL"),
+
+  // Custom validation: either message or media_url must be provided
+  body()
+    .custom((value, { req }) => {
+      const { message, media_url } = req.body;
+      
+      if (!message && !media_url) {
+        throw new Error("Either message or media_url must be provided");
+      }
+      
+      return true;
+    })
+    .withMessage("Either message or media_url must be provided"),
 
   // Optional fields for new conversations
   body("campaign_id")
