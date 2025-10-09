@@ -160,6 +160,7 @@ class UserController {
      * List brand owners (admin-only) with filtering and pagination
      */
     async listBrandOwners(req, res) {
+    
         try {
             const {
                 page = 1,
@@ -178,6 +179,8 @@ class UserController {
             const sortField = allowedSortBy.has(sort_by) ? sort_by : 'created_at';
             const sortAscending = (String(sort_order).toLowerCase() === 'asc');
 
+
+            // Select only core fields to avoid failures when business fields are absent
             let query = supabaseAdmin
                 .from('users')
                 .select(`
@@ -186,19 +189,16 @@ class UserController {
                     email,
                     phone,
                     role,
-                    business_name,
-                    business_type,
-                    gst_number,
                     created_at
                 `, { count: 'exact' })
                 .eq('role', 'brand_owner')
                 .eq('is_deleted', false);
 
-            // Basic search on name, business_name, email
+            // Basic search on name and email (business fields optional and excluded)
             if (search && String(search).trim().length > 0) {
                 const term = String(search).trim();
                 query = query.or(
-                    `name.ilike.%${term}%,business_name.ilike.%${term}%,email.ilike.%${term}%`
+                    `name.ilike.%${term}%,email.ilike.%${term}%`
                 );
             }
 
