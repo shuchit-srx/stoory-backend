@@ -412,12 +412,13 @@ class CampaignController {
         .select(
           `
                     *,
-                    created_by_user:users!campaigns_created_by_fkey (
+                    created_by_user:users!bids_created_by_fkey (
                         id,
+                        role,
                         name,
                         phone,
-                        profile_image_url,
-                        role
+                        email,
+                        profile_image_url
                     ),
                     requests (
                         id,

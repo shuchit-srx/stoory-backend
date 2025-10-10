@@ -398,6 +398,8 @@ class BidController {
                         id,
                         role,
                         name,
+                        phone,
+                        email,
                         profile_image_url
                     ),
                     requests (
