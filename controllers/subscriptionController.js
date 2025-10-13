@@ -27,9 +27,11 @@ class SubscriptionController {
         .order("price", { ascending: true });
 
       if (error) {
+        console.error('Failed to fetch plans:', error.message || error);
         return res.status(500).json({
           success: false,
           message: "Failed to fetch plans",
+          error: process.env.NODE_ENV === 'production' ? undefined : (error.message || String(error))
         });
       }
 
@@ -155,9 +157,38 @@ class SubscriptionController {
         startDate
       );
 
-      // Handle free subscriptions (amount = 0)
+      // Handle free subscriptions (amount = 0): create subscription immediately backend-side
       if (finalAmount === 0) {
-        // For free subscriptions, return success without creating Razorpay order
+        // Create subscription record immediately
+        const { data: subscription, error: subError } = await supabaseAdmin
+          .from("subscriptions")
+          .insert({
+            user_id: userId,
+            plan_id: plan_id,
+            status: "active",
+            start_date: startDate.toISOString(),
+            end_date: endDate.toISOString(),
+            amount_paid: 0,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (subError) {
+          return res.status(500).json({ success: false, message: "Failed to create subscription" });
+        }
+
+        // Apply coupon usage immediately for auditing
+        if (coupon_code) {
+          await supabaseAdmin.rpc("apply_coupon", {
+            p_coupon_code: coupon_code,
+            p_user_id: userId,
+            p_order_amount: parseFloat(plan.price),
+            p_subscription_id: subscription.id,
+          });
+        }
+
         return res.json({
           success: true,
           order: {
@@ -166,6 +197,7 @@ class SubscriptionController {
             currency: "INR",
             receipt: `free_rec_${Date.now().toString().slice(-8)}`,
           },
+          subscription: subscription,
           subscription_data: {
             plan_id: plan_id,
             start_date: startDate.toISOString(),

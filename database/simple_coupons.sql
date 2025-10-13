@@ -103,12 +103,12 @@ BEGIN
     END IF;
     
     -- Calculate discount
-    CASE coupon_record.type
-        WHEN 'percentage' THEN
+    CASE
+        WHEN coupon_record.type = 'percentage' THEN
             discount_amount := (p_order_amount * coupon_record.value / 100);
-        WHEN 'fixed_amount' THEN
+        WHEN coupon_record.type = 'fixed_amount' OR coupon_record.type::text = 'fixed' THEN
             discount_amount := LEAST(coupon_record.value, p_order_amount);
-        WHEN 'free_trial' THEN
+        WHEN coupon_record.type = 'free_trial' THEN
             discount_amount := p_order_amount;
     END CASE;
     

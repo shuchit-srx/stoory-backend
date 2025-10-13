@@ -1,5 +1,62 @@
 const { supabaseAdmin } = require('../supabase/client');
 
+// Helpers to shape public profiles (exclude contact/sensitive fields)
+function shapeInfluencerPublic(user) {
+    const {
+        id,
+        role,
+        name,
+        languages,
+        categories,
+        min_range,
+        max_range,
+        created_at,
+        profile_image_url,
+        bio,
+        experience_years,
+        specializations,
+        portfolio_links,
+        social_platforms
+    } = user || {};
+    return {
+        id,
+        role,
+        name,
+        languages,
+        categories,
+        min_range,
+        max_range,
+        created_at,
+        profile_image_url,
+        bio,
+        experience_years,
+        specializations,
+        portfolio_links,
+        social_platforms
+    };
+}
+
+function shapeBrandOwnerPublic(user) {
+    const {
+        id,
+        role,
+        name,
+        created_at,
+        business_name,
+        business_type,
+        business_website
+    } = user || {};
+    return {
+        id,
+        role,
+        name,
+        created_at,
+        business_name,
+        business_type,
+        business_website
+    };
+}
+
 class UserController {
     /**
      * List influencers for brand owners with filtering and pagination
@@ -515,6 +572,68 @@ class UserController {
     }
 
     /**
+     * Shape influencer public profile (exclude contact/sensitive fields)
+     */
+    shapeInfluencerPublic(user) {
+        const {
+            id,
+            role,
+            name,
+            languages,
+            categories,
+            min_range,
+            max_range,
+            created_at,
+            profile_image_url,
+            bio,
+            experience_years,
+            specializations,
+            portfolio_links,
+            social_platforms
+        } = user;
+        return {
+            id,
+            role,
+            name,
+            languages,
+            categories,
+            min_range,
+            max_range,
+            created_at,
+            profile_image_url,
+            bio,
+            experience_years,
+            specializations,
+            portfolio_links,
+            social_platforms
+        };
+    }
+
+    /**
+     * Shape brand owner public profile (exclude contact/sensitive fields)
+     */
+    shapeBrandOwnerPublic(user) {
+        const {
+            id,
+            role,
+            name,
+            created_at,
+            business_name,
+            business_type,
+            business_website
+        } = user;
+        return {
+            id,
+            role,
+            name,
+            created_at,
+            business_name,
+            business_type,
+            business_website
+        };
+    }
+
+    /**
      * Validate PAN number format
      */
     validatePANNumber(pan) {
@@ -584,6 +703,109 @@ class UserController {
                 success: false,
                 message: 'Internal server error'
             });
+        }
+    }
+
+    /**
+     * Get influencer by ID with role-based field visibility
+     */
+    async getInfluencerById(req, res) {
+        try {
+            const { id } = req.params;
+            const requesterRole = req.user.role;
+
+            const { data: user, error } = await supabaseAdmin
+                .from('users')
+                .select(`
+                    *,
+                    social_platforms (*),
+                    requests_involved:requests!influencer_id (
+                        id,
+                        status,
+                        created_at,
+                        updated_at,
+                        campaign:campaigns (
+                            id, title, status, budget, start_date, end_date, created_by, created_at, updated_at
+                        ),
+                        bid:bids (
+                            id, title, status, min_budget, max_budget, expiry_date, created_by, created_at, updated_at
+                        )
+                    )
+                `)
+                .eq('id', id)
+                .eq('role', 'influencer')
+                .eq('is_deleted', false)
+                .single();
+
+            if (error || !user) {
+                return res.status(404).json({ success: false, message: 'Influencer not found' });
+            }
+
+            // Only admin can see full profile; include campaigns/bids involvement (already embedded)
+            if (requesterRole === 'admin') {
+                const campaigns = Array.from(new Map(
+                    (user.requests_involved || [])
+                        .map(r => r.campaign)
+                        .filter(Boolean)
+                        .map(c => [c.id, c])
+                ).values());
+
+                const bids = Array.from(new Map(
+                    (user.requests_involved || [])
+                        .map(r => r.bid)
+                        .filter(Boolean)
+                        .map(b => [b.id, b])
+                ).values());
+
+                return res.json({ success: true, user, campaigns, bids });
+            }
+
+            // For non-admins, return only non-contact/public fields
+            const publicUser = shapeInfluencerPublic(user);
+            return res.json({ success: true, user: publicUser });
+        } catch (error) {
+            return res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    }
+
+    /**
+     * Get brand owner by ID with role-based field visibility
+     */
+    async getBrandOwnerById(req, res) {
+        try {
+            const { id } = req.params;
+            const requesterRole = req.user.role;
+
+            const { data: user, error } = await supabaseAdmin
+                .from('users')
+                .select(`
+                    *,
+                    campaigns_created:campaigns!created_by (
+                        id, title, status, budget, start_date, end_date, created_by, created_at, updated_at
+                    ),
+                    bids_created:bids!created_by (
+                        id, title, status, min_budget, max_budget, expiry_date, created_by, created_at, updated_at
+                    )
+                `)
+                .eq('id', id)
+                .eq('role', 'brand_owner')
+                .eq('is_deleted', false)
+                .single();
+
+            if (error || !user) {
+                return res.status(404).json({ success: false, message: 'Brand owner not found' });
+            }
+
+            // Only admin can see full profile; include campaigns and bids created by brand owner (already embedded)
+            if (requesterRole === 'admin') {
+                return res.json({ success: true, user, campaigns: user.campaigns_created || [], bids: user.bids_created || [] });
+            }
+
+            // For non-admins, return only non-contact/public fields
+            const publicUser = shapeBrandOwnerPublic(user);
+            return res.json({ success: true, user: publicUser });
+        } catch (error) {
+            return res.status(500).json({ success: false, message: 'Internal server error' });
         }
     }
 }

@@ -23,6 +23,10 @@ router.get('/verification-status', UserController.getVerificationStatus);
 router.put('/verification-details', validateVerificationDetails, UserController.updateVerificationDetails);
 router.post('/verification-document', upload.single('verification_document'), validateVerificationDocument, UserController.uploadVerificationDocument);
 
+// Public profile lookups with role-based visibility
+router.get('/influencers/:id', UserController.getInfluencerById);
+router.get('/brand-owners/:id', UserController.getBrandOwnerById);
+
 module.exports = router;
 
 

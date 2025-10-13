@@ -1,3 +1,33 @@
+-- Plans table (if not exists)
+CREATE TABLE IF NOT EXISTS plans (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    description TEXT,
+    price NUMERIC(10,2) NOT NULL,
+    currency TEXT DEFAULT 'INR',
+    duration_months INTEGER NOT NULL DEFAULT 1,
+    features TEXT[],
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Seed basic plans if table is empty
+INSERT INTO plans (name, description, price, duration_months, features)
+SELECT 'Basic', 'Basic access', 0.00, 1, ARRAY['Limited discovery']
+WHERE NOT EXISTS (SELECT 1 FROM plans);
+
+INSERT INTO plans (name, description, price, duration_months, features)
+SELECT 'Premium Monthly', 'Premium access monthly', 999.00, 1, ARRAY['Full discovery','Priority support']
+WHERE NOT EXISTS (
+    SELECT 1 FROM plans p WHERE p.name = 'Premium Monthly'
+);
+
+INSERT INTO plans (name, description, price, duration_months, features)
+SELECT 'Premium Quarterly', 'Premium access 3 months', 2499.00, 3, ARRAY['Full discovery','Priority support','Discounted']
+WHERE NOT EXISTS (
+    SELECT 1 FROM plans p WHERE p.name = 'Premium Quarterly'
+);
 -- User reporting and blocking feature
 DO $$ BEGIN
   CREATE TYPE report_status AS ENUM ('open', 'in_review', 'resolved', 'dismissed');
