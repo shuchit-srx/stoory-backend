@@ -444,6 +444,15 @@ All endpoints require authentication.
 | POST | `/cancel` | Cancel subscription | - | `{ "success": boolean, "subscription": object }` |
 | GET | `/history` | Get subscription history | - | `{ "success": boolean, "history": array }` |
 
+#### Admin Plan Management
+
+| Method | Endpoint | Description | Required Role | Request Body | Response |
+|--------|----------|-------------|---------------|--------------|----------|
+| GET | `/admin/plans` | List all plans | `admin` | - | `{ "success": boolean, "plans": array }` |
+| POST | `/admin/plans` | Create plan | `admin` | `{ "name": "string", "description": "string?", "price": number, "currency": "string", "duration_months": number, "features": string[], "is_active": boolean }` | `{ "success": boolean, "plan": object }` |
+| PUT | `/admin/plans/:id` | Update plan | `admin` | `{ "name"?: "string", "description"?: "string", "price"?: number, "currency"?: "string", "duration_months"?: number, "features"?: string[], "is_active"?: boolean }` | `{ "success": boolean, "plan": object }` |
+| DELETE | `/admin/plans/:id` | Delete plan | `admin` | - | `{ "success": boolean }` |
+
 ---
 
 ## File & Attachment Management

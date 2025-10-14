@@ -1499,6 +1499,138 @@ class SubscriptionController {
   }
 
   /**
+   * Admin: List all plans (active and inactive)
+   */
+  async adminListPlans(req, res) {
+    try {
+      const { data: plans, error } = await supabaseAdmin
+        .from("plans")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        return res.status(500).json({ success: false, message: "Failed to fetch plans" });
+      }
+
+      return res.json({ success: true, plans: plans || [] });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
+  /**
+   * Admin: Create a new plan
+   */
+  async adminCreatePlan(req, res) {
+    try {
+      const {
+        name,
+        description,
+        price,
+        currency = 'INR',
+        duration_months,
+        features = [],
+        is_active = true
+      } = req.body;
+
+      if (!name || price === undefined || duration_months === undefined) {
+        return res.status(400).json({ success: false, message: "name, price, duration_months are required" });
+      }
+
+      const { data: plan, error } = await supabaseAdmin
+        .from('plans')
+        .insert({
+          name,
+          description: description || null,
+          price: parseFloat(price),
+          currency,
+          duration_months: parseInt(duration_months),
+          features: Array.isArray(features) ? features : [],
+          is_active: Boolean(is_active),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select('*')
+        .single();
+
+      if (error) {
+        return res.status(500).json({ success: false, message: "Failed to create plan" });
+      }
+
+      return res.status(201).json({ success: true, plan });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
+  /**
+   * Admin: Update an existing plan
+   */
+  async adminUpdatePlan(req, res) {
+    try {
+      const { id } = req.params;
+      const {
+        name,
+        description,
+        price,
+        currency,
+        duration_months,
+        features,
+        is_active
+      } = req.body;
+
+      const update = {
+        name,
+        description,
+        price: price !== undefined ? parseFloat(price) : undefined,
+        currency,
+        duration_months: duration_months !== undefined ? parseInt(duration_months) : undefined,
+        features: Array.isArray(features) ? features : undefined,
+        is_active: is_active !== undefined ? Boolean(is_active) : undefined,
+        updated_at: new Date().toISOString()
+      };
+      Object.keys(update).forEach(k => update[k] === undefined && delete update[k]);
+
+      const { data: plan, error } = await supabaseAdmin
+        .from('plans')
+        .update(update)
+        .eq('id', id)
+        .select('*')
+        .single();
+
+      if (error || !plan) {
+        return res.status(404).json({ success: false, message: "Plan not found or update failed" });
+      }
+
+      return res.json({ success: true, plan });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
+  /**
+   * Admin: Delete a plan
+   */
+  async adminDeletePlan(req, res) {
+    try {
+      const { id } = req.params;
+
+      const { error } = await supabaseAdmin
+        .from('plans')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        return res.status(500).json({ success: false, message: "Failed to delete plan" });
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
+  /**
    * Update payment status manually (for frontend polling fallback)
    */
   async updatePaymentStatus(req, res) {

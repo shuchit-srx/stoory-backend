@@ -19,6 +19,12 @@ router.post('/update-payment-status', authService.authenticateToken, Subscriptio
 router.post('/cancel', authService.authenticateToken, SubscriptionController.cancelSubscription);
 router.get('/history', authService.authenticateToken, SubscriptionController.getSubscriptionHistory);
 
+// Admin plan management routes
+router.get('/admin/plans', authService.authenticateToken, authService.requireRole('admin'), SubscriptionController.adminListPlans);
+router.post('/admin/plans', authService.authenticateToken, authService.requireRole('admin'), SubscriptionController.adminCreatePlan);
+router.put('/admin/plans/:id', authService.authenticateToken, authService.requireRole('admin'), SubscriptionController.adminUpdatePlan);
+router.delete('/admin/plans/:id', authService.authenticateToken, authService.requireRole('admin'), SubscriptionController.adminDeletePlan);
+
 // Test endpoints (for testing only)
 router.post('/test-create', authService.authenticateToken, SubscriptionController.createTestSubscription);
 router.post('/test-payment', authService.authenticateToken, SubscriptionController.processTestPayment);
