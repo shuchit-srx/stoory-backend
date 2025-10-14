@@ -8,6 +8,7 @@ class SocialPlatformController {
   async getSocialPlatforms(req, res) {
     try {
       const userId = req.user.id;
+      console.log(userId)
 
       const { data: platforms, error } = await supabaseAdmin
         .from("social_platforms")

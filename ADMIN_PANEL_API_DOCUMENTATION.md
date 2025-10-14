@@ -167,6 +167,26 @@ All endpoints require authentication and specific role permissions.
 }
 ```
 
+### Admin-only extra fields (returned in listings and details)
+
+- Influencers (only when requester is `admin`):
+```json
+{
+  "bids_count": 0,
+  "campaigns_count": 0
+}
+```
+
+- Brand owners (only when requester is `admin`):
+```json
+{
+  "created_bids_count": 0,
+  "created_campaigns_count": 0,
+  "requests_to_bids_count": 0,
+  "requests_to_campaigns_count": 0
+}
+```
+
 ---
 
 ## Campaign Management
@@ -285,6 +305,47 @@ All endpoints require authentication. Most operations require specific roles.
 ```
 
 ---
+
+## Report Management
+
+### Base URL: `/api/reports`
+
+All endpoints require authentication.
+
+#### User Endpoints
+
+| Method | Endpoint | Description | Request Body | Response |
+|--------|----------|-------------|--------------|----------|
+| POST | `/` | Create a user report | `{ "reported_user_id": "string", "conversation_id": "string?", "reason_id": "string?", "reason_text": "string?" }` | `{ "success": boolean, "report": object }` |
+| GET | `/mine` | Get my reports | Query: `page`, `limit` | `{ "success": boolean, "reports": array, "pagination": object }` |
+
+#### Admin Endpoints
+
+| Method | Endpoint | Description | Request Body | Response |
+|--------|----------|-------------|--------------|----------|
+| GET | `/` | List reports (filterable) | Query: `page`, `limit`, `status`, `reported_user_id` | `{ "success": boolean, "reports": array, "counts": array, "pagination": object }` |
+| GET | `/reasons` | List report reasons | - | `{ "success": boolean, "reasons": array }` |
+| POST | `/reasons` | Create report reason | `{ "title": "string", "description": "string?", "is_active": boolean, "position": number }` | `{ "success": boolean, "reason": object }` |
+| PUT | `/reasons/:id` | Update report reason | `{ "title": "string?", "description": "string?", "is_active": boolean?, "position": number? }` | `{ "success": boolean, "reason": object }` |
+| DELETE | `/reasons/:id` | Delete report reason | - | `{ "success": boolean }` |
+| POST | `/block` | Block user | `{ "user_id": "string", "reason": "string?", "blocked_until": "ISO8601?" }` | `{ "success": boolean, "user": object }` |
+| POST | `/unblock` | Unblock user | `{ "user_id": "string" }` | `{ "success": boolean, "user": object }` |
+
+#### Report Object
+
+```json
+{
+  "id": "string",
+  "reporter_id": "string",
+  "reported_user_id": "string",
+  "conversation_id": "string|null",
+  "reason_id": "string|null",
+  "reason_text": "string|null",
+  "status": "open|in_review|resolved|dismissed",
+  "created_at": "string",
+  "report_reasons": { "id": "string", "title": "string" }
+}
+```
 
 ## Payment & Wallet Management
 

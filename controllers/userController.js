@@ -183,6 +183,17 @@ class UserController {
                 return res.status(500).json({ success: false, message: 'Failed to fetch influencers' });
             }
 
+            // Admin-only: fetch involvement counts (bids, campaigns) via RPC
+            const influencerIds = (influencers || []).map(i => i.id);
+            let countsByInfluencer = new Map();
+            if (req.user.role === 'admin' && influencerIds.length > 0) {
+                const { data: countsData } = await supabaseAdmin
+                    .rpc('get_influencer_involvement_counts', { ids: influencerIds });
+                if (Array.isArray(countsData)) {
+                    countsData.forEach(row => countsByInfluencer.set(row.influencer_id, row));
+                }
+            }
+
             // Process influencers data based on subscription status
             let processedInfluencers = influencers || [];
             
@@ -192,6 +203,18 @@ class UserController {
                     ...influencer,
                     name: null
                 }));
+            }
+
+            // Attach counts (admin only)
+            if (req.user.role === 'admin') {
+                processedInfluencers = processedInfluencers.map(influencer => {
+                    const c = countsByInfluencer.get(influencer.id) || {};
+                    return {
+                        ...influencer,
+                        bids_count: Number(c.bids_count || 0),
+                        campaigns_count: Number(c.campaigns_count || 0)
+                    };
+                });
             }
 
             return res.json({
@@ -259,12 +282,30 @@ class UserController {
                 );
             }
 
-            const { data: brandOwners, error, count } = await query
+            let { data: brandOwners, error, count } = await query
                 .order(sortField, { ascending: sortAscending })
                 .range(offset, offset + limitNum - 1);
 
             if (error) {
                 return res.status(500).json({ success: false, message: 'Failed to fetch brand owners' });
+            }
+
+            // Admin-only: fetch brand owner involvement counts via RPC
+            if (req.user.role === 'admin' && (brandOwners?.length || 0) > 0) {
+                const ids = brandOwners.map(b => b.id);
+                const { data: countsData } = await supabaseAdmin
+                    .rpc('get_brand_owner_involvement_counts', { ids });
+                const map = new Map((countsData || []).map(c => [c.brand_owner_id, c]));
+                brandOwners = brandOwners.map(b => {
+                    const c = map.get(b.id) || {};
+                    return {
+                        ...b,
+                        created_bids_count: Number(c.created_bids_count || 0),
+                        created_campaigns_count: Number(c.created_campaigns_count || 0),
+                        requests_to_bids_count: Number(c.requests_to_bids_count || 0),
+                        requests_to_campaigns_count: Number(c.requests_to_campaigns_count || 0)
+                    };
+                });
             }
 
             return res.json({
@@ -757,7 +798,17 @@ class UserController {
                         .map(b => [b.id, b])
                 ).values());
 
-                return res.json({ success: true, user, campaigns, bids });
+                // Fetch counts via RPC for this influencer
+                const { data: [cnt] = [] } = await supabaseAdmin
+                    .rpc('get_influencer_involvement_counts', { ids: [id] });
+
+                const userWithCounts = {
+                    ...user,
+                    bids_count: Number(cnt?.bids_count || 0),
+                    campaigns_count: Number(cnt?.campaigns_count || 0)
+                };
+
+                return res.json({ success: true, user: userWithCounts, campaigns, bids });
             }
 
             // For non-admins, return only non-contact/public fields
@@ -796,9 +847,20 @@ class UserController {
                 return res.status(404).json({ success: false, message: 'Brand owner not found' });
             }
 
-            // Only admin can see full profile; include campaigns and bids created by brand owner (already embedded)
+            // Only admin can see full profile; include campaigns/bids created and counts
             if (requesterRole === 'admin') {
-                return res.json({ success: true, user, campaigns: user.campaigns_created || [], bids: user.bids_created || [] });
+                const { data: [cnt] = [] } = await supabaseAdmin
+                    .rpc('get_brand_owner_involvement_counts', { ids: [id] });
+
+                const userWithCounts = {
+                    ...user,
+                    created_bids_count: Number(cnt?.created_bids_count || 0),
+                    created_campaigns_count: Number(cnt?.created_campaigns_count || 0),
+                    requests_to_bids_count: Number(cnt?.requests_to_bids_count || 0),
+                    requests_to_campaigns_count: Number(cnt?.requests_to_campaigns_count || 0)
+                };
+
+                return res.json({ success: true, user: userWithCounts, campaigns: user.campaigns_created || [], bids: user.bids_created || [] });
             }
 
             // For non-admins, return only non-contact/public fields
