@@ -760,6 +760,18 @@ class AuthService {
           if (userData.business_registration_number) userCreateData.business_registration_number = userData.business_registration_number;
           if (userData.business_address) userCreateData.business_address = userData.business_address;
           if (userData.business_website) userCreateData.business_website = userData.business_website;
+
+          // Brand profile fields (for brand owners)
+          if (userData.brand_name) userCreateData.brand_name = userData.brand_name;
+          if (userData.brand_description) userCreateData.brand_description = userData.brand_description;
+
+          // Prefer explicit profile_image_url; fall back to brand_profile_image_url if provided
+          if (userData.profile_image_url) {
+            userCreateData.profile_image_url = userData.profile_image_url;
+          } else if (userData.brand_profile_image_url) {
+            userCreateData.brand_profile_image_url = userData.brand_profile_image_url;
+            userCreateData.profile_image_url = userData.brand_profile_image_url;
+          }
         }
 
         const { data: newUser, error: createError } = await supabaseAdmin
@@ -829,6 +841,13 @@ class AuthService {
             business_registration_number: userData.business_registration_number,
             business_address: userData.business_address,
             business_website: userData.business_website,
+
+            // Brand profile fields (for brand owners)
+            brand_name: userData.brand_name,
+            brand_description: userData.brand_description,
+            brand_profile_image_url: userData.brand_profile_image_url,
+            // Prefer explicit profile image when provided; otherwise mirror from brand
+            profile_image_url: userData.profile_image_url || userData.brand_profile_image_url,
           };
 
           // Remove undefined values

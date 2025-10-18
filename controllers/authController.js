@@ -67,15 +67,10 @@ class AuthController {
       isValid = status === "VALID" || data?.transaction_status === 1;
       responseCode = data?.response_code ?? data?.transaction_status ?? responseCode;
 
+      // Return only the PAN verification result payload
       return res.json({
         success: true,
-        verified: !!isValid,
-        pan: pan,
-        holder_name: holderName,
-        vendor: "zoop",
-        response_code: responseCode,
-        task_id: data?.task_id,
-        raw: data,
+        result: resultObj,
       });
     } catch (error) {
       const httpStatus = error?.response?.status || 500;
@@ -784,6 +779,19 @@ const validateUpdateProfile = [
     .isArray()
     .withMessage("Categories must be an array"),
   // New verification fields
+  // Brand profile fields (for brand owners)
+  body("brand_name")
+    .optional()
+    .isLength({ min: 2, max: 200 })
+    .withMessage("Brand name must be between 2 and 200 characters"),
+  body("brand_description")
+    .optional()
+    .isLength({ min: 0, max: 1000 })
+    .withMessage("Brand description must be up to 1000 characters"),
+  body("brand_profile_image_url")
+    .optional()
+    .isString()
+    .withMessage("Brand profile image URL must be a string"),
   body("date_of_birth")
     .optional()
     .isISO8601()
