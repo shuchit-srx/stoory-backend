@@ -40,13 +40,37 @@ const io = socketIo(server, {
           "http://localhost:5173",
           "http://localhost:8081",
           "http://localhost:8080",
-          /^http:\/\/192\.168\.\d+\.\d+:\d+$/,
-          /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/,
-          /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+$/,
+          /^http:\/\/192\.168\.\d+\.\d+:\d+$/, // Local network
+          /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/, // Local network
+          /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+$/, // Local network
+          // Production URLs - add your actual production frontend URL
+          /^https:\/\/.*\.railway\.app$/, // Railway deployments
+          /^https:\/\/.*\.onrender\.com$/, // Render deployments
+          /^https:\/\/.*\.vercel\.app$/, // Vercel deployments
+          /^https:\/\/.*\.netlify\.app$/, // Netlify deployments
         ],
     methods: ["GET", "POST"],
     credentials: true,
+    allowedHeaders: ["Authorization", "Content-Type"],
   },
+  transports: ['websocket', 'polling'], // Support both WebSocket and polling
+  allowEIO3: true, // Support legacy Socket.IO clients
+  
+  // Connection timeout (30 seconds to establish connection)
+  connectTimeout: 30000,
+  
+  // Enable heartbeat to keep connections alive
+  // Wait 60 seconds for client response to ping
+  pingTimeout: 60000,
+  
+  // Send ping every 25 seconds to check connection health
+  pingInterval: 25000,
+  
+  // Max HTTP buffer size (for large messages like images)
+  maxHttpBufferSize: 1e8, // 100MB
+  
+  // Upgrade timeout from HTTP to WebSocket
+  upgradeTimeout: 10000,
 });
 
 // Health check endpoint (before security middleware)
@@ -398,7 +422,6 @@ app.use(morgan("combined"));
 
 // Add general request logging
 app.use((req, res, next) => {
-  console.log("🚀 [DEBUG] Request received:", req.method, req.url);
   next();
 });
 
@@ -480,25 +503,27 @@ app.post("/test-message", async (req, res) => {
 
     // Get conversation context
     const { supabaseAdmin } = require('./supabase/client');
-    const { data: conversation, error: convError } = await supabaseAdmin
+  const { data: conversation, error: convError } = await supabaseAdmin
       .from("conversations")
-      .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
+      .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data")
       .eq("id", conversationId)
       .single();
 
     if (convError) {
-      console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to fetch conversation context"
+      });
     }
 
     // Prepare conversation context
-    const conversationContext = conversation ? {
+  const conversationContext = conversation ? {
       id: conversation.id,
       chat_status: conversation.chat_status,
       flow_state: conversation.flow_state,
       awaiting_role: conversation.awaiting_role,
       conversation_type: conversation.campaign_id ? 'campaign' : 
                         conversation.bid_id ? 'bid' : 'direct',
-      automation_enabled: conversation.automation_enabled || false,
       current_action_data: conversation.current_action_data
     } : null;
 
@@ -655,9 +680,12 @@ const notificationService = require('./services/notificationService');
 notificationService.setMessageHandler(messageHandler);
 
 io.on("connection", (socket) => {
-  console.log("🔌 [DEBUG] New client connected:", socket.id);
-  console.log("🔌 [DEBUG] Socket.IO instance available:", !!io);
   messageHandler.handleConnection(socket);
+  
+  socket.on("disconnect", (reason) => {
+    console.log(`❌ Client disconnected: ${socket.id}, reason: ${reason}`);
+    console.log(`📊 Remaining connections: ${io.engine.clientsCount}`);
+  });
 });
 
 // Add debugging for Socket.IO events
@@ -668,6 +696,14 @@ io.engine.on("connection_error", (err) => {
 io.on("error", (err) => {
   console.error("❌ [DEBUG] Socket.IO error:", err);
 });
+
+// Monitor connection health and log periodically
+setInterval(() => {
+  const clients = io.engine.clientsCount;
+  if (clients > 0) {
+    console.log(`📊 Socket.IO Health Check - Active connections: ${clients}`);
+  }
+}, 60000); // Log every minute
 
 // Graceful shutdown
 process.on("SIGTERM", () => {

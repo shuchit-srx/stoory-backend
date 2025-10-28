@@ -78,18 +78,22 @@ class MessageHandler {
         socket.on('send_message', async (data) => {
             try {
                 const { conversationId, senderId, receiverId, message, mediaUrl, attachmentMetadata } = data;
-                console.log("🔍 [DEBUG] Socket send_message received:", { conversationId, senderId, receiverId, hasAttachment: !!mediaUrl });
 
                 // Get conversation context first
                 const { data: conversation, error: convError } = await supabaseAdmin
                     .from('conversations')
-                    .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+                    .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
                     .eq('id', conversationId)
                     .single();
 
                 if (convError) {
-                    console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
                     socket.emit('message_error', { error: 'Failed to fetch conversation context' });
+                    return;
+                }
+
+                // Prevent messaging on closed conversations
+                if (conversation && (conversation.chat_status === 'closed' || conversation.flow_state === 'chat_closed')) {
+                    socket.emit('message_error', { error: 'Conversation is closed. Messaging is disabled.' });
                     return;
                 }
 
@@ -115,12 +119,9 @@ class MessageHandler {
                     .single();
 
                 if (error) {
-                    console.error("❌ [DEBUG] Failed to save message via socket:", error);
                     socket.emit('message_error', { error: 'Failed to save message' });
                     return;
                 }
-
-                console.log("✅ [DEBUG] Message saved via socket, emitting events");
 
                 // Prepare conversation context
                 const conversationContext = {
@@ -130,7 +131,6 @@ class MessageHandler {
                     awaiting_role: conversation.awaiting_role,
                     conversation_type: conversation.campaign_id ? 'campaign' : 
                                       conversation.bid_id ? 'bid' : 'direct',
-                    automation_enabled: conversation.automation_enabled || false,
                     current_action_data: conversation.current_action_data
                 };
 
@@ -152,7 +152,6 @@ class MessageHandler {
                 }
 
                 // Emit message to conversation room with context
-                console.log(`📡 [DEBUG] Socket emitting new_message to conversation_${conversationId}`);
                 this.io.to(`conversation_${conversationId}`).emit('new_message', {
                     conversation_id: conversationId,
                     message: savedMessage,
@@ -160,7 +159,6 @@ class MessageHandler {
                 });
 
                 // Store notification in database and emit to receiver
-                console.log(`📡 [DEBUG] Storing and emitting notification to user_${receiverId}`);
                 
                 // Store notification in database
                 const notificationService = require('../services/notificationService');
@@ -230,7 +228,6 @@ class MessageHandler {
                 });
 
                 // Emit conversation list update to both users
-                console.log(`📡 [DEBUG] Socket emitting conversation_list_updated to both users`);
                 this.io.to(`user_${senderId}`).emit('conversation_list_updated', {
                     conversation_id: conversationId,
                     message: savedMessage,
@@ -246,7 +243,6 @@ class MessageHandler {
                 });
 
                 // Emit unread count update to receiver
-                console.log(`📡 [DEBUG] Socket emitting unread_count_updated to user_${receiverId}`);
                 this.io.to(`user_${receiverId}`).emit('unread_count_updated', {
                     conversation_id: conversationId,
                     unread_count: 1, // Increment by 1
@@ -518,7 +514,7 @@ class MessageHandler {
         try {
             const { data: conversation, error } = await supabaseAdmin
                 .from('conversations')
-                .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+                    .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
                 .eq('id', conversationId)
                 .single();
 
@@ -534,7 +530,7 @@ class MessageHandler {
                 awaiting_role: conversation.awaiting_role,
                 conversation_type: conversation.campaign_id ? 'campaign' : 
                                   conversation.bid_id ? 'bid' : 'direct',
-                automation_enabled: conversation.automation_enabled || false,
+                    
                 current_action_data: conversation.current_action_data
             };
         } catch (error) {

@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../supabase/client");
+const notificationService = require("../services/notificationService");
 
 const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID || "00000000-0000-0000-0000-000000000000";
 
@@ -59,6 +60,38 @@ class AdminPaymentFlowService {
 
       if (paymentError) {
         throw new Error(`Failed to create payment record: ${paymentError.message}`);
+      }
+
+      // Create persistent admin notifications for advance processing
+      try {
+        const { data: admins } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .eq('role', 'admin')
+          .eq('is_deleted', false);
+
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 60); // persist ~60 days
+
+        if (Array.isArray(admins)) {
+          for (const admin of admins) {
+            await notificationService.storeNotification({
+              user_id: admin.id,
+              type: 'admin_payment_pending_advance',
+              title: 'Advance payment pending release',
+              message: 'A new advance payment is awaiting admin release',
+              priority: 'high',
+              expires_at: expiresAt.toISOString(),
+              data: {
+                conversation_id: conversationId,
+                admin_payment_tracking_id: paymentRecord.id,
+                advance_amount_paise: paymentBreakdown.advance_amount_paise
+              }
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ Failed to create admin notifications for advance pending:', e.message);
       }
 
       // Update conversation state
@@ -302,16 +335,36 @@ class AdminPaymentFlowService {
         })
         .eq("id", paymentRecordId);
 
-      // Update advance transaction status
-      await supabaseAdmin
+      // Update advance transaction status and credit influencer wallet
+      const { data: advanceTx, error: fetchTxError } = await supabaseAdmin
         .from("transactions")
-        .update({
-          status: "completed",
-          razorpay_payment_id: `admin_advance_${paymentRecordId}`,
-          updated_at: new Date().toISOString()
-        })
+        .select("*")
         .eq("admin_payment_tracking_id", paymentRecordId)
-        .eq("payment_stage", "advance");
+        .eq("payment_stage", "advance")
+        .single();
+
+      if (!fetchTxError && advanceTx) {
+        // Credit wallet balance
+        await supabaseAdmin.rpc('wallet_credit_by_paise', {
+          p_user_id: paymentRecord.influencer_id,
+          p_amount_paise: advanceTx.amount_paise,
+          p_meta: {
+            conversation_id: paymentRecord.conversation_id,
+            stage: 'advance',
+            admin_payment_tracking_id: paymentRecordId
+          }
+        }).catch(() => {});
+
+        await supabaseAdmin
+          .from("transactions")
+          .update({
+            status: "completed",
+            direction: 'credit',
+            razorpay_payment_id: `admin_advance_${paymentRecordId}`,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", advanceTx.id);
+      }
 
       // Update conversation state
       await supabaseAdmin
@@ -324,6 +377,25 @@ class AdminPaymentFlowService {
 
       // Send advance payment confirmation message
       await this.sendAdvancePaymentConfirmation(paymentRecord, screenshotUrl);
+
+      // Resolve admin pending advance notifications
+      try {
+        const { data: admins } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .eq('role', 'admin')
+          .eq('is_deleted', false);
+        if (Array.isArray(admins)) {
+          for (const admin of admins) {
+            await supabaseAdmin
+              .from('notifications')
+              .update({ status: 'delivered', read_at: new Date().toISOString() })
+              .eq('user_id', admin.id)
+              .eq('type', 'admin_payment_pending_advance')
+              .eq('data->>admin_payment_tracking_id', String(paymentRecordId));
+          }
+        }
+      } catch {}
 
       return {
         success: true,
@@ -364,7 +436,7 @@ class AdminPaymentFlowService {
           sender_id: SYSTEM_USER_ID,
           receiver_id: conversation.brand_owner_id,
           message: message,
-          message_type: "advance_payment_confirmed",
+          message_type: "system_info",
           media_url: screenshotUrl,
           action_required: false
         },
@@ -373,24 +445,9 @@ class AdminPaymentFlowService {
           sender_id: SYSTEM_USER_ID,
           receiver_id: conversation.influencer_id,
           message: message,
-          message_type: "advance_payment_confirmed",
+          message_type: "system_info",
           media_url: screenshotUrl,
-          action_required: true,
-          action_data: {
-            title: "🚀 Start Working",
-            subtitle: "Advance payment received! Begin your work.",
-            buttons: [
-              {
-                id: "start_work",
-                text: "Start Working",
-                style: "success",
-                action: "start_work"
-              }
-            ],
-            flow_state: "advance_payment_sent",
-            message_type: "work_start_prompt",
-            visible_to: "influencer"
-          }
+          action_required: false
         }
       ];
 
@@ -457,16 +514,35 @@ class AdminPaymentFlowService {
         })
         .eq("id", paymentRecordId);
 
-      // Update final transaction status
-      await supabaseAdmin
+      // Update final transaction status and credit wallet
+      const { data: finalTx, error: fetchFinalTxError } = await supabaseAdmin
         .from("transactions")
-        .update({
-          status: "completed",
-          razorpay_payment_id: `admin_final_${paymentRecordId}`,
-          updated_at: new Date().toISOString()
-        })
+        .select("*")
         .eq("admin_payment_tracking_id", paymentRecordId)
-        .eq("payment_stage", "final");
+        .eq("payment_stage", "final")
+        .single();
+
+      if (!fetchFinalTxError && finalTx) {
+        await supabaseAdmin.rpc('wallet_credit_by_paise', {
+          p_user_id: paymentRecord.influencer_id,
+          p_amount_paise: finalTx.amount_paise,
+          p_meta: {
+            conversation_id: paymentRecord.conversation_id,
+            stage: 'final',
+            admin_payment_tracking_id: paymentRecordId
+          }
+        }).catch(() => {});
+
+        await supabaseAdmin
+          .from("transactions")
+          .update({
+            status: "completed",
+            direction: 'credit',
+            razorpay_payment_id: `admin_final_${paymentRecordId}`,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", finalTx.id);
+      }
 
       // Update conversation state to closed
       await supabaseAdmin
@@ -480,6 +556,25 @@ class AdminPaymentFlowService {
 
       // Send final payment confirmation message
       await this.sendFinalPaymentConfirmation(paymentRecord, screenshotUrl);
+
+      // Resolve admin pending final notifications
+      try {
+        const { data: admins } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .eq('role', 'admin')
+          .eq('is_deleted', false);
+        if (Array.isArray(admins)) {
+          for (const admin of admins) {
+            await supabaseAdmin
+              .from('notifications')
+              .update({ status: 'delivered', read_at: new Date().toISOString() })
+              .eq('user_id', admin.id)
+              .eq('type', 'admin_payment_pending_final')
+              .eq('data->>admin_payment_tracking_id', String(paymentRecordId));
+          }
+        }
+      } catch {}
 
       return {
         success: true,
@@ -524,7 +619,7 @@ class AdminPaymentFlowService {
           sender_id: SYSTEM_USER_ID,
           receiver_id: conversation.brand_owner_id,
           message: message,
-          message_type: "final_payment_confirmed",
+          message_type: "system_info",
           media_url: screenshotUrl,
           action_required: false
         },
@@ -533,7 +628,7 @@ class AdminPaymentFlowService {
           sender_id: SYSTEM_USER_ID,
           receiver_id: conversation.influencer_id,
           message: message,
-          message_type: "final_payment_confirmed",
+          message_type: "system_info",
           media_url: screenshotUrl,
           action_required: false
         }

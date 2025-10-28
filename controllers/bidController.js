@@ -856,58 +856,40 @@ class BidController {
       const buttonToMap = button_id || action;
       
       if (buttonToMap) {
-        console.log("🔍 [DEBUG] Processing brand owner button mapping for:", buttonToMap);
-        console.log("🔍 [DEBUG] Original action:", action);
-        console.log("🔍 [DEBUG] Original data:", data);
-        console.log("🔍 [DEBUG] Additional data:", additional_data);
-        console.log("🔍 [DEBUG] Button ID provided:", !!button_id);
-        console.log("🔍 [DEBUG] Using action as button ID:", !button_id);
 
         // Map button IDs to automated flow actions (same logic as message controller)
         if (buttonToMap === 'agree_negotiation') {
           mappedAction = 'handle_negotiation';
           mappedData = { action: 'agree' };
-          console.log("🔄 [DEBUG] Mapped agree_negotiation to handle_negotiation with action: agree");
         } else if (buttonToMap === 'reject_negotiation') {
           mappedAction = 'handle_negotiation';
           mappedData = { action: 'reject' };
-          console.log("🔄 [DEBUG] Mapped reject_negotiation to handle_negotiation with action: reject");
         } else if (buttonToMap === 'send_negotiated_price') {
           mappedAction = 'send_negotiated_price';
           mappedData = { price: additional_data?.price };
-          console.log("🔄 [DEBUG] Mapped send_negotiated_price with price:", additional_data?.price);
         } else if (buttonToMap === 'send_project_details') {
           mappedAction = 'send_project_details';
           mappedData = { details: additional_data?.details };
-          console.log("🔄 [DEBUG] Mapped send_project_details with details:", additional_data?.details);
         } else if (buttonToMap === 'send_price_offer') {
           mappedAction = 'send_price_offer';
           mappedData = { price: additional_data?.price };
-          console.log("🔄 [DEBUG] Mapped send_price_offer with price:", additional_data?.price);
         } else if (buttonToMap === 'proceed_to_payment') {
           mappedAction = 'proceed_to_payment';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped proceed_to_payment");
         } else if (buttonToMap === 'accept_counter_offer') {
           mappedAction = 'accept_counter_offer';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_counter_offer");
         } else if (buttonToMap === 'reject_counter_offer') {
           mappedAction = 'reject_counter_offer';
           mappedData = { price: additional_data?.price };
-          console.log("🔄 [DEBUG] Mapped reject_counter_offer with price:", additional_data?.price);
         } else if (buttonToMap === 'make_final_offer') {
           mappedAction = 'make_final_offer';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped make_final_offer");
         } else {
-          console.log("⚠️ [DEBUG] No special mapping found for button:", buttonToMap);
           // Use additional_data for unmapped buttons
           mappedData = additional_data || {};
         }
 
-        console.log("🔄 [DEBUG] Final mapped action:", mappedAction);
-        console.log("🔄 [DEBUG] Final mapped data:", mappedData);
       }
 
       if (!mappedAction) {
@@ -1013,70 +995,49 @@ class BidController {
       const buttonToMap = button_id || action;
       
       if (buttonToMap) {
-        console.log("🔍 [DEBUG] Processing influencer button mapping for:", buttonToMap);
-        console.log("🔍 [DEBUG] Original action:", action);
-        console.log("🔍 [DEBUG] Original data:", data);
-        console.log("🔍 [DEBUG] Additional data:", additional_data);
-        console.log("🔍 [DEBUG] Button ID provided:", !!button_id);
-        console.log("🔍 [DEBUG] Using action as button ID:", !button_id);
 
         // Map button IDs to automated flow actions (same logic as message controller)
         if (buttonToMap === 'accept_connection') {
           mappedAction = 'accept_connection';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_connection");
         } else if (buttonToMap === 'reject_connection') {
           mappedAction = 'reject_connection';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_connection");
         } else if (buttonToMap === 'accept_project') {
           mappedAction = 'accept_project';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_project");
         } else if (buttonToMap === 'deny_project') {
           mappedAction = 'deny_project';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped deny_project");
         } else if (buttonToMap === 'accept_price') {
           mappedAction = 'accept_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_price");
         } else if (buttonToMap === 'reject_price') {
           mappedAction = 'reject_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_price");
         } else if (buttonToMap === 'negotiate_price') {
           mappedAction = 'negotiate_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped negotiate_price");
         } else if (buttonToMap === 'send_counter_offer') {
           mappedAction = 'send_counter_offer';
           mappedData = { price: additional_data?.price };
-          console.log("🔄 [DEBUG] Mapped send_counter_offer with price:", additional_data?.price);
         } else if (buttonToMap === 'accept_final_offer') {
           mappedAction = 'accept_final_offer';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_final_offer");
         } else if (buttonToMap === 'reject_final_offer') {
           mappedAction = 'reject_final_offer';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_final_offer");
         } else if (buttonToMap === 'accept_negotiated_price') {
           mappedAction = 'accept_negotiated_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_negotiated_price");
         } else if (buttonToMap === 'reject_negotiated_price') {
           mappedAction = 'reject_negotiated_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_negotiated_price");
-        } else {
-          console.log("⚠️ [DEBUG] No special mapping found for button:", buttonToMap);
+          
           // Use additional_data for unmapped buttons
           mappedData = additional_data || {};
         }
 
-        console.log("🔄 [DEBUG] Final mapped action:", mappedAction);
-        console.log("🔄 [DEBUG] Final mapped data:", mappedData);
       }
 
       if (!mappedAction) {
@@ -1340,17 +1301,11 @@ class BidController {
       }
 
       // Use enhanced balance service to add funds properly
-      console.log("🔍 [DEBUG] Starting wallet fund addition process...");
-      console.log("🔍 [DEBUG] Influencer ID:", conversation.influencer_id);
-      console.log("🔍 [DEBUG] Payment amount (paise):", paymentAmount);
-      console.log("🔍 [DEBUG] Conversation ID:", conversation_id);
       
       const enhancedBalanceService = require('../utils/enhancedBalanceService');
       
       // First check if wallet exists
-      console.log("🔍 [DEBUG] Checking if wallet exists for influencer...");
       const walletCheckResult = await enhancedBalanceService.getWalletBalance(conversation.influencer_id);
-      console.log("🔍 [DEBUG] Wallet check result:", walletCheckResult);
       
       const addFundsResult = await enhancedBalanceService.addFunds(
         conversation.influencer_id,
@@ -1367,11 +1322,7 @@ class BidController {
         }
       );
 
-      console.log("🔍 [DEBUG] Enhanced balance service result:", addFundsResult);
-
       if (!addFundsResult.success) {
-        console.error("❌ [DEBUG] Enhanced balance service error:", addFundsResult.error);
-        console.error("❌ [DEBUG] Full error details:", JSON.stringify(addFundsResult, null, 2));
         return res.status(500).json({
           success: false,
           message: "Failed to add funds to wallet",
@@ -1383,8 +1334,6 @@ class BidController {
           }
         });
       }
-
-      console.log("✅ [DEBUG] Enhanced balance service: Funds added successfully");
 
       // Upsert payment order: update if order already exists
       const { data: existingOrder } = await supabaseAdmin
@@ -1483,10 +1432,7 @@ class BidController {
           );
 
           if (!freezeResult.success) {
-            console.warn("⚠️ Escrow freeze failed:", freezeResult.error);
             // Continue anyway as escrow hold is created
-          } else {
-            console.log("✅ Enhanced balance service: Funds frozen in escrow");
           }
         }
       }
@@ -1500,7 +1446,6 @@ class BidController {
           .select()
           .single();
         if (createWalletError) {
-          console.error("Wallet create error:", createWalletError);
           return res.status(500).json({ success: false, message: "Failed to ensure wallet" });
         }
         walletId = newWallet.id;
@@ -1513,7 +1458,6 @@ class BidController {
         .eq("id", walletId)
         .single();
       if (curWalletErr) {
-        console.error("Wallet read error:", curWalletErr);
       }
       
       // Add payment to available balance first, then move to escrow
@@ -1536,7 +1480,6 @@ class BidController {
         })
         .eq("id", walletId);
       if (walletUpdateErr) {
-        console.error("Wallet update error (frozen balance):", walletUpdateErr);
         // Do not fail the flow; continue
       }
 
@@ -1588,7 +1531,6 @@ class BidController {
         .single();
 
       if (freezeTransactionError) {
-        console.error("Freeze transaction creation error:", freezeTransactionError);
         // Don't fail the flow, just log the error
       }
 
@@ -1603,7 +1545,6 @@ class BidController {
           .eq("id", request.id);
 
         if (requestUpdateError) {
-          console.error("Request update error:", requestUpdateError);
           // Don't fail the payment, just log the error
         }
       }
@@ -1643,7 +1584,6 @@ class BidController {
         .single();
 
       if (updateError) {
-        console.error("Conversation update error:", updateError);
         return res.status(500).json({
           success: false,
           message: "Failed to update conversation state"
@@ -1658,7 +1598,7 @@ class BidController {
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
           message: "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.",
-          message_type: "automated", // Fixed: Changed from "system" to "automated"
+          message_type: "automated",
           action_required: false
         })
         .select()
@@ -1667,7 +1607,6 @@ class BidController {
       // Emit realtime events
       const io = req.app.get("io");
       if (io) {
-        // Emit conversation_updated event with correct state
         io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
           conversation_id: conversation_id,
           flow_state: "work_in_progress",

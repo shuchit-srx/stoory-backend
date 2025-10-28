@@ -509,24 +509,17 @@ class MessageController {
 
       // Emit real-time update
       const io = req.app.get("io");
-      console.log("🔍 [DEBUG] Socket.IO emit check:", {
-        hasIo: !!io,
-        conversationId,
-        receiverId,
-        senderId
-      });
       
       // Get conversation context for emit (moved outside if block for broader scope)
       let conversationContext = null;
       if (io) {
         const { data: conversation, error: convError } = await supabaseAdmin
           .from("conversations")
-          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data")
           .eq("id", conversationId)
           .single();
 
         if (convError) {
-          console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
         }
 
         // Prepare conversation context
@@ -537,12 +530,11 @@ class MessageController {
           awaiting_role: conversation.awaiting_role,
           conversation_type: conversation.campaign_id ? 'campaign' : 
                             conversation.bid_id ? 'bid' : 'direct',
-          automation_enabled: conversation.automation_enabled || false,
+          
           current_action_data: conversation.current_action_data
         } : null;
 
         // Emit to conversation room with context
-        console.log(`📡 [DEBUG] Emitting new_message to conversation_${conversationId}`);
         io.to(`conversation_${conversationId}`).emit("new_message", {
           conversation_id: conversationId,
           message: newMessage,
@@ -550,7 +542,6 @@ class MessageController {
         });
 
         // Store notification in database and emit to receiver
-        console.log(`📡 [DEBUG] Storing and emitting notification to user_${receiverId}`);
         
         // Store notification in database
         const notificationService = require('../services/notificationService');
@@ -590,14 +581,12 @@ class MessageController {
         });
 
         // Also emit to sender's personal room for confirmation
-        console.log(`📡 [DEBUG] Emitting message_sent to user_${senderId}`);
         io.to(`user_${senderId}`).emit("message_sent", {
           conversation_id: conversationId,
           message: newMessage,
           conversation_context: conversationContext,
         });
       } else {
-        console.error("❌ [DEBUG] Socket.IO not available for realtime emit");
       }
 
       // Send FCM push notification for REST API messages
@@ -608,18 +597,15 @@ class MessageController {
         senderId,
         receiverId
       ).then(result => {
-        if (result.success) {
-          console.log(`✅ FCM notification sent: ${result.sent} successful, ${result.failed} failed`);
+        if (result.success) { 
         } else {
           console.error(`❌ FCM notification failed:`, result.error);
         }
-      }).catch(error => {
-        console.error(`❌ FCM notification error:`, error);
+      }).catch(error => { 
       });
 
       // Emit conversation list update to both users
       if (io) {
-        console.log(`📡 [DEBUG] Socket emitting conversation_list_updated to both users`);
         
         // Emit to individual user rooms
         io.to(`user_${senderId}`).emit('conversation_list_updated', {
@@ -656,7 +642,6 @@ class MessageController {
         });
 
         // Emit unread count update to receiver
-        console.log(`📡 [DEBUG] Socket emitting unread_count_updated to user_${receiverId}`);
         io.to(`user_${receiverId}`).emit('unread_count_updated', {
           conversation_id: conversationId,
           unread_count: 1, // Increment by 1
@@ -681,17 +666,12 @@ class MessageController {
         });
       }
 
-      console.log(
-        `✅ Message sent successfully in conversation: ${conversationId}`
-      );
-
       res.json({
         success: true,
         message: newMessage,
         conversation_id: conversationId,
       });
     } catch (error) {
-      console.error("💥 Unexpected error in sendMessage:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",
@@ -762,7 +742,6 @@ class MessageController {
           timestamp: new Date().toISOString()
         });
 
-        console.log(`✅ Messages in conversation ${conversation_id} marked as seen by user ${userId}`);
       }
 
       res.json({
@@ -1850,7 +1829,7 @@ class MessageController {
         // Get updated conversation context after flow update
         const { data: updatedConversation, error: convError } = await supabaseAdmin
           .from("conversations")
-          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data")
           .eq("id", conversation_id)
           .single();
 
@@ -1861,7 +1840,7 @@ class MessageController {
           awaiting_role: updatedConversation.awaiting_role,
           conversation_type: updatedConversation.campaign_id ? 'campaign' : 
                             updatedConversation.bid_id ? 'bid' : 'direct',
-          automation_enabled: updatedConversation.automation_enabled || false,
+          
           current_action_data: updatedConversation.current_action_data
         } : null;
 
@@ -1914,11 +1893,7 @@ class MessageController {
         message: "Internal server error",
       });
     }
-  }
-
-  /**
-   * Handle text input from frontend
-   */
+  } 
   async handleTextInput(req, res) {
     try {
       const { conversation_id } = req.params;

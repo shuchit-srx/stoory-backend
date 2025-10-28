@@ -1157,33 +1157,20 @@ class SubscriptionController {
       console.log("🔔 [WEBHOOK] Processing payment for conversation:", conversation.id);
 
       const { supabaseAdmin } = require('../supabase/client');
-      const enhancedBalanceService = require('../utils/enhancedBalanceService');
+      const adminPaymentFlowService = require('../utils/adminPaymentFlowService');
 
-      // Get payment amount
-      const paymentAmount = payment.amount; // Razorpay amount is already in paise
-      console.log("🔔 [WEBHOOK] Payment amount (paise):", paymentAmount);
+      // Get payment amount (paise) and convert to rupees for breakdown
+      const paymentAmountPaise = payment.amount;
+      const agreedAmount = paymentAmountPaise / 100;
+      console.log("🔔 [WEBHOOK] Payment amount (paise):", paymentAmountPaise);
 
-      // Add funds to influencer's wallet
-      const addFundsResult = await enhancedBalanceService.addFunds(
-        conversation.influencer_id,
-        paymentAmount,
-        {
-          conversation_id: conversation.id,
-          razorpay_order_id: payment.order_id,
-          razorpay_payment_id: payment.id,
-          conversation_type: conversation.campaign_id ? "campaign" : "bid",
-          brand_owner_id: conversation.brand_owner_id,
-          notes: `Payment received via webhook for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`,
-          source: 'webhook'
-        }
-      );
-
-      if (!addFundsResult.success) {
-        console.error("❌ [WEBHOOK] Failed to add funds:", addFundsResult.error);
-        return;
+      // Initialize admin payment flow (records tracking, pending transactions, messages, state)
+      try {
+        await adminPaymentFlowService.initiateAdminPaymentFlow(conversation.id, agreedAmount);
+      } catch (e) {
+        console.error("❌ [WEBHOOK] Failed to initiate admin payment flow:", e);
+        // Continue to persist order and conversation updates for idempotency
       }
-
-      console.log("✅ [WEBHOOK] Funds added successfully");
 
       // Update or create payment order
       if (paymentOrder) {
@@ -1229,34 +1216,14 @@ class SubscriptionController {
         }
       }
 
-      // Create escrow hold if needed
-      if (paymentOrder) {
-        const { data: escrowHold, error: escrowError } = await supabaseAdmin
-          .from('escrow_holds')
-          .insert({
-            conversation_id: conversation.id,
-            payment_order_id: paymentOrder.id,
-            amount_paise: paymentAmount,
-            status: 'held',
-            release_reason: 'Payment held in escrow until work completion',
-            created_at: new Date().toISOString()
-          })
-          .select()
-          .single();
+      // No immediate wallet credit or escrow to influencer; admin will release per flow
 
-        if (escrowError) {
-          console.error("❌ [WEBHOOK] Escrow hold creation error:", escrowError);
-        } else {
-          console.log("✅ [WEBHOOK] Escrow hold created:", escrowHold.id);
-        }
-      }
-
-      // Update conversation state
+      // Update conversation state to reflect collection and admin action pending
       const { error: conversationUpdateError } = await supabaseAdmin
         .from("conversations")
         .update({
-          flow_state: "payment_completed",
-          awaiting_role: "influencer",
+          flow_state: "admin_payment_received",
+          awaiting_role: "admin",
           chat_status: "real_time",
           payment_completed: true,
           updated_at: new Date().toISOString()
@@ -1269,38 +1236,38 @@ class SubscriptionController {
         console.log("✅ [WEBHOOK] Conversation updated to payment_completed");
       }
 
-      // Send notifications
+      // Send notifications to participants about payment receipt
       const io = require('../index').io;
       if (io) {
-        // Emit payment completion events
+        // Emit payment status update (collection)
         io.to(`conversation_${conversation.id}`).emit("payment_status_update", {
           conversation_id: conversation.id,
-          status: "completed",
-          message: "Payment has been successfully processed via webhook",
+          status: "collected",
+          message: "Payment received. Admin will process advance soon",
           chat_status: "real_time"
         });
 
         // Notify both users
         io.to(`user_${conversation.brand_owner_id}`).emit("notification", {
-          type: "payment_completed",
+          type: "payment_collected",
           data: {
             conversation_id: conversation.id,
-            message: "Payment completed successfully",
+            message: "Payment received by admin. Advance will be released soon",
             chat_status: "real_time"
           }
         });
 
         io.to(`user_${conversation.influencer_id}`).emit("notification", {
-          type: "payment_completed",
+          type: "payment_collected",
           data: {
             conversation_id: conversation.id,
-            message: "Payment completed successfully",
+            message: "Payment received by admin. Advance will be released soon",
             chat_status: "real_time"
           }
         });
       }
 
-      console.log("✅ [WEBHOOK] Payment processing completed successfully");
+      console.log("✅ [WEBHOOK] Payment collection recorded; awaiting admin release");
 
     } catch (error) {
       console.error("❌ [WEBHOOK] Error processing webhook payment:", error);

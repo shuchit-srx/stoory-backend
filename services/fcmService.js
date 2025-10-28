@@ -165,12 +165,17 @@ class FCMService {
           .in('token', results.successful);
       }
 
-      // Deactivate failed tokens
-      if (results.failed.length > 0) {
-        await supabaseAdmin
-          .from('fcm_tokens')
-          .update({ is_active: false })
-          .in('token', results.failed);
+      // Deactivate only invalid/expired tokens
+      if (results.failedDetails && results.failedDetails.length > 0) {
+        const tokensToDeactivate = results.failedDetails
+          .filter(f => f.errorCode === 'messaging/registration-token-not-registered' || f.errorCode === 'messaging/invalid-registration-token')
+          .map(f => f.token);
+        if (tokensToDeactivate.length > 0) {
+          await supabaseAdmin
+            .from('fcm_tokens')
+            .update({ is_active: false })
+            .in('token', tokensToDeactivate);
+        }
       }
 
       return {
@@ -244,21 +249,22 @@ class FCMService {
           body: notification.body
         },
         android: {
+          // Keep Android block minimal and standards-compliant
           priority: 'high',
           notification: {
             sound: 'default',
             channelId: 'stoory_notifications',
-            priority: 'high',
-            defaultSound: true
           }
         },
         apns: {
           headers: {
-            'apns-priority': '10',
-            'apns-push-type': 'alert'
+            'apns-priority': '10', // High priority for immediate delivery
+            'apns-push-type': 'alert', // Alert type for banner display
+            'apns-expiration': '0' // No expiration
           },
           payload: {
             aps: {
+              // Use dictionary format for alert to ensure it shows as banner
               alert: {
                 title: notification.title,
                 body: notification.body
@@ -266,8 +272,10 @@ class FCMService {
               sound: 'default',
               badge: notification.badge || 1,
               category: 'MESSAGE_CATEGORY',
-              'mutable-content': 1,
-              'content-available': 1
+              'mutable-content': 1
+              // REMOVED 'content-available': 1 
+              // This was causing silent background delivery instead of banner alerts
+              // Only include content-available if this is truly a background silent notification
             },
             // Add custom data for iOS
             ...notification.data
@@ -277,7 +285,8 @@ class FCMService {
           notification: {
             icon: notification.icon || '/icon-192x192.png',
             badge: '/badge-72x72.png',
-            requireInteraction: true
+            requireInteraction: true,
+            vibrate: [200, 100, 200]
           }
         }
       };
@@ -285,6 +294,7 @@ class FCMService {
       // Send to each token individually since sendMulticast might not be available
       const successful = [];
       const failed = [];
+      const failedDetails = [];
 
       for (let i = 0; i < tokens.length; i++) {
         try {
@@ -296,8 +306,11 @@ class FCMService {
           successful.push(tokens[i]);
           console.log(`✅ Successfully sent to token ${tokens[i].substring(0, 20)}...`);
         } catch (error) {
-          failed.push(tokens[i]);
-          console.error(`❌ Failed to send to token ${tokens[i].substring(0, 20)}...:`, error.message);
+          const token = tokens[i];
+          failed.push(token);
+          const errorCode = error?.code || null;
+          failedDetails.push({ token, errorCode, message: error?.message || 'send failed' });
+          console.error(`❌ Failed to send to token ${token.substring(0, 20)}...:`, error.message, errorCode ? `(${errorCode})` : '');
         }
       }
 
@@ -312,6 +325,7 @@ class FCMService {
         success: true,
         successful,
         failed,
+        failedDetails,
         response
       };
     } catch (error) {

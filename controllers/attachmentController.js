@@ -271,7 +271,7 @@ class AttachmentController {
             // Get conversation context
             const { data: conversationContext } = await supabaseAdmin
               .from('conversations')
-              .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+              .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
               .eq('id', conversation_id)
               .single();
 
@@ -282,7 +282,7 @@ class AttachmentController {
               awaiting_role: conversationContext.awaiting_role,
               conversation_type: conversationContext.campaign_id ? 'campaign' : 
                                 conversationContext.bid_id ? 'bid' : 'direct',
-              automation_enabled: conversationContext.automation_enabled || false,
+              
               current_action_data: conversationContext.current_action_data
             } : null;
 
@@ -526,7 +526,7 @@ class AttachmentController {
         // Get conversation context
         const { data: conversationContext } = await supabaseAdmin
           .from('conversations')
-          .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+          .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
           .eq('id', conversation_id)
           .single();
 
@@ -537,7 +537,7 @@ class AttachmentController {
           awaiting_role: conversationContext.awaiting_role,
           conversation_type: conversationContext.campaign_id ? 'campaign' : 
                             conversationContext.bid_id ? 'bid' : 'direct',
-          automation_enabled: conversationContext.automation_enabled || false,
+          
           current_action_data: conversationContext.current_action_data
         } : null;
 

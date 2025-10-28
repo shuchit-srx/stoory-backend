@@ -166,20 +166,13 @@ class AuthController {
 
       const { phone, token, userData } = req.body;
 
-      console.log('🔍 [DEBUG] OTP Verification Request:', {
+      console.log('🔍  OTP Verification Request:', {
         phone,
         token: token ? '***' : 'missing',
         userData: userData ? 'provided' : 'not provided'
       });
 
       const result = await authService.verifyOTP(phone, token, userData);
-
-      console.log('🔍 [DEBUG] OTP Verification Result:', {
-        success: result.success,
-        message: result.message,
-        userRole: result.user?.role,
-        userId: result.user?.id
-      });
 
       if (result.success) {
         res.json({

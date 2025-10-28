@@ -84,8 +84,6 @@ class AutomatedFlowService {
         ...updateData,
         timestamp: new Date().toISOString()
       });
-
-      console.log("📡 [DEBUG] Global conversation list updates emitted");
     } catch (error) {
       console.error("❌ [DEBUG] Global update emit error:", error);
     }
@@ -276,8 +274,8 @@ class AutomatedFlowService {
         action_required: false,
       };
 
-      // Insert both messages: initial message and audit message
-      const messagesToInsert = [initialMessage, auditMessage];
+      // Insert only the initial actionable message (no audit messages)
+      const messagesToInsert = [initialMessage];
       const { data: messages, error: messageError } = await supabaseAdmin
         .from("messages")
         .insert(messagesToInsert)
@@ -466,7 +464,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         is_automated: true,
       };
 
-      const messagesToInsert = [initialMessage, auditMessage];
+      const messagesToInsert = [initialMessage];
       const { data: messages, error: messageError } = await supabaseAdmin
         .from("messages")
         .insert(messagesToInsert)
@@ -522,13 +520,6 @@ Please respond to confirm your interest and availability for this campaign.`,
    */
   async handleBrandOwnerAction(conversationId, action, data = {}) {
     try {
-      console.log("🔍 [DEBUG] handleBrandOwnerAction called:");
-      console.log("  - conversationId:", conversationId);
-      console.log("  - action:", action);
-      console.log("  - data:", data);
-
-      // Get conversation details
-      console.log("🔍 [DEBUG] Fetching conversation:", conversationId);
       
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
@@ -537,18 +528,8 @@ Please respond to confirm your interest and availability for this campaign.`,
         .single();
 
       if (convError || !conversation) {
-        console.error("❌ [DEBUG] Conversation not found:", convError);
         throw new Error("Conversation not found");
       }
-      
-      console.log("✅ [DEBUG] Conversation found:", {
-        id: conversation.id,
-        chat_status: conversation.chat_status,
-        flow_state: conversation.flow_state,
-        awaiting_role: conversation.awaiting_role,
-        brand_owner_id: conversation.brand_owner_id,
-        influencer_id: conversation.influencer_id
-      });
 
       // Establish negotiation context variables once per handler
       const baseNegotiationHistory = Array.isArray(conversation.negotiation_history)
@@ -617,12 +598,8 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "send_price_offer":
           // Brand owner sends price offer
-          console.log("💰 [DEBUG] Processing send_price_offer with data:", data);
-          console.log("💰 [DEBUG] Price value:", data.price);
-          console.log("💰 [DEBUG] Price type:", typeof data.price);
           
           if (!data.price || data.price === undefined) {
-            console.error("❌ [ERROR] send_price_offer called without price data!");
             return {
               success: false,
               error: "Price is required for price offer",
@@ -742,7 +719,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Price Offer Sent**\n\nYou have offered ₹${data.price} to the influencer.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${paymentBreakdown.total_amount_paise / 100}\n• **Platform Commission (${paymentBreakdown.commission_percentage}%):** ₹${paymentBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${paymentBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${paymentBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${paymentBreakdown.final_amount_paise / 100} (70%)`,
+            message: `✅ **Action Taken: Price Offer Sent**\n\nYou have offered ₹${data.price} to the influencer.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${priceBreakdown.total_amount_paise / 100}\n• **Platform Commission (${priceBreakdown.commission_percentage}%):** ₹${priceBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${priceBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${priceBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${priceBreakdown.final_amount_paise / 100} (70%)`,
             message_type: "audit",
             action_required: false,
           };
@@ -750,26 +727,13 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "handle_negotiation":
           // Brand owner handles negotiation
-          console.log("🔄 [DEBUG] Handling negotiation with data:", data);
-          console.log("🔄 [DEBUG] Data action:", data.action);
-          console.log("🔄 [DEBUG] Data action type:", typeof data.action);
-          console.log("🔄 [DEBUG] Data action === 'agree':", data.action === "agree");
-          console.log("🔄 [DEBUG] Data action === 'agree' (single quotes):", data.action === 'agree');
-          console.log("🔄 [DEBUG] Data action trimmed:", data.action?.trim());
-          console.log("🔄 [DEBUG] Data action length:", data.action?.length);
-          console.log("🔄 [DEBUG] Full data object:", JSON.stringify(data, null, 2));
-          
           // More robust comparison
           const actionValue = data.action?.toString()?.trim()?.toLowerCase();
-          console.log("🔄 [DEBUG] Processed action value:", actionValue);
-          
           if (actionValue === "agree") {
-            console.log("✅ [DEBUG] Brand owner agreed to negotiate - setting state to influencer_price_input");
             newFlowState = "influencer_price_input";
             newAwaitingRole = "influencer";
             
             // Fallback: if database doesn't support influencer_price_input yet, use influencer_price_response
-            console.log("🔄 [DEBUG] Note: Using influencer_price_input state. If database constraint fails, this will be handled by the database error.");
 
             newMessage = {
               conversation_id: conversationId,
@@ -812,10 +776,6 @@ Please respond to confirm your interest and availability for this campaign.`,
             };
           } else {
             // Reject negotiation
-            console.log("❌ [DEBUG] Brand owner rejected negotiation - setting state to chat_closed");
-            console.log("❌ [DEBUG] Data action was:", data.action);
-            console.log("❌ [DEBUG] Processed action value was:", actionValue);
-            console.log("❌ [DEBUG] This is why chat is closing!");
             newFlowState = "chat_closed";
             newAwaitingRole = null;
 
@@ -961,40 +921,27 @@ Please respond to confirm your interest and availability for this campaign.`,
           break;
 
         case "proceed_to_payment":
-          console.log("💳 [DEBUG] Processing proceed_to_payment action");
           // Brand owner proceeds to payment
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
 
           // Get the amount from various sources
           let paymentAmount = data.amount || 0;
-          console.log("💰 [DEBUG] Initial payment amount from data.amount:", paymentAmount);
           
           if (paymentAmount <= 0) {
-            console.log("🔎 [DEBUG] Conversation context:", {
-              request_id: conversation.request_id,
-              bid_id: conversation.bid_id,
-              campaign_id: conversation.campaign_id,
-              influencer_id: conversation.influencer_id,
-              flow_data: conversation.flow_data
-            });
             
             // First try to get amount from linked request
             if (conversation.request_id) {
-              console.log("🔎 [DEBUG] Looking up request by request_id for amount:", conversation.request_id);
               const { data: request } = await supabaseAdmin
                 .from("requests")
                 .select("proposed_amount, final_agreed_amount")
                 .eq("id", conversation.request_id)
                 .single();
-              console.log("🔎 [DEBUG] Request row:", request);
               // Check final_agreed_amount first, then fall back to proposed_amount
               if (request?.final_agreed_amount && parseFloat(request.final_agreed_amount) > 0) {
                 paymentAmount = parseFloat(request.final_agreed_amount);
-                console.log("💰 [DEBUG] Got amount from request.final_agreed_amount:", paymentAmount);
               } else if (request?.proposed_amount && parseFloat(request.proposed_amount) > 0) {
                 paymentAmount = parseFloat(request.proposed_amount);
-                console.log("💰 [DEBUG] Got amount from request.proposed_amount:", paymentAmount);
               }
             }
             // If no linked request, attempt to find one by bid_id + influencer_id or campaign_id + influencer_id
@@ -1007,27 +954,21 @@ Please respond to confirm your interest and availability for this campaign.`,
                 .limit(1);
               
               if (conversation.bid_id) {
-                console.log("🔎 [DEBUG] Looking up request by pair (bid_id, influencer_id):", conversation.bid_id, conversation.influencer_id);
                 requestQuery = requestQuery.eq("bid_id", conversation.bid_id);
               } else if (conversation.campaign_id) {
-                console.log("🔎 [DEBUG] Looking up request by pair (campaign_id, influencer_id):", conversation.campaign_id, conversation.influencer_id);
                 requestQuery = requestQuery.eq("campaign_id", conversation.campaign_id);
               }
               
               const { data: reqByPair } = await requestQuery.single();
-              console.log("🔎 [DEBUG] Pair request row:", reqByPair);
               if (reqByPair) {
                 // Check final_agreed_amount first, then fall back to proposed_amount
                 if (reqByPair.final_agreed_amount && parseFloat(reqByPair.final_agreed_amount) > 0) {
                   paymentAmount = parseFloat(reqByPair.final_agreed_amount);
-                  console.log("💰 [DEBUG] Got amount from (pair) request.final_agreed_amount:", paymentAmount);
                 } else if (reqByPair.proposed_amount && parseFloat(reqByPair.proposed_amount) > 0) {
                   paymentAmount = parseFloat(reqByPair.proposed_amount);
-                  console.log("💰 [DEBUG] Got amount from (pair) request.proposed_amount:", paymentAmount);
                 }
                 // Also backfill conversation.request_id for future
                 if (reqByPair.id) {
-                  console.log("🧩 [DEBUG] Backfilling conversation.request_id:", reqByPair.id);
                   await supabaseAdmin
                     .from("conversations")
                     .update({ request_id: reqByPair.id })
@@ -1038,11 +979,9 @@ Please respond to confirm your interest and availability for this campaign.`,
             // Fall back to conversation flow_data agreed_amount
             if (paymentAmount <= 0 && conversation.flow_data && conversation.flow_data.agreed_amount) {
               paymentAmount = conversation.flow_data.agreed_amount;
-              console.log("💰 [DEBUG] Got amount from flow_data:", paymentAmount);
             }
             // Try to get amount from recent price negotiation messages
             if (paymentAmount <= 0) {
-              console.log("🔎 [DEBUG] Scanning last negotiation messages for amount...");
               const { data: priceMessages } = await supabaseAdmin
                 .from("messages")
                 .select("message, action_data")
@@ -1056,13 +995,11 @@ Please respond to confirm your interest and availability for this campaign.`,
                 const priceMatch = msg.message?.match(/₹(\d+(?:\.\d{2})?)/);
                 if (priceMatch) {
                   paymentAmount = parseFloat(priceMatch[1]);
-                  console.log("💰 [DEBUG] Got amount from message:", paymentAmount);
                   break;
                 }
                 // Also check action_data for price
                 if (msg.action_data && msg.action_data.price) {
                   paymentAmount = parseFloat(msg.action_data.price);
-                  console.log("💰 [DEBUG] Got amount from action_data:", paymentAmount);
                   break;
                 }
               }
@@ -1071,19 +1008,14 @@ Please respond to confirm your interest and availability for this campaign.`,
             // Final fallback: check conversation flow_data for agreed amount
             if (paymentAmount <= 0 && conversation.flow_data?.agreed_amount) {
               paymentAmount = parseFloat(conversation.flow_data.agreed_amount);
-              console.log("💰 [DEBUG] Got amount from conversation.flow_data.agreed_amount:", paymentAmount);
             }
           }
           
           if (paymentAmount <= 0) {
-            console.error("❌ [DEBUG] Payment amount is required");
             throw new Error('Payment amount is required. Ensure requests.proposed_amount/final_agreed_amount is set, or pass data.amount');
           }
-
-          console.log("💰 [DEBUG] Payment amount:", paymentAmount);
           // Convert to paise for database storage
           const paymentAmountPaise = Math.round(paymentAmount * 100);
-          console.log("💰 [DEBUG] Payment amount in paise:", paymentAmountPaise);
 
           // Calculate payment breakdown for transparency
           const paymentBreakdown = await this.calculatePaymentBreakdown(paymentAmount);
@@ -1093,12 +1025,10 @@ Please respond to confirm your interest and availability for this campaign.`,
           const keyId = process.env.RAZORPAY_KEY_ID;
           const keySecret = process.env.RAZORPAY_KEY_SECRET;
           if (!keyId || !keySecret) {
-            console.error("❌ [DEBUG] Missing Razorpay keys. RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET not set.");
             throw new Error("Payment gateway configuration missing. Please set Razorpay keys.");
           }
           const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
 
-          console.log("🔧 [DEBUG] Creating Razorpay order...");
           let razorpayOrder;
           try {
             const shortReceipt = `ord_${String(conversationId).slice(0,8)}_${Math.floor(Date.now()/1000)}`;
@@ -1115,11 +1045,8 @@ Please respond to confirm your interest and availability for this campaign.`,
               }
             });
           } catch (rpErr) {
-            console.error("❌ [DEBUG] Razorpay order creation failed:", rpErr);
             throw new Error(`Payment order creation failed at gateway: ${rpErr?.message || rpErr}`);
           }
-
-          console.log("✅ [DEBUG] Razorpay order created:", razorpayOrder.id);
 
           // Track brand owner payment (debit) before creating payment order
           const enhancedBalanceService = require('./enhancedBalanceService');
@@ -1136,14 +1063,11 @@ Please respond to confirm your interest and availability for this campaign.`,
           );
 
           if (!brandOwnerDebitResult.success) {
-            console.warn("⚠️ [DEBUG] Brand owner debit tracking failed:", brandOwnerDebitResult.error);
             // Continue anyway as payment order creation is more critical
           } else {
-            console.log("✅ [DEBUG] Brand owner debit tracked:", brandOwnerDebitResult.transaction.id);
           }
 
           // Create payment order in database
-          console.log("🗃️  [DEBUG] Inserting payment_order row...");
           const { data: paymentOrder, error: orderError } = await supabaseAdmin
             .from("payment_orders")
             .insert({
@@ -1164,13 +1088,9 @@ Please respond to confirm your interest and availability for this campaign.`,
             .single();
 
           if (orderError) {
-            console.error("❌ [DEBUG] Payment order creation failed:", orderError);
             throw new Error(`Failed to create payment order: ${orderError.message}`);
           }
 
-          console.log("✅ [DEBUG] Payment order created in database:", paymentOrder.id);
-
-          console.log("✉️  [DEBUG] Preparing payment prompt message for chat...");
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
@@ -1680,7 +1600,6 @@ Please respond to confirm your interest and availability for this campaign.`,
             console.error("❌ [DEBUG] Fallback update also failed:", fallbackError);
             throw new Error(`Failed to update conversation: ${updateError.message}`);
           } else {
-            console.log("✅ [DEBUG] Fallback update successful");
             newFlowState = "influencer_price_response"; // Update the local variable too
             
             // Also update the message action_data to reflect the fallback state
@@ -1697,9 +1616,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Create messages
       const messagesToCreate = [newMessage];
-      if (auditMessage) {
-        messagesToCreate.push(auditMessage);
-      }
+      // No audit messages should be created
 
       const { data: createdMessages, error: messageError } = await supabaseAdmin
         .from("messages")
@@ -1756,7 +1673,6 @@ Please respond to confirm your interest and availability for this campaign.`,
       if (targetUserId) {
         fcmService.sendFlowStateNotification(conversationId, targetUserId, newFlowState).then(result => {
           if (result.success) {
-            console.log(`✅ FCM brand owner action notification sent: ${result.sent} successful, ${result.failed} failed`);
           } else {
             console.error(`❌ FCM brand owner action notification failed:`, result.error);
           }
@@ -1764,17 +1680,6 @@ Please respond to confirm your interest and availability for this campaign.`,
           console.error(`❌ FCM brand owner action notification error:`, error);
         });
       }
-
-      console.log("✅ [DEBUG] Brand owner action completed successfully:");
-      console.log("  - Action:", action);
-      console.log("  - Data:", data);
-      console.log("  - Flow state:", newFlowState);
-      console.log("  - Awaiting role:", newAwaitingRole);
-      console.log("  - Has current_action_data:", !!result.conversation.current_action_data);
-      console.log("  - Message created:", !!result.message);
-      console.log("  - Audit message created:", !!result.audit_message);
-      console.log("✅ [DEBUG] Final result conversation:", result.conversation);
-      console.log("✅ [DEBUG] Final result message:", result.message ? "Present" : "Missing");
 
       // Emit WebSocket events for real-time updates
       if (this.io) {
@@ -1831,8 +1736,6 @@ Please respond to confirm your interest and availability for this campaign.`,
             current_action_data: result.conversation.current_action_data,
             action: 'state_changed'
           });
-
-          console.log("📡 [DEBUG] WebSocket events emitted for conversation:", conversationId);
         } catch (socketError) {
           console.error("❌ [DEBUG] WebSocket emit error:", socketError);
         }
@@ -1852,10 +1755,6 @@ Please respond to confirm your interest and availability for this campaign.`,
    */
   async handleInfluencerAction(conversationId, action, data = {}) {
     try {
-      console.log("🔍 [DEBUG] handleInfluencerAction called:");
-      console.log("  - conversationId:", conversationId);
-      console.log("  - action:", action);
-      console.log("  - data:", data);
 
       // Get conversation details
       const { data: conversation, error: convError } = await supabaseAdmin
@@ -2191,9 +2090,6 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "send_counter_offer":
           // Influencer sends counter offer
-          console.log("💰 [DEBUG] Processing send_counter_offer with data:", data);
-          console.log("💰 [DEBUG] Price value:", data.price);
-          console.log("💰 [DEBUG] Price type:", typeof data.price);
           
           if (!data.price || data.price === undefined) {
             console.error("❌ [ERROR] send_counter_offer called without price data!");
