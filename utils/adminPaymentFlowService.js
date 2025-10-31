@@ -141,11 +141,9 @@ class AdminPaymentFlowService {
         .single();
 
       if (commError || !commissionSettings) {
-        console.warn("⚠️ No commission settings found, using default 10%");
-        var commissionPercentage = 10.00;
-      } else {
-        var commissionPercentage = commissionSettings.commission_percentage;
+        throw new Error("No active commission settings found. Please configure commission in admin settings.");
       }
+      const commissionPercentage = commissionSettings.commission_percentage;
 
       const totalAmountPaise = Math.round(agreedAmount * 100);
       const commissionAmountPaise = Math.round((totalAmountPaise * commissionPercentage) / 100);

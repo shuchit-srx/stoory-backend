@@ -43,6 +43,24 @@ router.put('/mark-all-read', (req, res) => {
 });
 
 /**
+ * @route DELETE /api/notifications/:notificationId
+ * @desc Delete a single notification
+ * @access Private
+ */
+router.delete('/:notificationId', (req, res) => {
+  NotificationController.deleteNotification(req, res);
+});
+
+/**
+ * @route DELETE /api/notifications
+ * @desc Clear all notifications for current user
+ * @access Private
+ */
+router.delete('/', (req, res) => {
+  NotificationController.clearAll(req, res);
+});
+
+/**
  * @route DELETE /api/notifications/cleanup-expired
  * @desc Clean up expired notifications (admin only)
  * @access Private (Admin)

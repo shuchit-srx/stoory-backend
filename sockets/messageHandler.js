@@ -138,11 +138,11 @@ class MessageHandler {
             const { conversationId, userId } = data;
             this.typingUsers.set(`${conversationId}_${userId}`, true);
             
-            // Emit to conversation room
+            // Emit to conversation room (spec schema)
             socket.to(`room:${conversationId}`).emit('user_typing', {
-                conversationId,
-                userId,
-                isTyping: true
+                conversation_id: conversationId,
+                user_id: userId,
+                is_typing: true
             });
 
             // Emit to global update rooms for chat list
@@ -158,11 +158,11 @@ class MessageHandler {
             const { conversationId, userId } = data;
             this.typingUsers.delete(`${conversationId}_${userId}`);
             
-            // Emit to conversation room
+            // Emit to conversation room (spec schema)
             socket.to(`room:${conversationId}`).emit('user_typing', {
-                conversationId,
-                userId,
-                isTyping: false
+                conversation_id: conversationId,
+                user_id: userId,
+                is_typing: false
             });
 
             // Emit to global update rooms for chat list
@@ -263,32 +263,107 @@ class MessageHandler {
                 console.log(`➡️ [EMIT] chat:ack -> sock:${socket.id} tempId:${tempId} msg:${savedMessage.id}`);
                 socket.emit('chat:ack', { tempId, message: savedMessage });
 
-                // Broadcast to room
+                // Broadcast to room: chat:new with { message }
                 console.log(`➡️ [EMIT] chat:new -> room:${conversationId} msg:${savedMessage.id}`);
                 this.io.to(`room:${conversationId}`).emit('chat:new', { message: savedMessage });
 
-                // Update conversation list for both users
-                console.log(`➡️ [EMIT] conversation_list_updated -> user_${socket.user.id} action:message_sent conv:${conversationId}`);
-                this.io.to(`user_${socket.user.id}`).emit('conversation_list_updated', {
-                    conversation_id: conversationId,
-                    message: savedMessage,
-                    action: 'message_sent'
+                // Update conversation list for both users with standardized conversations:upsert
+                try {
+                    const { count: unreadForReceiver } = await supabaseAdmin
+                        .from('messages')
+                        .select('id', { count: 'exact', head: true })
+                        .eq('conversation_id', conversationId)
+                        .eq('receiver_id', receiverId)
+                        .eq('seen', false);
+
+                    const { count: unreadForSender } = await supabaseAdmin
+                        .from('messages')
+                        .select('id', { count: 'exact', head: true })
+                        .eq('conversation_id', conversationId)
+                        .eq('receiver_id', socket.user.id)
+                        .eq('seen', false);
+
+                    const base = {
+                        conversation_id: conversationId,
+                        last_message: {
+                            id: savedMessage.id,
+                            conversation_id: conversationId,
+                            sender_id: savedMessage.sender_id,
+                            receiver_id: savedMessage.receiver_id,
+                            message: savedMessage.message,
+                            created_at: savedMessage.created_at
+                        },
+                        chat_status: conversation.chat_status || null,
+                        flow_state: conversation.flow_state || null,
+                        awaiting_role: conversation.awaiting_role || null,
+                        updated_at: new Date().toISOString()
+                    };
+
+                    console.log(`➡️ [EMIT] conversations:upsert -> user_${socket.user.id} conv:${conversationId}`);
+                    this.io.to(`user_${socket.user.id}`).emit('conversations:upsert', {
+                        ...base,
+                        unread_count: unreadForSender || 0
+                    });
+
+                    console.log(`➡️ [EMIT] conversations:upsert -> user_${receiverId} conv:${conversationId}`);
+                    this.io.to(`user_${receiverId}`).emit('conversations:upsert', {
+                        ...base,
+                        unread_count: unreadForReceiver || 0
+                    });
+                } catch (e) {
+                    console.warn('conversation_list_updated summary emit failed:', e.message);
+                }
+
+                // Fetch sender's name for notification
+                let senderName = 'Someone';
+                try {
+                    const { data: sender, error: senderError } = await supabaseAdmin
+                        .from('users')
+                        .select('name')
+                        .eq('id', socket.user.id)
+                        .eq('is_deleted', false)
+                        .single();
+                    
+                    if (!senderError && sender && sender.name) {
+                        senderName = sender.name;
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Could not fetch sender name for socket notification:', error.message);
+                }
+
+                // Store notification in database
+                const notificationService = require('../services/notificationService');
+                notificationService.storeNotification({
+                    user_id: receiverId,
+                    type: 'message',
+                    title: `${senderName} sent you a message`,
+                    message: savedMessage.message,
+                    data: {
+                        conversation_id: conversationId,
+                        message: savedMessage,
+                        sender_id: socket.user.id,
+                        receiver_id: receiverId,
+                        sender_name: senderName
+                    },
+                    action_url: `/conversations/${conversationId}`
+                }, this.io).catch(error => {
+                    console.error('❌ Error storing socket message notification:', error);
                 });
 
-                console.log(`➡️ [EMIT] conversation_list_updated -> user_${receiverId} action:message_received conv:${conversationId}`);
-                this.io.to(`user_${receiverId}`).emit('conversation_list_updated', {
-                    conversation_id: conversationId,
-                    message: savedMessage,
-                    action: 'message_received'
-                });
-
-                // Send FCM notification
+                // Send FCM notification only if user is not actively viewing conversation
                 fcmService.sendMessageNotification(
                     conversationId,
                     savedMessage,
                     socket.user.id,
-                    receiverId
-                ).catch(err => console.error('FCM error:', err));
+                    receiverId,
+                    this.io  // Pass io to check if user is in conversation room
+                ).then(result => {
+                    if (result.success && !result.skipped) {
+                        console.log(`✅ FCM notification sent: ${result.sent} successful`);
+                    } else if (result.skipped) {
+                        console.log(`ℹ️ [FCM] Skipped - user is viewing conversation`);
+                    }
+                }).catch(err => console.error('FCM error:', err));
 
             } catch (error) {
                 console.error('chat:send error:', error);
@@ -410,7 +485,8 @@ class MessageHandler {
                     if (!error) {
                         console.log(`➡️ [EMIT] chat:read -> room:${conversationId} upTo:${upToMessageId} reader:${socket.user.id}`);
                         this.io.to(`room:${conversationId}`).emit('chat:read', {
-                            messageIds: [], // All up to ID
+                            conversation_id: conversationId,
+                            messageIds: [],
                             upToMessageId,
                             readerId: socket.user.id,
                             readAt: new Date().toISOString()
@@ -428,6 +504,7 @@ class MessageHandler {
                     if (!error) {
                         console.log(`➡️ [EMIT] chat:read -> room:${conversationId} ids:${messageIds.length} reader:${socket.user.id}`);
                         this.io.to(`room:${conversationId}`).emit('chat:read', {
+                            conversation_id: conversationId,
                             messageIds,
                             readerId: socket.user.id,
                             readAt: new Date().toISOString()

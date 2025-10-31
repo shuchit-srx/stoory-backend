@@ -95,9 +95,10 @@ class FCMService {
    */
   async unregisterToken(userId, token) {
     try {
+      // Delete token instead of marking inactive
       const { error } = await supabaseAdmin
         .from('fcm_tokens')
-        .update({ is_active: false })
+        .delete()
         .eq('user_id', userId)
         .eq('token', token);
 
@@ -165,18 +166,7 @@ class FCMService {
           .in('token', results.successful);
       }
 
-      // Deactivate only invalid/expired tokens
-      if (results.failedDetails && results.failedDetails.length > 0) {
-        const tokensToDeactivate = results.failedDetails
-          .filter(f => f.errorCode === 'messaging/registration-token-not-registered' || f.errorCode === 'messaging/invalid-registration-token')
-          .map(f => f.token);
-        if (tokensToDeactivate.length > 0) {
-          await supabaseAdmin
-            .from('fcm_tokens')
-            .update({ is_active: false })
-            .in('token', tokensToDeactivate);
-        }
-      }
+      // Do not mark tokens inactive automatically; leave as-is
 
       return {
         success: true,
@@ -249,11 +239,12 @@ class FCMService {
           body: notification.body
         },
         android: {
-          // Keep Android block minimal and standards-compliant
+          // High priority for immediate delivery and banners
           priority: 'high',
           notification: {
             sound: 'default',
             channelId: 'stoory_notifications',
+            priority: 'high'
           }
         },
         apns: {
@@ -273,9 +264,7 @@ class FCMService {
               badge: notification.badge || 1,
               category: 'MESSAGE_CATEGORY',
               'mutable-content': 1
-              // REMOVED 'content-available': 1 
-              // This was causing silent background delivery instead of banner alerts
-              // Only include content-available if this is truly a background silent notification
+              // Do NOT set 'content-available' to avoid silent pushes
             },
             // Add custom data for iOS
             ...notification.data
@@ -286,6 +275,7 @@ class FCMService {
             icon: notification.icon || '/icon-192x192.png',
             badge: '/badge-72x72.png',
             requireInteraction: true,
+            renotify: true,
             vibrate: [200, 100, 200]
           }
         }
@@ -335,10 +325,49 @@ class FCMService {
   }
 
   /**
-   * Send message notification
+   * Send message notification (only if user is not actively viewing conversation)
    */
-  async sendMessageNotification(conversationId, message, senderId, receiverId) {
+  async sendMessageNotification(conversationId, message, senderId, receiverId, io = null) {
     try {
+      // Check if receiver is actively viewing this conversation
+      // If they're in the room, they'll get socket notification, skip FCM
+      let shouldSkip = false;
+      
+      if (io && io.sockets && io.sockets.adapter) {
+        try {
+          const roomName = `room:${conversationId}`;
+          const userRoom = `user_${receiverId}`;
+          
+          // Get all sockets in the user room
+          const userRoomSockets = io.sockets.adapter.rooms.get(userRoom);
+          
+          if (userRoomSockets && userRoomSockets.size > 0) {
+            // Check if any of user's sockets are in the conversation room
+            const conversationRoom = io.sockets.adapter.rooms.get(roomName);
+            
+            if (conversationRoom && conversationRoom.size > 0) {
+              // Check if any of user's sockets are in the conversation room
+              for (const socketId of userRoomSockets) {
+                if (conversationRoom.has(socketId)) {
+                  console.log(`ℹ️ [FCM] User ${receiverId} is viewing conversation ${conversationId}, skipping FCM`);
+                  shouldSkip = true;
+                  break;
+                }
+              }
+            }
+          }
+        } catch (adapterError) {
+          console.warn('⚠️ [FCM] Error checking room membership, proceeding with FCM:', adapterError.message);
+          // If we can't check, default to sending FCM (safer)
+        }
+      }
+      
+      if (shouldSkip) {
+        return { success: true, sent: 0, failed: 0, skipped: true };
+      }
+
+      console.log(`📱 [FCM] Sending message notification to user ${receiverId} for conversation ${conversationId}`);
+
       // Fetch sender's name
       let senderName = 'Someone';
       try {
@@ -379,10 +408,17 @@ class FCMService {
   }
 
   /**
-   * Send flow state notification
+   * Send flow state notification (only if user is offline)
    */
   async sendFlowStateNotification(conversationId, userId, flowState, customMessage = null) {
     try {
+      // Check if user is online - if online, skip FCM (they'll get socket notification)
+      const notificationService = require('./notificationService');
+      if (notificationService.isUserOnline(userId)) {
+        console.log(`ℹ️ [FCM] Skipping flow state FCM for online user ${userId}`);
+        return { success: true, sent: 0, failed: 0, skipped: true };
+      }
+
       const stateMessages = {
         'influencer_responding': 'You have a new connection request',
         'brand_owner_details': 'Please provide project details',
@@ -447,10 +483,10 @@ class FCMService {
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
+      // Delete old tokens instead of flipping is_active
       const { error } = await supabaseAdmin
         .from('fcm_tokens')
-        .update({ is_active: false })
-        .eq('is_active', true)
+        .delete()
         .lt('last_used_at', thirtyDaysAgo.toISOString());
 
       if (error) {

@@ -85,7 +85,7 @@ class NotificationService {
   /**
    * Store a notification in the database
    */
-  async storeNotification(notificationData) {
+  async storeNotification(notificationData, io = null) {
     try {
       const {
         user_id,
@@ -97,6 +97,32 @@ class NotificationService {
         expires_at = null,
         priority = 'medium'
       } = notificationData;
+
+      // Deduplication: Check if a similar notification was created recently
+      // (prevents duplicates when both REST API and Socket create notifications)
+      if (type === 'message' && data.conversation_id && data.sender_id) {
+        const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
+        const { data: existingNotification } = await supabaseAdmin
+          .from('notifications')
+          .select('id')
+          .eq('user_id', user_id)
+          .eq('type', 'message')
+          .eq('data->>conversation_id', data.conversation_id)
+          .eq('data->>sender_id', data.sender_id)
+          .gte('created_at', fiveSecondsAgo)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (existingNotification) {
+          console.log(`ℹ️ Duplicate notification detected (conversation: ${data.conversation_id}, sender: ${data.sender_id}), skipping`);
+          return { 
+            success: true, 
+            notification: existingNotification,
+            duplicate: true 
+          };
+        }
+      }
 
       const { data: notification, error } = await supabaseAdmin
         .from('notifications')
@@ -120,6 +146,22 @@ class NotificationService {
       }
 
       console.log('✅ Notification stored successfully:', notification.id);
+
+      // Emit realtime update if socket.io available
+      if (io) {
+        io.to(`user_${user_id}`).emit('notification:new', {
+          notification: notification
+        });
+
+        // Update unread count
+        const countResult = await this.getUnreadCount(user_id);
+        if (countResult.success) {
+          io.to(`user_${user_id}`).emit('unread_count_updated', {
+            count: countResult.count
+          });
+        }
+      }
+
       return { success: true, notification };
     } catch (error) {
       console.error('❌ Error in storeNotification:', error);
@@ -159,12 +201,30 @@ class NotificationService {
         query = query.is('read_at', null);
       }
 
+      // Get total count before pagination (for unread_only count correctly)
+      const countQuery = supabaseAdmin
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId);
+      
+      if (status) {
+        countQuery.eq('status', status);
+      }
+      if (type) {
+        countQuery.eq('type', type);
+      }
+      if (unread_only) {
+        countQuery.is('read_at', null);
+      }
+
+      const { count } = await countQuery;
+
       // Apply pagination
       const from = (page - 1) * limit;
       const to = from + limit - 1;
       query = query.range(from, to);
 
-      const { data: notifications, error, count } = await query;
+      const { data: notifications, error } = await query;
 
       if (error) {
         console.error('❌ Error fetching notifications:', error);
@@ -264,6 +324,52 @@ class NotificationService {
     }
   }
 
+  /**
+   * Delete a single notification for a user
+   */
+  async deleteNotification(notificationId, userId) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('notifications')
+        .delete()
+        .eq('id', notificationId)
+        .eq('user_id', userId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ Error deleting notification:', error);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true, notification: data };
+    } catch (error) {
+      console.error('❌ Error in deleteNotification:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Clear all notifications for a user
+   */
+  async clearAllNotifications(userId) {
+    try {
+      const { error } = await supabaseAdmin
+        .from('notifications')
+        .delete()
+        .eq('user_id', userId);
+
+      if (error) {
+        console.error('❌ Error clearing notifications:', error);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('❌ Error in clearAllNotifications:', error);
+      return { success: false, error: error.message };
+    }
+  }
   /**
    * Clean up expired notifications
    */

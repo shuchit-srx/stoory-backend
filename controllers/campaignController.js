@@ -1448,6 +1448,87 @@ class CampaignController {
         paymentOrder = insertedOrder;
       }
 
+      // Create admin payment tracking and pending release transactions (advance/final)
+      try {
+        // Fetch commission settings (fallback to 10% if missing)
+        const { data: commissionSettings } = await supabaseAdmin
+          .from("commission_settings")
+          .select("commission_percentage, is_active")
+          .eq("is_active", true)
+          .order("effective_from", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (!commissionSettings) {
+          throw new Error("No active commission settings found. Admin must set commission.");
+        }
+        const commissionPercentage = commissionSettings.commission_percentage;
+        const totalAmountPaise = paymentAmount; // already in paise
+        const commissionAmountPaise = Math.round((totalAmountPaise * commissionPercentage) / 100);
+        const netAmountPaise = totalAmountPaise - commissionAmountPaise;
+        const advanceAmountPaise = Math.round(netAmountPaise * 0.30);
+        const finalAmountPaise = netAmountPaise - advanceAmountPaise;
+
+        // Insert admin payment tracking row
+        const { data: adminPaymentRecord, error: adminTrackErr } = await supabaseAdmin
+          .from("admin_payment_tracking")
+          .insert({
+            conversation_id: conversation_id,
+            campaign_id: conversation.campaign_id,
+            bid_id: null,
+            brand_owner_id: conversation.brand_owner_id,
+            influencer_id: conversation.influencer_id,
+            total_amount_paise: totalAmountPaise,
+            commission_amount_paise: commissionAmountPaise,
+            net_amount_paise: netAmountPaise,
+            advance_amount_paise: advanceAmountPaise,
+            final_amount_paise: finalAmountPaise,
+            commission_percentage: commissionPercentage,
+            advance_payment_status: 'admin_received',
+            final_payment_status: 'pending'
+          })
+          .select()
+          .single();
+
+        if (!adminTrackErr && adminPaymentRecord) {
+          // Create pending advance and final transactions for influencer wallet
+          const { error: txErr } = await supabaseAdmin
+            .from("transactions")
+            .insert([
+              {
+                wallet_id: wallet.id,
+                amount: advanceAmountPaise / 100,
+                amount_paise: advanceAmountPaise,
+                type: "credit",
+                status: "pending",
+                campaign_id: conversation.campaign_id || null,
+                bid_id: null,
+                conversation_id: conversation_id,
+                payment_stage: "advance",
+                admin_payment_tracking_id: adminPaymentRecord.id,
+                description: "Advance payment (30% after commission)"
+              },
+              {
+                wallet_id: wallet.id,
+                amount: finalAmountPaise / 100,
+                amount_paise: finalAmountPaise,
+                type: "credit",
+                status: "pending",
+                campaign_id: conversation.campaign_id || null,
+                bid_id: null,
+                conversation_id: conversation_id,
+                payment_stage: "final",
+                admin_payment_tracking_id: adminPaymentRecord.id,
+                description: "Final payment (70% after commission)"
+              }
+            ]);
+          // Ignore txErr to avoid failing verification path
+        }
+      } catch (e) {
+        // Swallow errors so verification flow isn't blocked
+        console.warn("⚠️ Failed to create admin payment release tracking:", e.message);
+      }
+
       // Create escrow hold record after payment order is created
       let escrowHold = null;
       if (request) {

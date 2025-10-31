@@ -12,7 +12,8 @@ class NotificationController {
         limit = 20,
         status,
         type,
-        unread_only = false
+        unread_only = false,
+        mark_read_on_view = false
       } = req.query;
 
       const options = {
@@ -23,13 +24,36 @@ class NotificationController {
         unread_only: unread_only === 'true'
       };
 
+      // If mark_read_on_view is true, mark all unread notifications as read when fetching
+      if (mark_read_on_view === 'true') {
+        const markResult = await notificationService.markAllAsRead(userId);
+        if (markResult.success) {
+          // Emit realtime update
+          const io = req.app.get('io');
+          if (io) {
+            io.to(`user_${userId}`).emit('notifications_all_read', {
+              user_id: userId
+            });
+            io.to(`user_${userId}`).emit('unread_count_updated', {
+              count: 0
+            });
+          }
+        }
+      }
+
       const result = await notificationService.getUserNotifications(userId, options);
 
       if (result.success) {
+        // Get unread count for response
+        const countResult = await notificationService.getUnreadCount(userId);
+        const unreadCount = countResult.success ? countResult.count : 0;
+
         res.json({
           success: true,
           notifications: result.notifications,
-          pagination: result.pagination
+          pagination: result.pagination,
+          unread_count: unreadCount,
+          marked_read_on_view: mark_read_on_view === 'true'
         });
       } else {
         res.status(400).json({
@@ -88,10 +112,29 @@ class NotificationController {
       const result = await notificationService.markAsRead(notificationId, userId);
 
       if (result.success) {
+        // Get updated unread count
+        const countResult = await notificationService.getUnreadCount(userId);
+        const unreadCount = countResult.success ? countResult.count : 0;
+
+        // Emit realtime updates
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`user_${userId}`).emit('notification_updated', {
+            id: notificationId,
+            read_at: result.notification.read_at,
+            status: 'delivered'
+          });
+
+          io.to(`user_${userId}`).emit('unread_count_updated', {
+            count: unreadCount
+          });
+        }
+
         res.json({
           success: true,
           message: 'Notification marked as read',
-          notification: result.notification
+          notification: result.notification,
+          unread_count: unreadCount
         });
       } else {
         res.status(400).json({
@@ -119,9 +162,22 @@ class NotificationController {
       const result = await notificationService.markAllAsRead(userId);
 
       if (result.success) {
+        // Emit realtime updates
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`user_${userId}`).emit('notifications_all_read', {
+            user_id: userId
+          });
+
+          io.to(`user_${userId}`).emit('unread_count_updated', {
+            count: 0
+          });
+        }
+
         res.json({
           success: true,
-          message: 'All notifications marked as read'
+          message: 'All notifications marked as read',
+          unread_count: 0
         });
       } else {
         res.status(400).json({
@@ -172,6 +228,78 @@ class NotificationController {
         success: false,
         message: 'Internal server error'
       });
+    }
+  }
+
+  /**
+   * Delete a single notification
+   */
+  async deleteNotification(req, res) {
+    try {
+      const userId = req.user.id;
+      const { notificationId } = req.params;
+
+      const result = await notificationService.deleteNotification(notificationId, userId);
+      if (result.success) {
+        // Get updated unread count after deletion
+        const countResult = await notificationService.getUnreadCount(userId);
+        const unreadCount = countResult.success ? countResult.count : 0;
+
+        // Emit realtime updates
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`user_${userId}`).emit('notification_deleted', {
+            id: notificationId
+          });
+
+          io.to(`user_${userId}`).emit('unread_count_updated', {
+            count: unreadCount
+          });
+        }
+
+        return res.json({
+          success: true,
+          message: 'Notification deleted',
+          unread_count: unreadCount
+        });
+      }
+      return res.status(400).json({ success: false, error: result.error });
+    } catch (error) {
+      console.error('❌ Error in deleteNotification:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Clear all notifications for current user
+   */
+  async clearAll(req, res) {
+    try {
+      const userId = req.user.id;
+      const result = await notificationService.clearAllNotifications(userId);
+      if (result.success) {
+        // Emit realtime updates
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`user_${userId}`).emit('notifications_cleared', {
+            user_id: userId
+          });
+
+          io.to(`user_${userId}`).emit('unread_count_updated', {
+            count: 0
+          });
+        }
+
+        return res.json({
+          success: true,
+          message: 'All notifications cleared',
+          unread_count: 0
+        });
+      }
+      return res.status(400).json({ success: false, error: result.error });
+    } catch (error) {
+      console.error('❌ Error in clearAll:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   }
 }

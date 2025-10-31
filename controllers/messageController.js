@@ -534,21 +534,34 @@ class MessageController {
           current_action_data: conversation.current_action_data
         } : null;
 
-        // Emit to conversation room with context
-        io.to(`conversation_${conversationId}`).emit("new_message", {
-          conversation_id: conversationId,
-          message: newMessage,
-          conversation_context: conversationContext,
+        // Emit to conversation room: chat:new with { message }
+        io.to(`room:${conversationId}`).emit('chat:new', {
+          message: newMessage
         });
 
+        // Fetch sender's name for notification
+        let senderName = 'Someone';
+        try {
+          const { data: sender, error: senderError } = await supabaseAdmin
+            .from('users')
+            .select('name')
+            .eq('id', senderId)
+            .eq('is_deleted', false)
+            .single();
+          
+          if (!senderError && sender && sender.name) {
+            senderName = sender.name;
+          }
+        } catch (error) {
+          console.warn('⚠️ Could not fetch sender name for notification:', error.message);
+        }
+
         // Store notification in database and emit to receiver
-        
-        // Store notification in database
         const notificationService = require('../services/notificationService');
         notificationService.storeNotification({
           user_id: receiverId,
           type: 'message',
-          title: `${req.user.name} sent you a message`,
+          title: `${senderName} sent you a message`,
           message: newMessage.message,
           data: {
             conversation_id: conversationId,
@@ -556,9 +569,10 @@ class MessageController {
             conversation_context: conversationContext,
             sender_id: senderId,
             receiver_id: receiverId,
+            sender_name: senderName
           },
           action_url: `/conversations/${conversationId}`
-        }).then(result => {
+        }, io).then(result => {
           if (result.success) {
             console.log(`✅ Notification stored successfully: ${result.notification.id}`);
           } else {
@@ -577,6 +591,9 @@ class MessageController {
             conversation_context: conversationContext,
             sender_id: senderId,
             receiver_id: receiverId,
+            sender_name: senderName,
+            title: `${senderName} sent you a message`,
+            body: newMessage.message
           },
         });
 
@@ -586,22 +603,71 @@ class MessageController {
           message: newMessage,
           conversation_context: conversationContext,
         });
+
+        // Compute conversation summary and emit conversations:upsert to both users
+        try {
+          const { data: unreadForReceiver } = await supabaseAdmin
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('conversation_id', conversationId)
+            .eq('receiver_id', receiverId)
+            .eq('seen', false);
+
+          const { data: unreadForSender } = await supabaseAdmin
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('conversation_id', conversationId)
+            .eq('receiver_id', senderId)
+            .eq('seen', false);
+
+          const base = {
+            conversation_id: conversationId,
+            last_message: {
+              id: newMessage.id,
+              conversation_id: conversationId,
+              sender_id: newMessage.sender_id,
+              receiver_id: newMessage.receiver_id,
+              message: newMessage.message,
+              created_at: newMessage.created_at,
+            },
+            chat_status: conversationContext?.chat_status || null,
+            flow_state: conversationContext?.flow_state || null,
+            awaiting_role: conversationContext?.awaiting_role || null,
+            updated_at: new Date().toISOString()
+          };
+
+          io.to(`user_${receiverId}`).emit('conversations:upsert', {
+            ...base,
+            unread_count: unreadForReceiver || 0
+          });
+
+          io.to(`user_${senderId}`).emit('conversations:upsert', {
+            ...base,
+            unread_count: unreadForSender || 0
+          });
+        } catch (e) {
+        }
       } else {
       }
 
-      // Send FCM push notification for REST API messages
+      // Send FCM push notification for REST API messages (only if user not viewing conversation)
       const fcmService = require('../services/fcmService');
       fcmService.sendMessageNotification(
         conversationId,
         newMessage,
         senderId,
-        receiverId
+        receiverId,
+        io  // Pass io to check if user is in conversation room
       ).then(result => {
-        if (result.success) { 
+        if (result.success && !result.skipped) {
+          console.log(`✅ FCM notification sent: ${result.sent} successful`);
+        } else if (result.skipped) {
+          console.log(`ℹ️ [FCM] Skipped - user is viewing conversation`);
         } else {
           console.error(`❌ FCM notification failed:`, result.error);
         }
-      }).catch(error => { 
+      }).catch(error => {
+        console.error(`❌ FCM notification error:`, error);
       });
 
       // Emit conversation list update to both users
@@ -1045,7 +1111,7 @@ class MessageController {
             conversation_context: conversationContext
           },
           action_url: `/conversations/${conversation.id}`
-        }).then(result => {
+        }, io).then(result => {
           if (result.success) {
             console.log(`✅ Brand owner notification stored: ${result.notification.id}`);
           } else {
@@ -1067,7 +1133,7 @@ class MessageController {
             conversation_context: conversationContext
           },
           action_url: `/conversations/${conversation.id}`
-        }).then(result => {
+        }, io).then(result => {
           if (result.success) {
             console.log(`✅ Influencer notification stored: ${result.notification.id}`);
           } else {
