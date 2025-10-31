@@ -1037,15 +1037,15 @@ class CampaignController {
           console.log("🔄 [DEBUG] Mapped reject_negotiation to handle_negotiation with action: reject");
         } else if (buttonToMap === 'send_negotiated_price') {
           mappedAction = 'send_negotiated_price';
-          mappedData = { price: additional_data?.price };
+          mappedData = { price: additional_data?.price ?? mappedData?.price };
           console.log("🔄 [DEBUG] Mapped send_negotiated_price with price:", additional_data?.price);
         } else if (buttonToMap === 'send_project_details') {
           mappedAction = 'send_project_details';
-          mappedData = { details: additional_data?.details };
+          mappedData = { details: additional_data?.details ?? mappedData?.details };
           console.log("🔄 [DEBUG] Mapped send_project_details with details:", additional_data?.details);
         } else if (buttonToMap === 'send_price_offer') {
           mappedAction = 'send_price_offer';
-          mappedData = { price: additional_data?.price };
+          mappedData = { price: additional_data?.price ?? mappedData?.price };
           console.log("🔄 [DEBUG] Mapped send_price_offer with price:", additional_data?.price);
         } else if (buttonToMap === 'proceed_to_payment') {
           mappedAction = 'proceed_to_payment';

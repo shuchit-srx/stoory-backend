@@ -839,6 +839,7 @@ class BidController {
   async handleBrandOwnerAction(req, res) {
     try {
       const { conversation_id, action, data, button_id, additional_data } = req.body;
+      console.log("🧾 [BID] brand-owner-action body:", { conversation_id, action, data, button_id, additional_data });
       const userId = req.user.id;
 
       if (!conversation_id) {
@@ -848,16 +849,13 @@ class BidController {
         });
       }
 
-      // Handle button mapping if button_id is provided OR if action is a button ID
+      // Handle button mapping only when an explicit button_id is provided
       let mappedAction = action;
       let mappedData = data || {};
 
-      // Check if we have button_id OR if action looks like a button ID
-      const buttonToMap = button_id || action;
-      
-      if (buttonToMap) {
+      if (button_id) {
+        const buttonToMap = button_id;
 
-        // Map button IDs to automated flow actions (same logic as message controller)
         if (buttonToMap === 'agree_negotiation') {
           mappedAction = 'handle_negotiation';
           mappedData = { action: 'agree' };
@@ -866,31 +864,32 @@ class BidController {
           mappedData = { action: 'reject' };
         } else if (buttonToMap === 'send_negotiated_price') {
           mappedAction = 'send_negotiated_price';
-          mappedData = { price: additional_data?.price };
+          mappedData = { price: additional_data?.price ?? mappedData?.price };
         } else if (buttonToMap === 'send_project_details') {
           mappedAction = 'send_project_details';
-          mappedData = { details: additional_data?.details };
+          mappedData = { details: additional_data?.details ?? mappedData?.details };
         } else if (buttonToMap === 'send_price_offer') {
           mappedAction = 'send_price_offer';
-          mappedData = { price: additional_data?.price };
+          mappedData = { price: additional_data?.price ?? mappedData?.price };
         } else if (buttonToMap === 'proceed_to_payment') {
           mappedAction = 'proceed_to_payment';
-          mappedData = additional_data || {};
+          mappedData = { ...(additional_data || {}), ...(mappedData || {}) };
         } else if (buttonToMap === 'accept_counter_offer') {
           mappedAction = 'accept_counter_offer';
-          mappedData = additional_data || {};
+          mappedData = { ...(additional_data || {}), ...(mappedData || {}) };
         } else if (buttonToMap === 'reject_counter_offer') {
           mappedAction = 'reject_counter_offer';
-          mappedData = { price: additional_data?.price };
+          mappedData = { price: additional_data?.price ?? mappedData?.price };
         } else if (buttonToMap === 'make_final_offer') {
           mappedAction = 'make_final_offer';
-          mappedData = additional_data || {};
+          mappedData = { ...(additional_data || {}), ...(mappedData || {}) };
         } else {
-          // Use additional_data for unmapped buttons
-          mappedData = additional_data || {};
+          // Fallback: merge, do not drop existing data
+          mappedData = { ...(mappedData || {}), ...(additional_data || {}) };
         }
-
       }
+
+      console.log("🧭 [BID] mapped action/data:", { mappedAction, mappedData });
 
       if (!mappedAction) {
         return res.status(400).json({

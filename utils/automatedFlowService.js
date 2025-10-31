@@ -551,6 +551,11 @@ Please respond to confirm your interest and availability for this campaign.`,
       }
 
       let newFlowState, newAwaitingRole, newMessage;
+      console.log("🔍 [AF] handleBrandOwnerAction input:", {
+        conversationId,
+        action,
+        data
+      });
 
       switch (action) {
         case "accept_negotiation":
@@ -624,6 +629,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             newAwaitingRole = "influencer";
             
           const projectDetails = data.details || data.project_details || "";
+          console.log("🧩 [AF] send_project_details computed:", { projectDetails });
 
           // Store project details in flow_data
           const updatedFlowData = {
@@ -631,6 +637,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             project_details: projectDetails,
             project_details_submitted_at: new Date().toISOString()
           };
+          console.log("🧩 [AF] send_project_details flow_data update:", updatedFlowData);
 
             newMessage = {
               conversation_id: conversationId,
@@ -661,6 +668,7 @@ Please respond to confirm your interest and availability for this campaign.`,
                 visible_to: "influencer",
               },
             };
+          console.log("📝 [AF] send_project_details newMessage:", newMessage);
 
           // Update flow_data with project details
           await supabaseAdmin
@@ -675,6 +683,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           newAwaitingRole = "influencer";
 
           const priceOffer = data.price ? parseFloat(data.price) : null;
+          console.log("🧮 [AF] send_price_offer parsed:", { input: data.price, priceOffer });
 
           // Update flow_data with price offer
           const priceFlowData = {
@@ -682,6 +691,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             price_offer: priceOffer,
             price_offer_submitted_at: new Date().toISOString()
           };
+          console.log("🧮 [AF] send_price_offer flow_data update:", priceFlowData);
 
           newMessage = {
             conversation_id: conversationId,
@@ -720,6 +730,7 @@ Please respond to confirm your interest and availability for this campaign.`,
               visible_to: "influencer",
             },
           };
+          console.log("📝 [AF] send_price_offer newMessage:", newMessage);
 
           // Update flow_data with price offer and update request if exists
             if (conversation.request_id) {
@@ -1032,6 +1043,7 @@ Please respond to confirm your interest and availability for this campaign.`,
       // Create messages (if any)
       let createdMessages = [];
       if (newMessage) {
+        console.log("🧾 [AF] About to insert automated messages:", [newMessage]);
         const { data: msgs, error: messageError } = await supabaseAdmin
           .from("messages")
           .insert([newMessage])
@@ -1041,6 +1053,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           throw new Error(`Failed to create messages: ${messageError.message}`);
         }
         createdMessages = msgs || [];
+        console.log("💾 [AF] Inserted automated messages:", createdMessages);
       }
 
       // Emit socket events for new messages
@@ -1093,6 +1106,18 @@ Please respond to confirm your interest and availability for this campaign.`,
         },
         message: createdMessages[0],
       };
+      console.log("📦 [AF] Result payload:", {
+        flow_state: result.conversation.flow_state,
+        awaiting_role: result.conversation.awaiting_role,
+        has_message: !!result.message,
+        message_preview: result.message ? {
+          id: result.message.id,
+          type: result.message.message_type,
+          action_required: result.message.action_required,
+          action_data_keys: result.message.action_data ? Object.keys(result.message.action_data) : null
+        } : null,
+        current_action_data_keys: currentActionData ? Object.keys(currentActionData) : null
+      });
 
       // Send FCM notification to the target user
       const fcmService = require('../services/fcmService');
