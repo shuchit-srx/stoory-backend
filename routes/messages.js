@@ -8,7 +8,6 @@ const {
 
 // All routes require authentication
 router.use((req, res, next) => {
-  console.log("🚀 [DEBUG] Messages route middleware hit for:", req.method, req.url);
   next();
 }, authService.authenticateToken);
 
@@ -31,8 +30,6 @@ router.get(
 
 // Test endpoint for button clicks
 router.post("/test-button-click", (req, res) => {
-  console.log("🚀 [DEBUG] Test button click endpoint hit!");
-  console.log("🚀 [DEBUG] Request body:", req.body);
   res.json({ success: true, message: "Test button click received", data: req.body });
 });
 
@@ -40,9 +37,6 @@ router.post("/test-button-click", (req, res) => {
 router.post(
   "/conversations/:conversation_id/button-click",
   (req, res, next) => {
-    console.log("🚀 [DEBUG] Button click route hit!");
-    console.log("🚀 [DEBUG] Route params:", req.params);
-    console.log("🚀 [DEBUG] Route body:", req.body);
     next();
   },
   MessageController.handleButtonClick
@@ -61,10 +55,6 @@ router.get("/:conversation_identifier", async (req, res) => {
     const { page = 1, limit = 50 } = req.query;
     const userId = req.user.id; // Get authenticated user ID
 
-    console.log(
-      `🔍 Frontend requested conversation with identifier: ${conversation_identifier} for user: ${userId}`
-    );
-
     // Try to find conversation by the identifier WITH USER ACCESS CONTROL
     const { data: conversation, error: convError } =
       await require("../supabase/client")
@@ -75,9 +65,6 @@ router.get("/:conversation_identifier", async (req, res) => {
         .single();
 
     if (convError || !conversation) {
-      console.log(
-        `❌ Conversation not found or access denied for identifier: ${conversation_identifier}, user: ${userId}`
-      );
       return res.status(404).json({
         success: false,
         message: "Conversation not found or access denied",
@@ -88,9 +75,6 @@ router.get("/:conversation_identifier", async (req, res) => {
 
     // Verify user has access to this conversation (double-check)
     if (conversation.brand_owner_id !== userId && conversation.influencer_id !== userId) {
-      console.log(
-        `❌ Access denied: User ${userId} not authorized for conversation ${conversation.id}`
-      );
       return res.status(403).json({
         success: false,
         message: "Access denied to this conversation",
@@ -98,15 +82,10 @@ router.get("/:conversation_identifier", async (req, res) => {
     }
 
     // If found, redirect to the proper messages endpoint
-    console.log(
-      `✅ Found conversation ${conversation.id}, user ${userId} has access, redirecting to messages endpoint`
-    );
-
     // Call the getMessages method directly
     req.params.conversation_id = conversation.id;
     return MessageController.getMessages(req, res);
   } catch (error) {
-    console.error("❌ Error handling conversation identifier:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error",

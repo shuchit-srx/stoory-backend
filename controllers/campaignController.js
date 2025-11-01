@@ -137,6 +137,13 @@ class CampaignController {
         });
       }
 
+      // Emit stats update after campaign creation
+      const io = req.app.get("io");
+      if (io) {
+        const { emitCampaignStatsOnChange } = require('../utils/statsUpdates');
+        await emitCampaignStatsOnChange(userId, io);
+      }
+
       console.log("Campaign created successfully:", campaign);
       res.status(201).json({
         success: true,
@@ -710,6 +717,13 @@ class CampaignController {
         });
       }
 
+      // Emit stats updates after deletion
+      const io = req.app.get("io");
+      if (io && existingCampaign.created_by) {
+        const { emitCampaignStatsOnChange } = require('../utils/statsUpdates');
+        await emitCampaignStatsOnChange(existingCampaign.created_by, io);
+      }
+
       res.json({
         success: true,
         message: "Campaign deleted successfully",
@@ -724,68 +738,113 @@ class CampaignController {
 
   /**
    * Get campaign statistics
+   * 
+   * For Influencers:
+   * - "new": All open campaigns (status='open')
+   * - "pending": Campaigns where influencer has interacted AND campaign.status='pending'
+   * - "closed": Campaigns where influencer has interacted AND campaign.status='closed'
+   * 
+   * For Brand Owners:
+   * - "new": All their created campaigns with status='open'
+   * - "pending": Their created campaigns with status='pending'
+   * - "closed": Their created campaigns with status='closed'
+   * 
+   * Also includes breakdown by campaign_type (service/product)
    */
   async getCampaignStats(req, res) {
     try {
       const userId = req.user.id;
+      const { getCampaignsStatsForUser } = require('../utils/statsUpdates');
 
-      let queryBuilder = supabaseAdmin
-        .from("campaigns")
-        .select("status, budget");
+      // Use the helper function that reuses listing logic
+      const stats = await getCampaignsStatsForUser(userId, req.user.role);
 
-      // Apply role-based filtering
+      // Calculate total budget
+      let totalBudget = 0;
       if (req.user.role === "brand_owner") {
-        queryBuilder = queryBuilder.eq("created_by", userId);
-      } else if (req.user.role === "influencer") {
-        // Get campaigns where influencer has requests
-        queryBuilder = supabaseAdmin
-          .from("requests")
-          .select(
-            `
-                        campaigns (
-                            status,
-                            budget
-                        )
-                    `
-          )
-          .eq("influencer_id", userId);
-      }
-
-      const { data, error } = await queryBuilder;
-
-      if (error) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch statistics",
+        const { data: allCampaigns } = await supabaseAdmin
+          .from("campaigns")
+          .select("budget")
+          .eq("created_by", userId);
+        
+        allCampaigns?.forEach((campaign) => {
+          totalBudget += parseFloat(campaign.budget || 0);
         });
+      } else if (req.user.role === "influencer") {
+        // For influencers, calculate budget from all campaigns in stats
+        const allCampaignIds = new Set();
+        
+        // Get open campaigns
+        const { data: openCampaigns } = await supabaseAdmin
+          .from("campaigns")
+          .select("id, budget")
+          .eq("status", "open");
+        openCampaigns?.forEach(c => {
+          allCampaignIds.add(c.id);
+          totalBudget += parseFloat(c.budget || 0);
+        });
+
+        // Get pending/closed campaigns from requests
+        const { data: influencerRequests } = await supabaseAdmin
+          .from("requests")
+          .select("campaign_id, status")
+          .eq("influencer_id", userId)
+          .not("campaign_id", "is", null);
+
+        const pendingRequestStatuses = ["connected", "negotiating", "paid", "finalized", "work_submitted", "work_approved"];
+        const closedRequestStatuses = ["completed", "cancelled"];
+        
+        const pendingCampaignIds = new Set(
+          (influencerRequests || [])
+            .filter((r) => r.campaign_id && pendingRequestStatuses.includes(r.status))
+            .map((r) => r.campaign_id)
+        );
+        
+        const closedCampaignIds = new Set(
+          (influencerRequests || [])
+            .filter((r) => r.campaign_id && closedRequestStatuses.includes(r.status))
+            .map((r) => r.campaign_id)
+        );
+
+        if (pendingCampaignIds.size > 0) {
+          const { data: pendingCampaigns } = await supabaseAdmin
+            .from("campaigns")
+            .select("id, budget")
+            .in("id", Array.from(pendingCampaignIds))
+            .eq("status", "pending");
+          pendingCampaigns?.forEach(c => {
+            if (!allCampaignIds.has(c.id)) {
+              allCampaignIds.add(c.id);
+              totalBudget += parseFloat(c.budget || 0);
+            }
+          });
+        }
+
+        if (closedCampaignIds.size > 0) {
+          const { data: closedCampaigns } = await supabaseAdmin
+            .from("campaigns")
+            .select("id, budget")
+            .in("id", Array.from(closedCampaignIds))
+            .eq("status", "closed");
+          closedCampaigns?.forEach(c => {
+            if (!allCampaignIds.has(c.id)) {
+              allCampaignIds.add(c.id);
+              totalBudget += parseFloat(c.budget || 0);
+            }
+          });
+        }
       }
 
-      // Calculate statistics
-      const campaigns =
-        req.user.role === "influencer"
-          ? data.map((item) => item.campaigns).filter(Boolean)
-          : data;
-
-      const stats = {
-        total: campaigns.length,
-        byStatus: {},
-        totalBudget: 0,
-      };
-
-      campaigns.forEach((campaign) => {
-        // Status stats
-        stats.byStatus[campaign.status] =
-          (stats.byStatus[campaign.status] || 0) + 1;
-
-        // Budget
-        stats.totalBudget += parseFloat(campaign.budget || 0);
-      });
-
-      res.json({
+      return res.json({
         success: true,
-        stats: stats,
+        stats: {
+          ...stats,
+          new: stats.open || stats.new || 0, // Ensure 'new' field for frontend
+          totalBudget: totalBudget,
+        },
       });
     } catch (error) {
+      console.error("Error in getCampaignStats:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",
@@ -1615,6 +1674,12 @@ class CampaignController {
           chat_status: 'real_time',
           timestamp: new Date().toISOString()
         });
+
+        // Emit stats updates after status change
+        if (conversation.brand_owner_id && conversation.influencer_id) {
+          const { emitStatsUpdatesToBothUsers } = require('../utils/statsUpdates');
+          await emitStatsUpdatesToBothUsers(conversation.brand_owner_id, conversation.influencer_id, io);
+        }
       }
 
       // Send FCM notification for payment completion
@@ -1800,3 +1865,4 @@ module.exports = {
   validateCreateCampaign,
   validateUpdateCampaign,
 };
+

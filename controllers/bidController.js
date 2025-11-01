@@ -109,6 +109,13 @@ class BidController {
         });
       }
 
+      // Emit stats update after bid creation
+      const io = req.app.get("io");
+      if (io) {
+        const { emitBidStatsOnChange } = require('../utils/statsUpdates');
+        await emitBidStatsOnChange(userId, io);
+      }
+
       res.status(201).json({
         success: true,
         data: bid,
@@ -228,6 +235,9 @@ class BidController {
             .filter((r) => r.bid_id && allowedReqStatuses.includes(r.status))
             .map((r) => r.bid_id);
           const idsSet = new Set(filteredIds);
+          
+          console.log(`[LISTING DEBUG] Status: ${normalizedStatus}, Filtered bid IDs: ${Array.from(idsSet).join(', ')}`);
+          
           if (idsSet.size === 0) {
             return res.json({
               success: true,
@@ -247,6 +257,8 @@ class BidController {
           const { data: bids, error } = await query
             .order("created_at", { ascending: false })
             .range(offset, offset + limit - 1);
+          
+          console.log(`[LISTING DEBUG] Found ${bids?.length || 0} bids after status filter`);
 
           if (error) {
             return res
@@ -656,6 +668,13 @@ class BidController {
         });
       }
 
+      // Emit stats updates after deletion
+      const io = req.app.get("io");
+      if (io && existingBid.created_by) {
+        const { emitBidStatsOnChange } = require('../utils/statsUpdates');
+        await emitBidStatsOnChange(existingBid.created_by, io);
+      }
+
       res.json({
         success: true,
         message: "Bid deleted successfully",
@@ -670,69 +689,111 @@ class BidController {
 
   /**
    * Get bid statistics
+   * 
+   * For Influencers:
+   * - "new": All open bids (status='open')
+   * - "pending": Bids where influencer has interacted AND bid.status='pending'
+   * - "closed": Bids where influencer has interacted AND bid.status='closed'
+   * 
+   * For Brand Owners:
+   * - "new": All their created bids with status='open'
+   * - "pending": Their created bids with status='pending'
+   * - "closed": Their created bids with status='closed'
    */
   async getBidStats(req, res) {
     try {
       const userId = req.user.id;
+      const { getBidsStatsForUser } = require('../utils/statsUpdates');
 
-      let query = supabaseAdmin
-        .from("bids")
-        .select("status, min_budget, max_budget");
+      // Use the helper function that reuses listing logic
+      const stats = await getBidsStatsForUser(userId, req.user.role);
 
-      // Apply role-based filtering
+      // Calculate total budget if needed
+      let totalBudget = 0;
       if (req.user.role === "brand_owner") {
-        query = query.eq("created_by", userId);
-      } else if (req.user.role === "influencer") {
-        // Get bids where influencer has requests
-        query = supabaseAdmin
-          .from("requests")
-          .select(
-            `
-                        bids (
-                            status,
-                            min_budget,
-                            max_budget
-                        )
-                    `
-          )
-          .eq("influencer_id", userId);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch statistics",
+        const { data: allBids } = await supabaseAdmin
+          .from("bids")
+          .select("min_budget, max_budget")
+          .eq("created_by", userId);
+        
+        allBids?.forEach((bid) => {
+          totalBudget += parseFloat(bid.max_budget || bid.min_budget || 0);
         });
+      } else if (req.user.role === "influencer") {
+        // For influencers, calculate budget from all bids in stats
+        const allBidIds = new Set();
+        
+        // Get open bids
+        const { data: openBids } = await supabaseAdmin
+          .from("bids")
+          .select("id, min_budget, max_budget")
+          .eq("status", "open");
+        openBids?.forEach(b => {
+          allBidIds.add(b.id);
+          totalBudget += parseFloat(b.max_budget || b.min_budget || 0);
+        });
+
+        // Get pending/closed bids from requests
+        const { data: influencerRequests } = await supabaseAdmin
+          .from("requests")
+          .select("bid_id, status")
+          .eq("influencer_id", userId)
+          .not("bid_id", "is", null);
+
+        const pendingRequestStatuses = ["connected", "negotiating", "paid", "finalized", "work_submitted", "work_approved"];
+        const closedRequestStatuses = ["completed", "cancelled"];
+        
+        const pendingBidIds = new Set(
+          (influencerRequests || [])
+            .filter((r) => r.bid_id && pendingRequestStatuses.includes(r.status))
+            .map((r) => r.bid_id)
+        );
+        
+        const closedBidIds = new Set(
+          (influencerRequests || [])
+            .filter((r) => r.bid_id && closedRequestStatuses.includes(r.status))
+            .map((r) => r.bid_id)
+        );
+
+        if (pendingBidIds.size > 0) {
+          const { data: pendingBids } = await supabaseAdmin
+            .from("bids")
+            .select("id, min_budget, max_budget")
+            .in("id", Array.from(pendingBidIds))
+            .eq("status", "pending");
+          pendingBids?.forEach(b => {
+            if (!allBidIds.has(b.id)) {
+              allBidIds.add(b.id);
+              totalBudget += parseFloat(b.max_budget || b.min_budget || 0);
+            }
+          });
+        }
+
+        if (closedBidIds.size > 0) {
+          const { data: closedBids } = await supabaseAdmin
+            .from("bids")
+            .select("id, min_budget, max_budget")
+            .in("id", Array.from(closedBidIds))
+            .eq("status", "closed");
+          closedBids?.forEach(b => {
+            if (!allBidIds.has(b.id)) {
+              allBidIds.add(b.id);
+              totalBudget += parseFloat(b.max_budget || b.min_budget || 0);
+            }
+          });
+        }
       }
 
-      // Calculate statistics
-      const bids =
-        req.user.role === "influencer"
-          ? data.map((item) => item.bids).filter(Boolean)
-          : data;
-
-      const stats = {
-        total: bids.length,
-        byStatus: {},
-        totalBudget: 0,
-      };
-
-      bids.forEach((bid) => {
-        // Status stats
-        stats.byStatus[bid.status] = (stats.byStatus[bid.status] || 0) + 1;
-
-        // Budget (use max_budget for total calculation)
-        const bidBudget = parseFloat(bid.max_budget || bid.min_budget || 0);
-        stats.totalBudget += bidBudget;
-      });
-
-      res.json({
+      return res.json({
         success: true,
-        stats: stats,
+        stats: {
+          ...stats,
+          new: stats.open || stats.new || 0, // Ensure 'new' field for frontend
+          totalBudget: totalBudget,
+        },
       });
     } catch (error) {
+      console.error("Error in getBidStats:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",
@@ -1626,6 +1687,12 @@ class BidController {
 
       // Emit realtime events (final contract)
       const io = req.app.get("io");
+      
+      // Emit stats updates after status change
+      if (io && conversation.brand_owner_id && conversation.influencer_id) {
+        const { emitStatsUpdatesToBothUsers } = require('../utils/statsUpdates');
+        await emitStatsUpdatesToBothUsers(conversation.brand_owner_id, conversation.influencer_id, io);
+      }
       if (io) {
         // State change to room:<conversationId>
         io.to(`room:${conversation_id}`).emit('conversation_state_changed', {

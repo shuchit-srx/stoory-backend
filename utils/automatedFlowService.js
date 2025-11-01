@@ -2137,6 +2137,12 @@ Please respond to confirm your interest and availability for this campaign.`,
             .eq("id", conversation.bid_id);
         }
 
+        // Emit stats updates after status change
+        if (this.io && conversation.brand_owner_id && conversation.influencer_id) {
+          const { emitStatsUpdatesToBothUsers } = require('./statsUpdates');
+          await emitStatsUpdatesToBothUsers(conversation.brand_owner_id, conversation.influencer_id, this.io);
+        }
+
         // Release escrow funds using proper escrow service
         if (conversation.request_id) {
           const escrowService = require('../services/escrowService');
