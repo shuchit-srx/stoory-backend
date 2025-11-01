@@ -407,12 +407,12 @@ class UserController {
                 });
             }
 
-            // Get social platforms count
+            // Get social platforms count (using is_connected instead of platform_is_active which doesn't exist)
             const { count: socialPlatformsCount } = await supabaseAdmin
                 .from('social_platforms')
                 .select('*', { count: 'exact', head: true })
                 .eq('user_id', userId)
-                .eq('platform_is_active', true);
+                .eq('is_connected', true);
 
             // Calculate verification completeness (role-specific)
             let verificationFields = [
@@ -1265,7 +1265,6 @@ class UserController {
                         profile_link,
                         followers_count,
                         engagement_rate,
-                        platform_is_active,
                         is_connected,
                         created_at,
                         updated_at
@@ -1290,7 +1289,7 @@ class UserController {
                 console.log('⚠️ [getUserProfile] Social platforms not found in relation, fetching separately...');
                 const { data: platformsData, error: platformsError } = await supabaseAdmin
                     .from('social_platforms')
-                    .select('id, platform_name, platform, username, profile_link, followers_count, engagement_rate, platform_is_active, is_connected, created_at, updated_at')
+                    .select('id, platform_name, platform, username, profile_link, followers_count, engagement_rate, is_connected, created_at, updated_at')
                     .eq('user_id', userId)
                     .order('created_at', { ascending: false });
                 

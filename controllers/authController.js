@@ -205,35 +205,34 @@ class AuthController {
 
       console.log('🔍 [getProfile] Fetching profile for userId:', userId);
 
-      const { data: user, error } = await supabaseAdmin
-        .from("users")
-        .select(
-          `
-                    *,
-                    social_platforms (
-                        id,
-                        platform_name,
-                        platform,
-                        username,
-                        profile_link,
-                        followers_count,
-                        engagement_rate,
-                        platform_is_active,
-                        is_connected,
-                        created_at,
-                        updated_at
-                    )
-                `
-        )
-        .eq("id", userId)
-        .maybeSingle();
+      // Try to get user first without relation to avoid relation query errors
+      let user = null;
+      let userError = null;
+      
+      try {
+        const { data, error } = await supabaseAdmin
+          .from("users")
+          .select("*")
+          .eq("id", userId)
+          .maybeSingle();
+        
+        if (error) {
+          userError = error;
+          console.error('❌ [getProfile] Supabase error fetching user:', error);
+        } else {
+          user = data;
+        }
+      } catch (err) {
+        userError = err;
+        console.error('❌ [getProfile] Exception fetching user:', err);
+      }
 
-      if (error) {
-        console.error('❌ [getProfile] Supabase error:', error);
+      if (userError) {
+        console.error('❌ [getProfile] Error details:', JSON.stringify(userError, null, 2));
         return res.status(500).json({
           success: false,
           message: "Failed to fetch profile",
-          error: process.env.NODE_ENV === 'development' ? error.message : undefined
+          error: process.env.NODE_ENV === 'development' ? (userError.message || JSON.stringify(userError)) : undefined
         });
       }
 
@@ -260,27 +259,38 @@ class AuthController {
         console.log('⚠️ [getProfile] Social platforms not found in relation, fetching separately...');
         const { data: platformsData, error: platformsError } = await supabaseAdmin
           .from('social_platforms')
-          .select('id, platform_name, platform, username, profile_link, followers_count, engagement_rate, platform_is_active, is_connected, created_at, updated_at')
+          .select('id, platform_name, platform, username, profile_link, followers_count, engagement_rate, is_connected, created_at, updated_at')
           .eq('user_id', userId)
           .order('created_at', { ascending: false });
         
-        if (!platformsError && platformsData) {
+        if (platformsError) {
+          console.error('❌ [getProfile] Error fetching platforms separately:', platformsError);
+        } else if (platformsData) {
           socialPlatforms = platformsData;
           console.log('✅ [getProfile] Fetched platforms separately:', socialPlatforms.length);
         }
       }
 
+      // Ensure profile_image_url is included (it should be from *, but explicitly ensure it)
+      const profileData = {
+        ...user,
+        profile_image_url: user.profile_image_url || null, // Explicitly ensure profile_image_url is present
+        social_platforms: socialPlatforms // Use the fetched platforms array
+      };
+
+      console.log('✅ [getProfile] Profile fetched successfully. Has profile_image_url:', !!profileData.profile_image_url);
+
       res.json({
         success: true,
-        user: {
-          ...user,
-          social_platforms: socialPlatforms // Use the fetched platforms array
-        },
+        user: profileData,
       });
     } catch (error) {
+      console.error('❌ [getProfile] Unexpected error:', error);
+      console.error('❌ [getProfile] Error stack:', error.stack);
       res.status(500).json({
         success: false,
         message: "Internal server error",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   }

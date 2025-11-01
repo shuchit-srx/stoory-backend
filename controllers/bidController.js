@@ -1988,33 +1988,18 @@ class BidController {
         });
       }
 
-      // Emit realtime events
+      // Note: automatedFlowService.handleWorkReview already emits all necessary socket events
+      // including conversation_state_changed, chat:new, conversations:upsert with correct chat_status
+      // So we don't need to emit duplicate events here. Only emit payment status update if needed.
+      
       const io = req.app.get("io");
-      if (io) {
-        // Emit conversation_updated event
-        io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
-          conversation_id: conversation_id,
-          flow_state: result.flow_state,
-          awaiting_role: result.awaiting_role,
-          chat_status: result.flow_state === "work_approved" ? "real_time" : "real_time" // FIXED: Use 'real_time' to match database constraint
-        });
-
-        // Emit new_message event
-        if (result.message) {
-          io.to(`conversation_${conversation_id}`).emit("new_message", {
-            conversation_id: conversation_id,
-            message: result.message
-          });
-        }
-
+      if (io && result.flow_state === "work_approved") {
         // Emit payment status update if work is approved
-        if (result.flow_state === "work_approved") {
-          io.to(`conversation_${conversation_id}`).emit("payment_status_update", {
-            conversation_id: conversation_id,
-            status: "released",
-            message: "Payment has been released from escrow"
-          });
-        }
+        io.to(`conversation_${conversation_id}`).emit("payment_status_update", {
+          conversation_id: conversation_id,
+          status: "released",
+          message: "Payment has been released from escrow"
+        });
       }
 
       res.json({

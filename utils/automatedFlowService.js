@@ -682,8 +682,35 @@ Please respond to confirm your interest and availability for this campaign.`,
           newFlowState = "influencer_price_response";
           newAwaitingRole = "influencer";
 
-          const priceOffer = data.price ? parseFloat(data.price) : null;
-          console.log("🧮 [AF] send_price_offer parsed:", { input: data.price, priceOffer });
+          // Try to get price from input, then from request, then from flow_data
+          let priceOffer = data.price ? parseFloat(data.price) : null;
+          
+          // If no price provided, try to get from request's proposed_amount
+          if (!priceOffer && conversation.request_id) {
+            const { data: requestData } = await supabaseAdmin
+              .from("requests")
+              .select("proposed_amount")
+              .eq("id", conversation.request_id)
+              .single();
+            
+            if (requestData && requestData.proposed_amount) {
+              priceOffer = parseFloat(requestData.proposed_amount);
+              console.log("🧮 [AF] send_price_offer using proposed_amount from request:", priceOffer);
+            }
+          }
+          
+          // If still no price, try from flow_data
+          if (!priceOffer && conversation.flow_data && conversation.flow_data.price_offer) {
+            priceOffer = parseFloat(conversation.flow_data.price_offer);
+            console.log("🧮 [AF] send_price_offer using price_offer from flow_data:", priceOffer);
+          }
+          
+          // If still no price, throw error
+          if (!priceOffer || isNaN(priceOffer)) {
+            throw new Error("Price offer is required. Either provide price in data.price, or ensure proposed_amount exists in the request.");
+          }
+          
+          console.log("🧮 [AF] send_price_offer final price:", { input: data.price, priceOffer });
 
           // Update flow_data with price offer
           const priceFlowData = {
@@ -2400,10 +2427,15 @@ Please respond to confirm your interest and availability for this campaign.`,
         work_status: action === "approve_work" ? "approved" : "revision_requested"
       };
 
-      // When work is approved, explicitly set chat_status to closed
+      // Handle chat_status based on action
       if (action === "approve_work") {
+        // When work is approved, explicitly set chat_status to closed
         updateData.chat_status = "closed";
+      } else if (action === "request_revision") {
+        // For revision requests, ensure chat_status remains 'real_time' (was already real_time during work)
+        updateData.chat_status = "real_time";
       }
+      // For other actions (reject_final_work), preserve existing chat_status (don't update it)
 
       // Update revision count if requesting revision
       if (action === "request_revision") {
@@ -2453,13 +2485,28 @@ Please respond to confirm your interest and availability for this campaign.`,
       // Emit socket events for real-time updates
       if (this.io) {
         try {
+          // Determine correct chat_status based on flow state
+          // When work is approved, chat_status is 'closed'
+          // For revision requests (work_in_progress), keep 'real_time' (was already real_time)
+          // For other states, use 'automated' 
+          let chatStatusForEmit;
+          if (newFlowState === 'work_approved') {
+            chatStatusForEmit = 'closed';
+          } else if (newFlowState === 'work_in_progress' || newFlowState === 'work_final_review') {
+            // During work (including revisions), chat should be real_time
+            chatStatusForEmit = 'real_time';
+          } else {
+            // For other states, check what chat_status should be (preserve if was real_time)
+            chatStatusForEmit = updateData.chat_status || conversation.chat_status || 'automated';
+          }
+          
           // Emit conversation state change to conversation room
-          console.log(`🔀 [STATE] conversation_state_changed -> room:${conversationId} flow:${newFlowState} awaiting:${newAwaitingRole}`);
+          console.log(`🔀 [STATE] conversation_state_changed -> room:${conversationId} flow:${newFlowState} awaiting:${newAwaitingRole} chat_status:${chatStatusForEmit}`);
           this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
             conversation_id: conversationId,
             flow_state: newFlowState,
             awaiting_role: newAwaitingRole,
-            chat_status: newFlowState === 'work_approved' ? 'closed' : 'automated',
+            chat_status: chatStatusForEmit,
             current_action_data: actionData,
             is_closed: newFlowState === 'work_approved',
             updated_at: new Date().toISOString()
@@ -2477,10 +2524,11 @@ Please respond to confirm your interest and availability for this campaign.`,
           }
 
           // Emit global conversation list updates to both users
+          // Use the same chat_status logic as above
           this.emitGlobalConversationUpdate(conversation, conversationId, {
             flow_state: newFlowState,
             awaiting_role: newAwaitingRole,
-            chat_status: newFlowState === 'work_approved' ? 'closed' : 'automated',
+            chat_status: chatStatusForEmit,
             current_action_data: actionData,
             is_closed: newFlowState === 'work_approved',
             action: 'state_changed',
