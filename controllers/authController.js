@@ -208,7 +208,19 @@ class AuthController {
         .select(
           `
                     *,
-                    social_platforms (*)
+                    social_platforms (
+                        id,
+                        platform_name,
+                        platform,
+                        username,
+                        profile_link,
+                        followers_count,
+                        engagement_rate,
+                        platform_is_active,
+                        is_connected,
+                        created_at,
+                        updated_at
+                    )
                 `
         )
         .eq("id", userId)
@@ -222,9 +234,30 @@ class AuthController {
         });
       }
 
+      // Ensure social_platforms is always an array
+      // If relation didn't return platforms, fetch them separately (fallback)
+      let socialPlatforms = user.social_platforms || [];
+      
+      if (!socialPlatforms || socialPlatforms.length === 0) {
+        console.log('⚠️ [getProfile] Social platforms not found in relation, fetching separately...');
+        const { data: platformsData, error: platformsError } = await supabaseAdmin
+          .from('social_platforms')
+          .select('id, platform_name, platform, username, profile_link, followers_count, engagement_rate, platform_is_active, is_connected, created_at, updated_at')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        
+        if (!platformsError && platformsData) {
+          socialPlatforms = platformsData;
+          console.log('✅ [getProfile] Fetched platforms separately:', socialPlatforms.length);
+        }
+      }
+
       res.json({
         success: true,
-        user: user,
+        user: {
+          ...user,
+          social_platforms: socialPlatforms // Use the fetched platforms array
+        },
       });
     } catch (error) {
       res.status(500).json({

@@ -681,7 +681,7 @@ class MessageController {
         } else {
           console.error(`❌ FCM notification failed:`, result.error);
         }
-      }).catch(error => {
+      }).catch(error => { 
         console.error(`❌ FCM notification error:`, error);
       });
 

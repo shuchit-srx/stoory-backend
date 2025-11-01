@@ -885,15 +885,7 @@ class AuthService {
           if (userData.emergency_contact_phone) userCreateData.emergency_contact_phone = userData.emergency_contact_phone;
           if (userData.emergency_contact_relation) userCreateData.emergency_contact_relation = userData.emergency_contact_relation;
           
-          // Business fields (for brand owners)
-          if (userData.business_name) userCreateData.business_name = userData.business_name;
-          if (userData.business_type) userCreateData.business_type = userData.business_type;
-          if (userData.gst_number) userCreateData.gst_number = userData.gst_number;
-          if (userData.business_registration_number) userCreateData.business_registration_number = userData.business_registration_number;
-          if (userData.business_address) userCreateData.business_address = userData.business_address;
-          if (userData.business_website) userCreateData.business_website = userData.business_website;
-
-          // Brand profile fields (for brand owners)
+          // Brand fields (for brand owners) - using brand_name, brand_description from schema
           if (userData.brand_name) userCreateData.brand_name = userData.brand_name;
           if (userData.brand_description) userCreateData.brand_description = userData.brand_description;
 
@@ -967,15 +959,7 @@ class AuthService {
             emergency_contact_phone: userData.emergency_contact_phone,
             emergency_contact_relation: userData.emergency_contact_relation,
             
-            // Business fields (for brand owners)
-            business_name: userData.business_name,
-            business_type: userData.business_type,
-            gst_number: userData.gst_number,
-            business_registration_number: userData.business_registration_number,
-            business_address: userData.business_address,
-            business_website: userData.business_website,
-
-            // Brand profile fields (for brand owners)
+            // Brand fields (for brand owners) - using brand_name, brand_description from schema
             brand_name: userData.brand_name,
             brand_description: userData.brand_description,
             brand_profile_image_url: userData.brand_profile_image_url,
