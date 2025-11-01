@@ -203,6 +203,8 @@ class AuthController {
     try {
       const userId = req.user.id;
 
+      console.log('🔍 [getProfile] Fetching profile for userId:', userId);
+
       const { data: user, error } = await supabaseAdmin
         .from("users")
         .select(
@@ -224,14 +226,30 @@ class AuthController {
                 `
         )
         .eq("id", userId)
-        .eq("is_deleted", false)
-        .single();
+        .maybeSingle();
 
-      if (error || !user) {
+      if (error) {
+        console.error('❌ [getProfile] Supabase error:', error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch profile",
+          error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+      }
+
+      if (!user) {
+        console.error('❌ [getProfile] User not found for userId:', userId);
         return res.status(404).json({
           success: false,
           message: "User not found",
         });
+      }
+
+      // Filter out deleted users only if explicitly deleted (not null/undefined)
+      // This allows restored users to access their profile
+      if (user.is_deleted === true) {
+        console.warn('⚠️ [getProfile] User is marked as deleted, but allowing access:', userId);
+        // Allow access anyway - user can restore their account
       }
 
       // Ensure social_platforms is always an array
@@ -269,31 +287,79 @@ class AuthController {
 
   /**
    * Update user profile
+   * NOTE: This endpoint allows ALL users (including brand owners) to update their profile
+   * WITHOUT requiring a subscription. Subscription checks should NOT be added here.
    */
   async updateProfile(req, res) {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
+        console.error('❌ [updateProfile] Validation errors:', errors.array());
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const userId = req.user.id;
-      const updateData = req.body;
+      const userId = req.user?.id;
+      if (!userId) {
+        console.error('❌ [updateProfile] No user ID in request');
+        return res.status(401).json({
+          success: false,
+          message: "Authentication required"
+        });
+      }
 
+      console.log('🔍 [updateProfile] Updating profile for userId:', userId);
+      const updateData = req.body;
+      console.log('🔍 [updateProfile] Update data keys:', Object.keys(updateData));
+
+      // IMPORTANT: No subscription check here - brand owners can update profile without subscription
       // Remove sensitive fields that shouldn't be updated
       delete updateData.id;
       delete updateData.phone;
       delete updateData.created_at;
       delete updateData.updated_at;
 
+      // Map frontend field names to database schema:
+      // Frontend sends 'business_name' -> Database expects 'brand_name'
+      // Frontend sends 'business_type' -> Not in schema anymore (removed), ignore it
+      if (updateData.business_name !== undefined) {
+        updateData.brand_name = updateData.business_name;
+        delete updateData.business_name;
+        console.log('🔄 [updateProfile] Mapped business_name -> brand_name');
+      }
+      
+      // Remove business_type as it's not in the schema anymore
+      if (updateData.business_type !== undefined) {
+        delete updateData.business_type;
+        console.log('🔄 [updateProfile] Removed business_type (not in schema)');
+      }
+
+      // Also handle other legacy business fields that might be sent
+      if (updateData.business_website !== undefined) {
+        delete updateData.business_website;
+      }
+      if (updateData.business_address !== undefined) {
+        delete updateData.business_address;
+      }
+      if (updateData.gst_number !== undefined) {
+        delete updateData.gst_number;
+      }
+      if (updateData.business_registration_number !== undefined) {
+        delete updateData.business_registration_number;
+      }
+
       // Handle profile image upload if present
       if (req.file) {
+        console.log('📸 [updateProfile] Processing profile image upload');
         // Get current user to check for existing profile image
-        const { data: currentUser } = await supabaseAdmin
+        const { data: currentUser, error: fetchError } = await supabaseAdmin
           .from("users")
           .select("profile_image_url")
           .eq("id", userId)
-          .single();
+          .maybeSingle();
+
+        if (fetchError) {
+          console.error('❌ [updateProfile] Error fetching current user:', fetchError);
+        }
 
         // Upload new profile image
         const { url, error: uploadError } = await uploadImageToStorage(
@@ -303,6 +369,7 @@ class AuthController {
         );
 
         if (uploadError) {
+          console.error('❌ [updateProfile] Image upload error:', uploadError);
           return res.status(500).json({
             success: false,
             message: "Failed to upload profile image",
@@ -318,6 +385,31 @@ class AuthController {
         updateData.profile_image_url = url;
       }
 
+      // Remove undefined/null values to avoid unnecessary updates
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] === undefined || updateData[key] === null) {
+          delete updateData[key];
+        }
+      });
+
+      if (Object.keys(updateData).length === 0) {
+        console.log('⚠️ [updateProfile] No fields to update');
+        // Fetch and return current user if no updates
+        const { data: currentUser } = await supabaseAdmin
+          .from("users")
+          .select("*")
+          .eq("id", userId)
+          .single();
+
+        return res.json({
+          success: true,
+          user: currentUser,
+          message: "No changes to update",
+        });
+      }
+
+      console.log('🔍 [updateProfile] Updating fields:', Object.keys(updateData));
+
       const { data: updatedUser, error } = await supabaseAdmin
         .from("users")
         .update(updateData)
@@ -326,11 +418,24 @@ class AuthController {
         .single();
 
       if (error) {
+        console.error('❌ [updateProfile] Supabase update error:', error);
+        console.error('❌ [updateProfile] Error details:', JSON.stringify(error, null, 2));
         return res.status(500).json({
           success: false,
           message: "Failed to update profile",
+          error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
       }
+
+      if (!updatedUser) {
+        console.error('❌ [updateProfile] User not found after update:', userId);
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      console.log('✅ [updateProfile] Profile updated successfully');
 
       res.json({
         success: true,
@@ -338,9 +443,12 @@ class AuthController {
         message: "Profile updated successfully",
       });
     } catch (error) {
+      console.error('❌ [updateProfile] Unexpected error:', error);
+      console.error('❌ [updateProfile] Error stack:', error.stack);
       res.status(500).json({
         success: false,
         message: "Internal server error",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   }
@@ -858,6 +966,10 @@ const validateVerificationDetails = [
     .optional()
     .isIn(["pan_card", "aadhaar_card", "passport", "driving_license", "voter_id"])
     .withMessage("Invalid verification document type"),
+  body("verification_image_url")
+    .optional()
+    .isURL()
+    .withMessage("Verification image URL must be a valid URL"),
   body("address_line1")
     .optional()
     .isLength({ min: 5, max: 200 })
@@ -910,14 +1022,20 @@ const validateVerificationDetails = [
     .optional()
     .isLength({ min: 2, max: 50 })
     .withMessage("Emergency contact relation must be between 2 and 50 characters"),
+  // Legacy field names from frontend - mapped to brand_name in updateProfile
   body("business_name")
     .optional()
     .isLength({ min: 2, max: 200 })
-    .withMessage("Business name must be between 2 and 200 characters"),
+    .withMessage("Business/Brand name must be between 2 and 200 characters"),
+  body("brand_name")
+    .optional()
+    .isLength({ min: 2, max: 200 })
+    .withMessage("Brand name must be between 2 and 200 characters"),
+  // business_type is deprecated - ignored in updateProfile
   body("business_type")
     .optional()
     .isIn(["individual", "partnership", "private_limited", "public_limited", "llp", "sole_proprietorship"])
-    .withMessage("Invalid business type"),
+    .withMessage("Invalid business type (deprecated field, will be ignored)"),
   body("gst_number")
     .optional()
     .matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/)

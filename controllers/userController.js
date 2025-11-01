@@ -773,6 +773,21 @@ class UserController {
         // 9. Pricing Range (Influencer-specific) - Optional
         // Note: Pricing is optional for now, so we don't count it in the total steps
 
+        // 10. Verification Document (Optional - not counted in completion)
+        // Note: Verification image is optional, shown in optional_fields
+
+        // Optional fields (shown but not counted in completion)
+        const optionalFields = [];
+        if (!user.verification_image_url) {
+            optionalFields.push({
+                field_name: 'verification_image_url',
+                field_label: 'Verification Document',
+                category: 'common',
+                screen_name: 'Kyc',
+                description: 'Upload a verification document (PAN, Aadhaar, etc.)'
+            });
+        }
+
         const progressPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
         const nextScreen = remainingSteps.length > 0 ? remainingSteps[0].screen_name : null;
 
@@ -784,7 +799,8 @@ class UserController {
             completed_steps: completedSteps,
             remaining_steps: remainingSteps,
             next_screen: nextScreen,
-            missing_required_fields: missingRequiredFields
+            missing_required_fields: missingRequiredFields,
+            optional_fields: optionalFields.length > 0 ? optionalFields : undefined
         };
     }
 
@@ -948,6 +964,15 @@ class UserController {
                 screen_name: stepScreenMap['business_details']
             });
         }
+        if (!user.verification_image_url) {
+            optionalFields.push({
+                field_name: 'verification_image_url',
+                field_label: 'Verification Document',
+                category: 'common',
+                screen_name: stepScreenMap['kyc_pan'],
+                description: 'Upload a verification document (PAN, Aadhaar, etc.)'
+            });
+        }
 
         const progressPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
         const nextScreen = remainingSteps.length > 0 ? remainingSteps[0].screen_name : null;
@@ -967,12 +992,15 @@ class UserController {
 
     /**
      * Update user verification details
+     * NOTE: This endpoint allows ALL users (including brand owners) to update their verification details
+     * WITHOUT requiring a subscription. Subscription checks should NOT be added here.
      */
     async updateVerificationDetails(req, res) {
         try {
             const userId = req.user.id;
             const updateData = req.body;
 
+            // IMPORTANT: No subscription check here - brand owners can update details without subscription
             // Remove fields that shouldn't be updated by users
             const restrictedFields = [
                 'verification_status',

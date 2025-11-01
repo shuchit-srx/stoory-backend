@@ -1832,12 +1832,12 @@ class BidController {
   async handleWorkSubmission(req, res) {
     try {
       const { conversation_id } = req.params;
-      const { deliverables, description, submission_notes } = req.body;
+      const { deliverables, description, submission_notes, attachments } = req.body;
 
-      if (!deliverables || !description) {
+      if (!deliverables && !description) {
         return res.status(400).json({
           success: false,
-          message: "deliverables and description are required",
+          message: "Either deliverables or description is required",
         });
       }
 
@@ -1869,10 +1869,19 @@ class BidController {
         });
       }
 
+      // Validate attachments if provided (should be array of attachment IDs)
+      if (attachments && !Array.isArray(attachments)) {
+        return res.status(400).json({
+          success: false,
+          message: "Attachments must be an array of attachment IDs",
+        });
+      }
+
       const submissionData = {
-        deliverables,
-        description,
-        submission_notes,
+        deliverables: deliverables || "",
+        description: description || "",
+        submission_notes: submission_notes || "",
+        attachments: attachments || [],
         submitted_at: new Date().toISOString(),
       };
 
@@ -1889,24 +1898,21 @@ class BidController {
         });
       }
 
-      // Emit realtime events
+      // Emit realtime events (handleWorkSubmission already emits, but ensure consistency)
       const io = req.app.get("io");
-      if (io) {
-        // Emit conversation_updated event
-        io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
+      if (io && result.message) {
+        // Emit standardized socket events
+        io.to(`room:${conversation_id}`).emit('conversation_state_changed', {
           conversation_id: conversation_id,
           flow_state: result.flow_state,
           awaiting_role: result.awaiting_role,
-          chat_status: "work_submitted"
+          chat_status: 'automated',
+          updated_at: new Date().toISOString()
         });
 
-        // Emit new_message event
-        if (result.message) {
-          io.to(`conversation_${conversation_id}`).emit("new_message", {
-            conversation_id: conversation_id,
-            message: result.message
-          });
-        }
+        io.to(`room:${conversation_id}`).emit('chat:new', {
+          message: result.message
+        });
       }
 
       res.json({
@@ -1914,6 +1920,7 @@ class BidController {
         message: "Work submitted successfully",
         flow_state: result.flow_state,
         awaiting_role: result.awaiting_role,
+        message_data: result.message
       });
     } catch (error) {
       console.error("Error handling work submission:", error);

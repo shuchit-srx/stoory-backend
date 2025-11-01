@@ -972,6 +972,18 @@ Please respond to confirm your interest and availability for this campaign.`,
             .eq("id", conversationId);
           break;
 
+        case "approve_work":
+          // Brand owner approves work - use handleWorkReview logic
+          await this.handleWorkReview(conversationId, "approve_work", data.feedback || data.message || "");
+          // handleWorkReview already sends messages and updates state, so we can return early
+          return { success: true, message: "Work approved successfully" };
+
+        case "request_revision":
+          // Brand owner requests revision
+          await this.handleWorkReview(conversationId, "request_revision", data.feedback || data.revision_feedback || data.message || "");
+          // handleWorkReview already sends messages and updates state, so we can return early
+          return { success: true, message: "Revision requested" };
+
         default:
           throw new Error(`Unknown action: ${action}`);
       }
@@ -1625,8 +1637,16 @@ Please respond to confirm your interest and availability for this campaign.`,
       // Emit WebSocket events for real-time updates
       if (this.io) {
         try {
-          // Emit conversation state change
-          this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+          // Get updated conversation for accurate state
+          const { data: updatedConv } = await supabaseAdmin
+            .from('conversations')
+            .select('*')
+            .eq('id', conversationId)
+            .single();
+
+          // Emit conversation state change to conversation room (standardized room name)
+          console.log(`🔀 [STATE] conversation_state_changed -> room:${conversationId} flow:${newFlowState} awaiting:${newAwaitingRole}`);
+          this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
             conversation_id: conversationId,
             flow_state: newFlowState,
             awaiting_role: newAwaitingRole,
@@ -1635,21 +1655,15 @@ Please respond to confirm your interest and availability for this campaign.`,
             updated_at: new Date().toISOString()
           });
 
-          // Emit new message to conversation room
+          // Emit new message to conversation room (standardized event name)
           if (result.message) {
-            this.io.to(`conversation_${conversationId}`).emit('new_message', {
-              conversation_id: conversationId,
-              message: result.message,
-              conversation_context: {
-                id: conversationId,
-                chat_status: 'automated',
-                flow_state: newFlowState,
-                awaiting_role: newAwaitingRole,
-                conversation_type: conversation.campaign_id ? 'campaign' : conversation.bid_id ? 'bid' : 'direct',
-                automation_enabled: true,
-                current_action_data: result.conversation.current_action_data
-              }
+            console.log(`💬 [MSG] chat:new -> room:${conversationId} msg:${result.message.id}`);
+            this.io.to(`room:${conversationId}`).emit('chat:new', {
+              message: result.message
             });
+            
+            // Also emit as automated message
+            this.emitAutomatedMessage(conversationId, result.message);
           }
 
           // Emit global conversation list updates
@@ -1658,10 +1672,38 @@ Please respond to confirm your interest and availability for this campaign.`,
             awaiting_role: newAwaitingRole,
             chat_status: 'automated',
             current_action_data: result.conversation.current_action_data,
-            action: 'state_changed'
+            action: 'state_changed',
+            last_message: result.message ? {
+              id: result.message.id,
+              message: result.message.message,
+              created_at: result.message.created_at,
+              sender_id: result.message.sender_id
+            } : undefined
           });
 
-          console.log("📡 [DEBUG] WebSocket events emitted for conversation:", conversationId);
+          // Emit conversations:upsert for both users (standardized list update)
+          const conversationListUtils = require('./conversationListUpdates');
+          if (result.message && updatedConv) {
+            // Emit for influencer (submitter)
+            const influencerPayload = await conversationListUtils.buildConversationsUpsertPayload({
+              conversationId,
+              currentUserId: conversation.influencer_id,
+              lastMessage: result.message,
+              conversation: updatedConv
+            });
+            conversationListUtils.emitConversationsUpsert(this.io, conversation.influencer_id, influencerPayload);
+
+            // Emit for brand owner (reviewer)
+            const brandOwnerPayload = await conversationListUtils.buildConversationsUpsertPayload({
+              conversationId,
+              currentUserId: conversation.brand_owner_id,
+              lastMessage: result.message,
+              conversation: updatedConv
+            });
+            conversationListUtils.emitConversationsUpsert(this.io, conversation.brand_owner_id, brandOwnerPayload);
+          }
+
+          console.log("✅ [DEBUG] WebSocket events emitted for influencer action:", conversationId);
         } catch (socketError) {
           console.error("❌ [DEBUG] WebSocket emit error:", socketError);
         }
@@ -2002,60 +2044,111 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error(`Failed to update conversation: ${updateError.message}`);
       }
 
-      // Create work submission message
+      // Handle attachments if provided
+      let attachmentIds = [];
+      if (submissionData.attachments && Array.isArray(submissionData.attachments) && submissionData.attachments.length > 0) {
+        // If attachments are provided as IDs, use them directly
+        attachmentIds = submissionData.attachments.filter(id => typeof id === 'string');
+        console.log(`📎 [WORK SUBMISSION] Attachments linked: ${attachmentIds.length}`);
+      }
+
+      // Build message text with work submission details
+      let messageText = `📤 **Work Submitted**${isResubmission ? ` (Revision ${conversation.revision_count || 0})` : ''}\n\n`;
+      if (submissionData.deliverables) {
+        messageText += `**Deliverables:** ${submissionData.deliverables}\n\n`;
+      }
+      if (submissionData.description) {
+        messageText += `**Description:** ${submissionData.description}\n\n`;
+      }
+      if (submissionData.submission_notes) {
+        messageText += `**Notes:** ${submissionData.submission_notes}\n\n`;
+      }
+      if (attachmentIds.length > 0) {
+        messageText += `**Attachments:** ${attachmentIds.length} file(s) attached\n\n`;
+      }
+
+      // Create work submission message with attachments
+      const messageInsertData = {
+        conversation_id: conversationId,
+        sender_id: conversation.influencer_id,
+        receiver_id: conversation.brand_owner_id,
+        message: messageText.trim(),
+        message_type: "automated",
+        action_required: true,
+        action_data: {
+          title: "🎯 **Work Review Required**",
+          subtitle: "Please review the submitted work and provide feedback:",
+          work_submission: {
+            deliverables: submissionData.deliverables,
+            description: submissionData.description,
+            submission_notes: submissionData.submission_notes,
+            submitted_at: submissionData.submitted_at,
+            attachments_count: attachmentIds.length,
+            attachment_ids: attachmentIds
+          },
+          buttons: (() => {
+            const buttons = [
+              {
+                id: "approve_work",
+                text: "Approve Work",
+                action: "approve_work",
+                style: "success"
+              }
+            ];
+
+            // Check if this is final revision
+            const currentRevisionCount = conversation.revision_count || 0;
+            const maxRevisions = conversation.max_revisions || 3;
+            const isFinalRevision = currentRevisionCount >= (maxRevisions - 1);
+
+            if (isFinalRevision) {
+              buttons.push({
+                id: "reject_final_work",
+                text: "Reject Work (Final)",
+                action: "reject_final_work",
+                style: "danger"
+              });
+            } else {
+              buttons.push({
+                id: "request_revision",
+                text: "Request Revision",
+                action: "request_revision",
+                style: "warning"
+              });
+            }
+
+            return buttons;
+          })()
+        }
+      };
+
       const { data: message, error: messageError } = await supabaseAdmin
         .from("messages")
-        .insert({
-          conversation_id: conversationId,
-          sender_id: conversation.influencer_id,
-          receiver_id: conversation.brand_owner_id,
-          message: `📤 **Work Submitted**${isResubmission ? ` (Revision ${conversation.revision_count || 0})` : ''}\n\n**Deliverables:** ${submissionData.deliverables}\n\n**Description:** ${submissionData.description}\n\n${submissionData.submission_notes ? `**Notes:** ${submissionData.submission_notes}` : ''}`,
-          message_type: "automated", // Fixed: Changed from "system" to "automated"
-          action_required: true,
-          action_data: {
-            title: "🎯 **Work Review Required**",
-            subtitle: "Please review the submitted work and provide feedback:",
-            work_submission: submissionData,
-            buttons: (() => {
-              const buttons = [
-                {
-                  id: "approve_work",
-                  text: "Approve Work",
-                  action: "approve_work",
-                  style: "success"
-                }
-              ];
-
-              // Check if this is final revision
-              const currentRevisionCount = conversation.revision_count || 0;
-              const maxRevisions = conversation.max_revisions || 3;
-              const isFinalRevision = currentRevisionCount >= (maxRevisions - 1);
-
-              if (isFinalRevision) {
-                buttons.push({
-                  id: "reject_final_work",
-                  text: "Reject Work (Final)",
-                  action: "reject_final_work",
-                  style: "danger"
-                });
-              } else {
-                buttons.push({
-                  id: "request_revision",
-                  text: "Request Revision",
-                  action: "request_revision",
-                  style: "warning"
-                });
-              }
-
-              return buttons;
-            })()
-          }
-        })
+        .insert(messageInsertData)
         .select()
         .single();
 
       if (messageError) {
         throw new Error(`Failed to create message: ${messageError.message}`);
+      }
+
+      // Link attachments to the message if provided
+      if (attachmentIds.length > 0) {
+        const attachmentLinks = attachmentIds.map(attachmentId => ({
+          message_id: message.id,
+          attachment_id: attachmentId
+        }));
+
+        const { error: linkError } = await supabaseAdmin
+          .from("message_attachments")
+          .insert(attachmentLinks);
+
+        if (linkError) {
+          console.error("⚠️ [WORK SUBMISSION] Failed to link attachments:", linkError);
+          // Don't throw - message is created, attachments can be linked later
+        } else {
+          console.log(`✅ [WORK SUBMISSION] Linked ${attachmentIds.length} attachment(s) to message ${message.id}`);
+        }
       }
 
       // Update request status to work_submitted if exists
@@ -2069,6 +2162,78 @@ Please respond to confirm your interest and availability for this campaign.`,
             work_submission_date: submissionData.submitted_at
           })
           .eq("id", conversation.request_id);
+      }
+
+      // Emit socket events for real-time updates
+      if (this.io) {
+        try {
+          // Get updated conversation
+          const { data: updatedConv } = await supabaseAdmin
+            .from('conversations')
+            .select('*')
+            .eq('id', conversationId)
+            .single();
+
+          // Emit conversation state change
+          console.log(`🔀 [STATE] conversation_state_changed -> room:${conversationId} flow:work_submitted awaiting:brand_owner`);
+          this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
+            conversation_id: conversationId,
+            flow_state: "work_submitted",
+            awaiting_role: "brand_owner",
+            chat_status: 'automated',
+            current_action_data: message.action_data,
+            updated_at: new Date().toISOString()
+          });
+
+          // Emit new message
+          if (message) {
+            console.log(`💬 [MSG] chat:new -> room:${conversationId} msg:${message.id}`);
+            this.io.to(`room:${conversationId}`).emit('chat:new', {
+              message: message
+            });
+            this.emitAutomatedMessage(conversationId, message);
+          }
+
+          // Emit conversation list updates for both users
+          const conversationListUtils = require('./conversationListUpdates');
+          if (message && updatedConv) {
+            // Emit for influencer
+            const influencerPayload = await conversationListUtils.buildConversationsUpsertPayload({
+              conversationId,
+              currentUserId: conversation.influencer_id,
+              lastMessage: message,
+              conversation: updatedConv
+            });
+            conversationListUtils.emitConversationsUpsert(this.io, conversation.influencer_id, influencerPayload);
+
+            // Emit for brand owner
+            const brandOwnerPayload = await conversationListUtils.buildConversationsUpsertPayload({
+              conversationId,
+              currentUserId: conversation.brand_owner_id,
+              lastMessage: message,
+              conversation: updatedConv
+            });
+            conversationListUtils.emitConversationsUpsert(this.io, conversation.brand_owner_id, brandOwnerPayload);
+          }
+
+          // Emit global conversation update
+          this.emitGlobalConversationUpdate(conversation, conversationId, {
+            flow_state: "work_submitted",
+            awaiting_role: "brand_owner",
+            chat_status: 'automated',
+            action: 'work_submitted',
+            last_message: message ? {
+              id: message.id,
+              message: message.message,
+              created_at: message.created_at,
+              sender_id: message.sender_id
+            } : undefined
+          });
+
+          console.log("✅ [DEBUG] Socket events emitted for work submission:", conversationId);
+        } catch (socketError) {
+          console.error("❌ [DEBUG] Socket emit error in handleWorkSubmission:", socketError);
+        }
       }
 
       return {
@@ -2108,11 +2273,13 @@ Please respond to confirm your interest and availability for this campaign.`,
         newFlowState = "work_approved";
         newAwaitingRole = null; // Work completed, no further action needed
         
-        messageText = `✅ **Work Approved!**\n\nGreat work! The collaboration has been completed successfully.${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`;
+        messageText = `✅ **Work Approved!**\n\n🎉 Great work! The collaboration has been completed successfully.${feedback ? `\n\n**Feedback:** ${feedback}` : ''}\n\n✨ **Collaboration Status: CLOSED**`;
         
         actionData = {
           title: "🎉 **Collaboration Completed**",
-          subtitle: "The work has been approved and the collaboration is now complete.",
+          subtitle: "The work has been approved and the collaboration is now complete. This conversation is closed.",
+          is_closed: true,
+          chat_status: "closed",
           buttons: []
         };
 
@@ -2136,6 +2303,15 @@ Please respond to confirm your interest and availability for this campaign.`,
             .update({ status: "closed" })
             .eq("id", conversation.bid_id);
         }
+
+        // Mark conversation as CLOSED (clear closed state)
+        await supabaseAdmin
+          .from("conversations")
+          .update({
+            chat_status: "closed",
+            flow_state: "work_approved"
+          })
+          .eq("id", conversationId);
 
         // Emit stats updates after status change
         if (this.io && conversation.brand_owner_id && conversation.influencer_id) {
@@ -2224,6 +2400,11 @@ Please respond to confirm your interest and availability for this campaign.`,
         work_status: action === "approve_work" ? "approved" : "revision_requested"
       };
 
+      // When work is approved, explicitly set chat_status to closed
+      if (action === "approve_work") {
+        updateData.chat_status = "closed";
+      }
+
       // Update revision count if requesting revision
       if (action === "request_revision") {
         const currentRevisionCount = conversation.revision_count || 0;
@@ -2267,6 +2448,85 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       if (messageError) {
         throw new Error(`Failed to create message: ${messageError.message}`);
+      }
+
+      // Emit socket events for real-time updates
+      if (this.io) {
+        try {
+          // Emit conversation state change to conversation room
+          console.log(`🔀 [STATE] conversation_state_changed -> room:${conversationId} flow:${newFlowState} awaiting:${newAwaitingRole}`);
+          this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
+            conversation_id: conversationId,
+            flow_state: newFlowState,
+            awaiting_role: newAwaitingRole,
+            chat_status: newFlowState === 'work_approved' ? 'closed' : 'automated',
+            current_action_data: actionData,
+            is_closed: newFlowState === 'work_approved',
+            updated_at: new Date().toISOString()
+          });
+
+          // Emit new message to conversation room
+          if (message) {
+            console.log(`💬 [MSG] chat:new -> room:${conversationId} msg:${message.id}`);
+            this.io.to(`room:${conversationId}`).emit('chat:new', {
+              message: message
+            });
+            
+            // Also emit as automated message
+            this.emitAutomatedMessage(conversationId, message);
+          }
+
+          // Emit global conversation list updates to both users
+          this.emitGlobalConversationUpdate(conversation, conversationId, {
+            flow_state: newFlowState,
+            awaiting_role: newAwaitingRole,
+            chat_status: newFlowState === 'work_approved' ? 'closed' : 'automated',
+            current_action_data: actionData,
+            is_closed: newFlowState === 'work_approved',
+            action: 'state_changed',
+            last_message: message ? {
+              id: message.id,
+              message: message.message,
+              created_at: message.created_at,
+              sender_id: message.sender_id
+            } : undefined
+          });
+
+          // Emit conversations:upsert for both users
+          const conversationListUtils = require('./conversationListUpdates');
+          if (message) {
+            // Get updated conversation
+            const { data: updatedConv } = await supabaseAdmin
+              .from('conversations')
+              .select('*')
+              .eq('id', conversationId)
+              .single();
+
+            if (updatedConv) {
+              // Emit for brand owner
+              const brandOwnerPayload = await conversationListUtils.buildConversationsUpsertPayload({
+                conversationId,
+                currentUserId: conversation.brand_owner_id,
+                lastMessage: message,
+                conversation: updatedConv
+              });
+              conversationListUtils.emitConversationsUpsert(this.io, conversation.brand_owner_id, brandOwnerPayload);
+
+              // Emit for influencer
+              const influencerPayload = await conversationListUtils.buildConversationsUpsertPayload({
+                conversationId,
+                currentUserId: conversation.influencer_id,
+                lastMessage: message,
+                conversation: updatedConv
+              });
+              conversationListUtils.emitConversationsUpsert(this.io, conversation.influencer_id, influencerPayload);
+            }
+          }
+
+          console.log("✅ [DEBUG] Socket events emitted for work review:", conversationId);
+        } catch (socketError) {
+          console.error("❌ [DEBUG] Socket emit error in handleWorkReview:", socketError);
+        }
       }
 
       // Send FCM notification to influencer

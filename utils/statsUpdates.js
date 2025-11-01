@@ -3,7 +3,7 @@
  * Stats calculation EXACTLY matches listing endpoint logic
  */
 
-const { supabaseAdmin } = require('../config/supabase');
+const { supabaseAdmin } = require('../supabase/client');
 
 /**
  * Calculate bids stats for influencer - EXACTLY matches listing logic

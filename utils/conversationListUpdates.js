@@ -3,7 +3,7 @@
  * Ensures consistent payload structure for conversations:upsert events
  */
 
-const { supabaseAdmin } = require('../config/supabase');
+const { supabaseAdmin } = require('../supabase/client');
 
 /**
  * Fetch other user information for a conversation
