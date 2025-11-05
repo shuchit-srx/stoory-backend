@@ -2481,7 +2481,7 @@ class MessageController {
           created_at, updated_at, flow_state, awaiting_role,
           campaigns!inner(
             id, title, description, min_budget, max_budget, status, requirements,
-            language, platform, content_type, campaign_type, deliverables
+            language, platform, content_type, category, campaign_type, deliverables
           )
         `
         )

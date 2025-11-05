@@ -20,7 +20,7 @@ async function getBidsStatsForInfluencer(userId) {
 
   if (reqError) {
     console.error('Error fetching influencer requests:', reqError);
-    return { total: 0, open: 0, pending: 0, closed: 0, rejected: 0 };
+    return { total: 0, new: 0, pending: 0, closed: 0 };
   }
 
   const pendingRequestStatuses = [
@@ -78,10 +78,9 @@ async function getBidsStatsForInfluencer(userId) {
 
   return {
     total: (openCount || 0) + pendingCount + closedCount,
-    open: openCount || 0,
+    new: openCount || 0,
     pending: pendingCount,
     closed: closedCount,
-    rejected: 0,
   };
 }
 
@@ -111,10 +110,9 @@ async function getBidsStatsForBrandOwner(userId) {
 
   return {
     total: (openCount || 0) + (pendingCount || 0) + (closedCount || 0),
-    open: openCount || 0,
+    new: openCount || 0,
     pending: pendingCount || 0,
     closed: closedCount || 0,
-    rejected: 0,
   };
 }
 
@@ -135,11 +133,9 @@ async function getCampaignsStatsForInfluencer(userId) {
     console.error('Error fetching influencer campaign requests:', reqError);
     return {
       total: 0,
-      open: 0,
+      new: 0,
       pending: 0,
       closed: 0,
-      rejected: 0,
-      active: 0,
       byType: {
         service: { new: 0, pending: 0, closed: 0, total: 0 },
         product: { new: 0, pending: 0, closed: 0, total: 0 }
@@ -225,11 +221,9 @@ async function getCampaignsStatsForInfluencer(userId) {
   // Build stats with type breakdown
   const stats = {
     total: (openCount || 0) + pendingCount + closedCount,
-    open: openCount || 0,
+    new: openCount || 0,
     pending: pendingCount,
     closed: closedCount,
-    rejected: 0,
-    active: 0,
     byType: {
       service: { new: 0, pending: 0, closed: 0, total: 0 },
       product: { new: 0, pending: 0, closed: 0, total: 0 }
@@ -290,11 +284,91 @@ async function getCampaignsStatsForBrandOwner(userId) {
 
   const stats = {
     total: (openCount || 0) + (pendingCount || 0) + (closedCount || 0),
-    open: openCount || 0,
+    new: openCount || 0,
     pending: pendingCount || 0,
     closed: closedCount || 0,
-    rejected: 0,
-    active: 0,
+    byType: {
+      service: { new: 0, pending: 0, closed: 0, total: 0 },
+      product: { new: 0, pending: 0, closed: 0, total: 0 }
+    }
+  };
+
+  // Count by type
+  allCampaigns?.forEach((campaign) => {
+    const campaignType = campaign.campaign_type || 'product';
+    if (campaign.status === "open") {
+      stats.byType[campaignType].new++;
+      stats.byType[campaignType].total++;
+    } else if (campaign.status === "pending") {
+      stats.byType[campaignType].pending++;
+      stats.byType[campaignType].total++;
+    } else if (campaign.status === "closed") {
+      stats.byType[campaignType].closed++;
+      stats.byType[campaignType].total++;
+    }
+  });
+
+  return stats;
+}
+
+/**
+ * Calculate bids stats for admin - sees ALL bids
+ * @returns {Promise<Object>} Stats object
+ */
+async function getBidsStatsForAdmin() {
+  const { count: openCount } = await supabaseAdmin
+    .from("bids")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "open");
+
+  const { count: pendingCount } = await supabaseAdmin
+    .from("bids")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "pending");
+
+  const { count: closedCount } = await supabaseAdmin
+    .from("bids")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "closed");
+
+  return {
+    total: (openCount || 0) + (pendingCount || 0) + (closedCount || 0),
+    new: openCount || 0,
+    pending: pendingCount || 0,
+    closed: closedCount || 0,
+  };
+}
+
+/**
+ * Calculate campaigns stats for admin - sees ALL campaigns
+ * @returns {Promise<Object>} Stats object
+ */
+async function getCampaignsStatsForAdmin() {
+  const { count: openCount } = await supabaseAdmin
+    .from("campaigns")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "open");
+
+  const { count: pendingCount } = await supabaseAdmin
+    .from("campaigns")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "pending");
+
+  const { count: closedCount } = await supabaseAdmin
+    .from("campaigns")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "closed");
+
+  // Get all campaigns for type breakdown
+  const { data: allCampaigns } = await supabaseAdmin
+    .from("campaigns")
+    .select("status, campaign_type");
+
+  const stats = {
+    total: (openCount || 0) + (pendingCount || 0) + (closedCount || 0),
+    new: openCount || 0,
+    pending: pendingCount || 0,
+    closed: closedCount || 0,
     byType: {
       service: { new: 0, pending: 0, closed: 0, total: 0 },
       product: { new: 0, pending: 0, closed: 0, total: 0 }
@@ -323,21 +397,23 @@ async function getCampaignsStatsForBrandOwner(userId) {
  * Calculate and format bids stats for a user
  * EXACTLY matches listing endpoint logic
  * @param {string} userId - User ID
- * @param {string} role - User role ('brand_owner' or 'influencer')
+ * @param {string} role - User role ('brand_owner', 'influencer', or 'admin')
  * @returns {Promise<Object>} Formatted stats object
  */
 async function getBidsStatsForUser(userId, role) {
   try {
-    if (role === "brand_owner") {
+    if (role === "admin") {
+      return await getBidsStatsForAdmin();
+    } else if (role === "brand_owner") {
       return await getBidsStatsForBrandOwner(userId);
     } else if (role === "influencer") {
       return await getBidsStatsForInfluencer(userId);
     } else {
-      return { total: 0, open: 0, pending: 0, closed: 0, rejected: 0 };
+      return { total: 0, new: 0, pending: 0, closed: 0 };
     }
   } catch (error) {
     console.error('Error calculating bids stats:', error);
-    return { total: 0, open: 0, pending: 0, closed: 0, rejected: 0 };
+    return { total: 0, new: 0, pending: 0, closed: 0 };
   }
 }
 
@@ -345,23 +421,23 @@ async function getBidsStatsForUser(userId, role) {
  * Calculate and format campaigns stats for a user
  * EXACTLY matches listing endpoint logic
  * @param {string} userId - User ID
- * @param {string} role - User role ('brand_owner' or 'influencer')
+ * @param {string} role - User role ('brand_owner', 'influencer', or 'admin')
  * @returns {Promise<Object>} Formatted stats object
  */
 async function getCampaignsStatsForUser(userId, role) {
   try {
-    if (role === "brand_owner") {
+    if (role === "admin") {
+      return await getCampaignsStatsForAdmin();
+    } else if (role === "brand_owner") {
       return await getCampaignsStatsForBrandOwner(userId);
     } else if (role === "influencer") {
       return await getCampaignsStatsForInfluencer(userId);
     } else {
       return {
         total: 0,
-        open: 0,
+        new: 0,
         pending: 0,
         closed: 0,
-        rejected: 0,
-        active: 0,
         byType: {
           service: { new: 0, pending: 0, closed: 0, total: 0 },
           product: { new: 0, pending: 0, closed: 0, total: 0 }
@@ -372,11 +448,9 @@ async function getCampaignsStatsForUser(userId, role) {
     console.error('Error calculating campaigns stats:', error);
     return {
       total: 0,
-      open: 0,
+      new: 0,
       pending: 0,
       closed: 0,
-      rejected: 0,
-      active: 0,
       byType: {
         service: { new: 0, pending: 0, closed: 0, total: 0 },
         product: { new: 0, pending: 0, closed: 0, total: 0 }

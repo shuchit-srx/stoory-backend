@@ -26,6 +26,36 @@ class CampaignController {
   }
 
   /**
+   * Helper function to add influencer count and proposed amount sum to campaigns
+   */
+  static addInfluencerStats(campaigns) {
+    if (!campaigns) return campaigns;
+    
+    const campaignsArray = Array.isArray(campaigns) ? campaigns : [campaigns];
+    
+    return campaignsArray.map(campaign => {
+      // Extract influencer count from requests_count
+      const influencerCount = Array.isArray(campaign.requests_count) && campaign.requests_count[0] && typeof campaign.requests_count[0].count === 'number' 
+        ? campaign.requests_count[0].count 
+        : 0;
+      
+      // Calculate sum of proposed amounts from requests
+      const proposedAmountSum = Array.isArray(campaign.requests) 
+        ? campaign.requests.reduce((sum, r) => sum + (parseFloat(r.proposed_amount) || 0), 0) 
+        : 0;
+      
+      // Remove the nested requests_count structure and add clean fields
+      const { requests_count, requests, ...rest } = campaign;
+      
+      return {
+        ...rest,
+        influencer_count: influencerCount,
+        proposed_amount_sum: proposedAmountSum
+      };
+    });
+  }
+
+  /**
    * Create a new campaign
    */
   async createCampaign(req, res) {
@@ -78,6 +108,7 @@ class CampaignController {
         language: formData.language || "",
         platform: formData.platform || "",
         content_type: formData.content_type || formData.contentType || "",
+        category: formData.category || null, // Category field (e.g., Technology, Fashion, Food)
         // Package options for product campaigns
         sending_package:
           formData.sending_package ||
@@ -179,7 +210,11 @@ class CampaignController {
 
       const offset = (page - 1) * limit;
       
-      let baseSelect = supabaseAdmin.from("campaigns").select("*");
+      let baseSelect = supabaseAdmin.from("campaigns").select(`
+        *,
+        requests_count:requests(count),
+        requests(proposed_amount)
+      `);
 
       // Generic filters
       if (min_budget) {
@@ -229,7 +264,9 @@ class CampaignController {
               .status(500)
               .json({ success: false, message: "Failed to fetch campaigns" });
           }
-          const processedCampaigns = CampaignController.ensureCampaignTitles(campaigns || []);
+          const processedCampaigns = CampaignController.addInfluencerStats(
+            CampaignController.ensureCampaignTitles(campaigns || [])
+          );
           return res.json({
             success: true,
             campaigns: processedCampaigns,
@@ -290,7 +327,9 @@ class CampaignController {
               .status(500)
               .json({ success: false, message: "Failed to fetch campaigns" });
           }
-          const processedCampaigns = CampaignController.ensureCampaignTitles(campaigns || []);
+          const processedCampaigns = CampaignController.addInfluencerStats(
+            CampaignController.ensureCampaignTitles(campaigns || [])
+          );
           return res.json({
             success: true,
             campaigns: processedCampaigns,
@@ -316,7 +355,9 @@ class CampaignController {
           const filtered = (campaigns || []).filter(
             (c) => !interactedSet.has(c.id)
           );
-          const processedCampaigns = CampaignController.ensureCampaignTitles(filtered);
+          const processedCampaigns = CampaignController.addInfluencerStats(
+            CampaignController.ensureCampaignTitles(filtered)
+          );
           return res.json({
             success: true,
             campaigns: processedCampaigns,
@@ -348,7 +389,7 @@ class CampaignController {
         const includeExpired = String(req.query.include_expired || 'false') === 'true';
         const now = new Date();
         const withExpired = (campaigns || []).map(c => {
-          const requestsCount = 0; // Simplified for now
+          const requestsCount = Array.isArray(c.requests_count) && c.requests_count[0] && typeof c.requests_count[0].count === 'number' ? c.requests_count[0].count : 0;
           const isExpired = (c.status === 'open') && (!requestsCount || requestsCount === 0) && c.end_date && (new Date(c.end_date) < now);
           return { ...c, __expired: isExpired };
         });
@@ -358,7 +399,9 @@ class CampaignController {
           if (a.__expired !== b.__expired) return a.__expired ? 1 : -1;
           return new Date(b.created_at) - new Date(a.created_at);
         });
-        const processedCampaigns = CampaignController.ensureCampaignTitles(visible);
+        const processedCampaigns = CampaignController.addInfluencerStats(
+          CampaignController.ensureCampaignTitles(visible)
+        );
         return res.json({
           success: true,
           campaigns: processedCampaigns,
@@ -389,7 +432,7 @@ class CampaignController {
         const includeExpired = String(req.query.include_expired || 'false') === 'true';
         const now = new Date();
         const withExpired = (campaigns || []).map(c => {
-          const requestsCount = 0; // Simplified for now
+          const requestsCount = Array.isArray(c.requests_count) && c.requests_count[0] && typeof c.requests_count[0].count === 'number' ? c.requests_count[0].count : 0;
           const isExpired = (c.status === 'open') && (!requestsCount || requestsCount === 0) && c.end_date && (new Date(c.end_date) < now);
           return { ...c, __expired: isExpired };
         });
@@ -398,7 +441,9 @@ class CampaignController {
           if (a.__expired !== b.__expired) return a.__expired ? 1 : -1;
           return new Date(b.created_at) - new Date(a.created_at);
         });
-        const processedCampaigns = CampaignController.ensureCampaignTitles(visible);
+        const processedCampaigns = CampaignController.addInfluencerStats(
+          CampaignController.ensureCampaignTitles(visible)
+        );
         return res.json({
           success: true,
           campaigns: processedCampaigns,
@@ -589,9 +634,10 @@ class CampaignController {
       }
       if (formData.expiryDate !== undefined)
         updateData.end_date = formData.expiryDate;
+      if (formData.campaign_type !== undefined)
+        updateData.campaign_type = formData.campaign_type;
       if (formData.category !== undefined)
-        updateData.campaign_type =
-          formData.category === "product" ? "product" : "service";
+        updateData.category = formData.category; // Category field (e.g., Technology, Fashion, Food)
       if (formData.targetAudience !== undefined)
         updateData.requirements = formData.targetAudience;
       if (formData.contentType !== undefined)
@@ -761,7 +807,16 @@ class CampaignController {
 
       // Calculate total budget
       let totalBudget = 0;
-      if (req.user.role === "brand_owner") {
+      if (req.user.role === "admin") {
+        // Admin sees all campaigns budget
+        const { data: allCampaigns } = await supabaseAdmin
+          .from("campaigns")
+          .select("budget");
+        
+        allCampaigns?.forEach((campaign) => {
+          totalBudget += parseFloat(campaign.budget || 0);
+        });
+      } else if (req.user.role === "brand_owner") {
         const { data: allCampaigns } = await supabaseAdmin
           .from("campaigns")
           .select("budget")
@@ -839,7 +894,6 @@ class CampaignController {
         success: true,
         stats: {
           ...stats,
-          new: stats.open || stats.new || 0, // Ensure 'new' field for frontend
           totalBudget: totalBudget,
         },
       });
@@ -1812,6 +1866,10 @@ const validateCreateCampaign = [
     .optional()
     .isLength({ max: 100 })
     .withMessage("Content type must be less than 100 characters"),
+  body("category")
+    .optional()
+    .isLength({ min: 0, max: 50 })
+    .withMessage("Category must be less than 50 characters"),
   body("sending_package")
     .optional()
     .isBoolean()
@@ -1877,6 +1935,10 @@ const validateUpdateCampaign = [
     .optional()
     .isLength({ max: 100 })
     .withMessage("Content type must be less than 100 characters"),
+  body("category")
+    .optional()
+    .isLength({ min: 0, max: 50 })
+    .withMessage("Category must be less than 50 characters"),
   body("sending_package")
     .optional()
     .isBoolean()
