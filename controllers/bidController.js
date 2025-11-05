@@ -8,6 +8,36 @@ const automatedFlowService = require("../utils/automatedFlowService");
 
 class BidController {
   /**
+   * Helper function to add influencer count and proposed amount sum to bids
+   */
+  static addInfluencerStats(bids) {
+    if (!bids) return bids;
+    
+    const bidsArray = Array.isArray(bids) ? bids : [bids];
+    
+    return bidsArray.map(bid => {
+      // Extract influencer count from requests_count
+      const influencerCount = Array.isArray(bid.requests_count) && bid.requests_count[0] && typeof bid.requests_count[0].count === 'number' 
+        ? bid.requests_count[0].count 
+        : 0;
+      
+      // Calculate sum of proposed amounts from requests
+      const proposedAmountSum = Array.isArray(bid.requests) 
+        ? bid.requests.reduce((sum, r) => sum + (parseFloat(r.proposed_amount) || 0), 0) 
+        : 0;
+      
+      // Remove the nested requests_count structure and add clean fields
+      const { requests_count, requests, ...rest } = bid;
+      
+      return {
+        ...rest,
+        influencer_count: influencerCount,
+        proposed_amount_sum: proposedAmountSum
+      };
+    });
+  }
+
+  /**
    * Create a new bid
    */
   async createBid(req, res) {
@@ -152,7 +182,8 @@ class BidController {
                         id,
                         role
                     ),
-                    requests_count:requests(count)
+                    requests_count:requests(count),
+                    requests(proposed_amount)
                 `);
 
       // Generic filters
@@ -201,14 +232,15 @@ class BidController {
               .json({ success: false, message: "Failed to fetch bids" });
           }
 
+          const processedBids = BidController.addInfluencerStats(bids || []);
           return res.json({
             success: true,
-            bids: bids || [],
+            bids: processedBids,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: count || (bids || []).length,
-              pages: Math.ceil((count || (bids || []).length) / limit),
+              total: count || processedBids.length,
+              pages: Math.ceil((count || processedBids.length) / limit),
             },
           });
         } else if (
@@ -266,14 +298,15 @@ class BidController {
               .json({ success: false, message: "Failed to fetch bids" });
           }
 
+          const processedBids = BidController.addInfluencerStats(bids || []);
           return res.json({
             success: true,
-            bids: bids || [],
+            bids: processedBids,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: (bids || []).length,
-              pages: Math.ceil((bids || []).length / limit),
+              total: processedBids.length,
+              pages: Math.ceil(processedBids.length / limit),
             },
           });
         } else {
@@ -289,14 +322,15 @@ class BidController {
           }
           const interactedSet = new Set(interactedBidIds);
           const filtered = (bids || []).filter((b) => !interactedSet.has(b.id));
+          const processedBids = BidController.addInfluencerStats(filtered);
           return res.json({
             success: true,
-            bids: filtered,
+            bids: processedBids,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: filtered.length,
-              pages: Math.ceil(filtered.length / limit),
+              total: processedBids.length,
+              pages: Math.ceil(processedBids.length / limit),
             },
           });
         }
@@ -329,9 +363,10 @@ class BidController {
           if (a.__expired !== b.__expired) return a.__expired ? 1 : -1;
           return new Date(b.created_at) - new Date(a.created_at);
         });
+        const processedBids = BidController.addInfluencerStats(visible);
         return res.json({
           success: true,
-          bids: visible,
+          bids: processedBids,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -367,9 +402,10 @@ class BidController {
           if (a.__expired !== b.__expired) return a.__expired ? 1 : -1;
           return new Date(b.created_at) - new Date(a.created_at);
         });
+        const processedBids = BidController.addInfluencerStats(visible);
         return res.json({
           success: true,
-          bids: visible,
+          bids: processedBids,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -710,7 +746,16 @@ class BidController {
 
       // Calculate total budget if needed
       let totalBudget = 0;
-      if (req.user.role === "brand_owner") {
+      if (req.user.role === "admin") {
+        // Admin sees all bids budget
+        const { data: allBids } = await supabaseAdmin
+          .from("bids")
+          .select("min_budget, max_budget");
+        
+        allBids?.forEach((bid) => {
+          totalBudget += parseFloat(bid.max_budget || bid.min_budget || 0);
+        });
+      } else if (req.user.role === "brand_owner") {
         const { data: allBids } = await supabaseAdmin
           .from("bids")
           .select("min_budget, max_budget")
@@ -788,7 +833,6 @@ class BidController {
         success: true,
         stats: {
           ...stats,
-          new: stats.open || stats.new || 0, // Ensure 'new' field for frontend
           totalBudget: totalBudget,
         },
       });

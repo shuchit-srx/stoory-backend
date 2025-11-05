@@ -25,6 +25,9 @@ router.post('/admin/plans', authService.authenticateToken, authService.requireRo
 router.put('/admin/plans/:id', authService.authenticateToken, authService.requireRole('admin'), SubscriptionController.adminUpdatePlan);
 router.delete('/admin/plans/:id', authService.authenticateToken, authService.requireRole('admin'), SubscriptionController.adminDeletePlan);
 
+// Admin subscribers management route
+router.get('/admin/subscribers', authService.authenticateToken, authService.requireRole('admin'), SubscriptionController.adminGetAllSubscribers);
+
 // Test endpoints (for testing only)
 router.post('/test-create', authService.authenticateToken, SubscriptionController.createTestSubscription);
 router.post('/test-payment', authService.authenticateToken, SubscriptionController.processTestPayment);

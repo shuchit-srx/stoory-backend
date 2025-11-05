@@ -1584,6 +1584,139 @@ class SubscriptionController {
   }
 
   /**
+   * Admin: Get all subscribers (users with active subscriptions)
+   */
+  async adminGetAllSubscribers(req, res) {
+    try {
+      const { page = 1, limit = 20, status, plan_id } = req.query;
+      const pageNum = parseInt(page);
+      const limitNum = parseInt(limit);
+      const offset = (pageNum - 1) * limitNum;
+
+      // Build query for subscriptions (without joins to avoid FK issues)
+      let query = supabaseAdmin
+        .from("subscriptions")
+        .select("*", { count: "exact" });
+
+      // Filter by status if provided
+      if (status) {
+        query = query.eq("status", status);
+      } else {
+        // Default to active subscriptions only
+        query = query.eq("status", "active");
+      }
+
+      // Filter by plan if provided
+      if (plan_id) {
+        query = query.eq("plan_id", plan_id);
+      }
+
+      // Get subscriptions with pagination
+      const {
+        data: subscriptions,
+        error,
+        count,
+      } = await query
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limitNum - 1);
+
+      if (error) {
+        console.error("Error fetching subscribers:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch subscribers",
+        });
+      }
+
+      if (!subscriptions || subscriptions.length === 0) {
+        return res.json({
+          success: true,
+          subscribers: [],
+          pagination: {
+            page: pageNum,
+            limit: limitNum,
+            total: 0,
+            pages: 0,
+          },
+        });
+      }
+
+      // Get unique user IDs and plan IDs
+      const userIds = [...new Set(subscriptions.map(sub => sub.user_id))];
+      const planIds = [...new Set(subscriptions.map(sub => sub.plan_id).filter(Boolean))];
+
+      // Fetch users
+      const { data: users, error: usersError } = await supabaseAdmin
+        .from("users")
+        .select("id, name, phone, email, role, created_at, profile_image_url")
+        .in("id", userIds);
+
+      if (usersError) {
+        console.error("Error fetching users:", usersError);
+      }
+
+      // Fetch plans
+      let plans = [];
+      if (planIds.length > 0) {
+        const { data: plansData, error: plansError } = await supabaseAdmin
+          .from("plans")
+          .select("*")
+          .in("id", planIds);
+
+        if (plansError) {
+          console.error("Error fetching plans:", plansError);
+        } else {
+          plans = plansData || [];
+        }
+      }
+
+      // Create lookup maps
+      const usersMap = new Map((users || []).map(user => [user.id, user]));
+      const plansMap = new Map(plans.map(plan => [plan.id, plan]));
+
+      // Format response with all subscription details and join user/plan data
+      const subscribers = subscriptions.map((sub) => {
+        const user = usersMap.get(sub.user_id) || null;
+        const plan = sub.plan_id ? (plansMap.get(sub.plan_id) || null) : null;
+
+        return {
+          subscription_id: sub.id,
+          user_id: sub.user_id,
+          plan_id: sub.plan_id,
+          user: user,
+          plan: plan,
+          status: sub.status,
+          start_date: sub.start_date,
+          end_date: sub.end_date,
+          amount_paid: sub.amount_paid || 0,
+          razorpay_payment_id: sub.razorpay_payment_id,
+          razorpay_subscription_id: sub.razorpay_subscription_id,
+          razorpay_order_id: sub.razorpay_order_id,
+          created_at: sub.created_at,
+          updated_at: sub.updated_at,
+        };
+      });
+
+      return res.json({
+        success: true,
+        subscribers: subscribers,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: count || 0,
+          pages: Math.ceil((count || 0) / limitNum),
+        },
+      });
+    } catch (error) {
+      console.error("Error in adminGetAllSubscribers:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
    * Update payment status manually (for frontend polling fallback)
    */
   async updatePaymentStatus(req, res) {
