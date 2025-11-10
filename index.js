@@ -25,8 +25,10 @@ const couponRoutes = require("./routes/coupons");
 const attachmentRoutes = require("./routes/attachments");
 const directStorageRoutes = require("./routes/directStorage");
 const adminPaymentRoutes = require("./routes/adminPayments");
+const adminWalletRoutes = require("./routes/adminWallet");
 const notificationRoutes = require("./routes/notifications");
 const commissionSettingsRoutes = require("./routes/commissionSettings");
+const adminSettingsRoutes = require("./routes/adminSettings");
 
 const app = express();
 const server = http.createServer(app);
@@ -782,7 +784,9 @@ app.use("/api/coupons", couponRoutes);
 app.use("/api/attachments", attachmentRoutes);
 app.use("/api/files", directStorageRoutes);
 app.use("/api/admin/payments", adminPaymentRoutes);
+app.use("/api/admin/wallet", adminWalletRoutes);
 app.use("/api/admin/commission", commissionSettingsRoutes);
+app.use("/api/admin/settings", adminSettingsRoutes);
 app.use("/api/notifications", notificationRoutes);
 
 // 404 handler for API routes
