@@ -1072,6 +1072,33 @@ class AuthService {
   };
 
   /**
+   * Optional authentication middleware - doesn't fail if no token provided
+   * Sets req.user if valid token is present, otherwise continues without req.user
+   */
+  authenticateTokenOptional = (req, res, next) => {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1];
+
+    if (!token) {
+      // No token provided - continue without authentication
+      req.user = undefined;
+      return next();
+    }
+
+    // Verify custom JWT token
+    const result = this.verifyToken(token);
+    if (!result.success) {
+      // Invalid token - continue without authentication
+      req.user = undefined;
+      return next();
+    }
+
+    // Valid token - set user
+    req.user = result.user;
+    next();
+  };
+
+  /**
    * Middleware to check role permissions
    */
   requireRole(roles) {

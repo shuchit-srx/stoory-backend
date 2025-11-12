@@ -5,8 +5,87 @@ const {
   deleteImageFromStorage,
 } = require("../utils/imageUpload");
 const automatedFlowService = require("../utils/automatedFlowService");
+const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID || "00000000-0000-0000-0000-000000000000";
 
 class CampaignController {
+  /**
+   * Enrich campaigns with influencer's request status
+   */
+  static async enrichWithRequestStatus(campaigns, influencerId) {
+    if (!campaigns || !Array.isArray(campaigns) || campaigns.length === 0 || !influencerId) {
+      return campaigns;
+    }
+
+    const campaignIds = campaigns.map(c => c.id).filter(Boolean);
+    if (campaignIds.length === 0) {
+      return campaigns;
+    }
+
+    // Fetch all requests for this influencer for these campaigns
+    const { data: requests, error } = await supabaseAdmin
+      .from("requests")
+      .select("id, campaign_id, status, proposed_amount, final_agreed_amount, created_at, updated_at")
+      .eq("influencer_id", influencerId)
+      .in("campaign_id", campaignIds)
+      .not("campaign_id", "is", null);
+
+    if (error) {
+      console.error("Error fetching request status:", error);
+      return campaigns; // Return campaigns without enrichment on error
+    }
+
+    // Create a map of campaign_id -> request
+    const requestMap = {};
+    requests?.forEach(req => {
+      if (req.campaign_id && !requestMap[req.campaign_id]) {
+        // If multiple requests exist, use the most recent one
+        const existing = requestMap[req.campaign_id];
+        if (!existing || new Date(req.created_at) > new Date(existing.created_at)) {
+          requestMap[req.campaign_id] = req;
+        }
+      }
+    });
+
+    // Map request status to UI-friendly format
+    const mapRequestStatus = (status) => {
+      if (!status) return "none";
+      
+      const pendingStatuses = ["connected", "negotiating", "finalized", "paid", "work_submitted", "work_approved"];
+      if (pendingStatuses.includes(status)) return "pending";
+      if (status === "completed") return "accepted";
+      if (status === "cancelled") return "rejected";
+      return "pending"; // Default to pending for unknown statuses
+    };
+
+    // Enrich each campaign with request status
+    return campaigns.map(campaign => {
+      const request = requestMap[campaign.id];
+      
+      if (!request) {
+        return {
+          ...campaign,
+          request_status: "none",
+          request_id: null,
+          influencer_request: null
+        };
+      }
+
+      return {
+        ...campaign,
+        request_status: mapRequestStatus(request.status),
+        request_id: request.id,
+        influencer_request: {
+          id: request.id,
+          status: request.status,
+          proposed_amount: request.proposed_amount,
+          final_agreed_amount: request.final_agreed_amount,
+          created_at: request.created_at,
+          updated_at: request.updated_at
+        }
+      };
+    });
+  }
+
   /**
    * Helper function to ensure campaign titles are present
    */
@@ -212,6 +291,13 @@ class CampaignController {
       
       let baseSelect = supabaseAdmin.from("campaigns").select(`
         *,
+        created_by_user:users!campaigns_created_by_fkey (
+          id,
+          name,
+          role,
+          brand_name,
+          profile_image_url
+        ),
         requests_count:requests(count),
         requests(proposed_amount)
       `);
@@ -267,14 +353,21 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(campaigns || [])
           );
+          
+          // Add request status for each campaign if user is influencer
+          const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
+            processedCampaigns,
+            userId
+          );
+          
           return res.json({
             success: true,
-            campaigns: processedCampaigns,
+            campaigns: campaignsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: count || processedCampaigns.length,
-              pages: Math.ceil((count || processedCampaigns.length) / limit),
+              total: count || campaignsWithRequestStatus.length,
+              pages: Math.ceil((count || campaignsWithRequestStatus.length) / limit),
             },
           });
         } else if (
@@ -330,14 +423,21 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(campaigns || [])
           );
+          
+          // Add request status for each campaign if user is influencer
+          const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
+            processedCampaigns,
+            userId
+          );
+          
           return res.json({
             success: true,
-            campaigns: processedCampaigns,
+            campaigns: campaignsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: processedCampaigns.length,
-              pages: Math.ceil(processedCampaigns.length / limit),
+              total: campaignsWithRequestStatus.length,
+              pages: Math.ceil(campaignsWithRequestStatus.length / limit),
             },
           });
         } else {
@@ -358,9 +458,15 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(filtered)
           );
+          
+          // Add request status for each campaign if user is influencer
+          const campaignsWithRequestStatus = req.user.role === "influencer" 
+            ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
+            : processedCampaigns;
+          
           return res.json({
             success: true,
-            campaigns: processedCampaigns,
+            campaigns: campaignsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
@@ -402,9 +508,15 @@ class CampaignController {
         const processedCampaigns = CampaignController.addInfluencerStats(
           CampaignController.ensureCampaignTitles(visible)
         );
+        
+        // Add request status for each campaign if user is influencer
+        const campaignsWithRequestStatus = req.user.role === "influencer"
+          ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
+          : processedCampaigns;
+        
         return res.json({
           success: true,
-          campaigns: processedCampaigns,
+          campaigns: campaignsWithRequestStatus,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -444,9 +556,15 @@ class CampaignController {
         const processedCampaigns = CampaignController.addInfluencerStats(
           CampaignController.ensureCampaignTitles(visible)
         );
+        
+        // Add request status for each campaign if user is influencer
+        const campaignsWithRequestStatus = req.user.role === "influencer"
+          ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
+          : processedCampaigns;
+        
         return res.json({
           success: true,
-          campaigns: processedCampaigns,
+          campaigns: campaignsWithRequestStatus,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -1714,13 +1832,41 @@ class CampaignController {
         }
       }
 
-      // Update conversation to payment completed and real-time chat
+      // Check if admin payment tracking exists - if yes, await admin to process advance payment
+      const { data: adminPaymentRecord } = await supabaseAdmin
+        .from("admin_payment_tracking")
+        .select("*")
+        .eq("conversation_id", conversation_id)
+        .eq("advance_payment_status", "admin_received")
+        .single();
+
+      // Determine next state based on whether admin payment flow is active
+      let nextFlowState, nextAwaitingRole;
+      if (adminPaymentRecord) {
+        // Admin payment flow: wait for admin to process advance payment
+        nextFlowState = "admin_advance_payment_pending";
+        nextAwaitingRole = "admin";
+      } else {
+        // Direct payment flow: proceed to work
+        nextFlowState = "payment_completed";
+        nextAwaitingRole = "influencer";
+      }
+
+      // Update conversation state
       const { error: conversationUpdateError } = await supabaseAdmin
         .from("conversations")
         .update({
-          flow_state: "payment_completed",
-          awaiting_role: "influencer",
-          chat_status: "real_time"
+          flow_state: nextFlowState,
+          awaiting_role: nextAwaitingRole,
+          chat_status: "real_time",
+          flow_data: {
+            ...(conversation.flow_data || {}),
+            agreed_amount: paymentAmount / 100,
+            agreement_timestamp: new Date().toISOString(),
+            payment_completed: true,
+            payment_timestamp: new Date().toISOString(),
+            admin_payment_tracking_id: adminPaymentRecord?.id || null
+          }
         })
         .eq("id", conversation_id);
 
@@ -1729,13 +1875,69 @@ class CampaignController {
         return res.status(500).json({ success: false, message: "Failed to update conversation" });
       }
 
+      // Create appropriate message based on flow
+      if (adminPaymentRecord) {
+        // Admin payment flow: create message with admin action buttons
+        const advanceAmount = adminPaymentRecord.advance_amount_paise / 100;
+        const finalAmount = adminPaymentRecord.final_amount_paise / 100;
+        const totalAmount = adminPaymentRecord.total_amount_paise / 100;
+        const commissionAmount = adminPaymentRecord.commission_amount_paise / 100;
+        
+        const messageText = `💳 **Payment Received - Admin Processing Required**
+
+💰 **Total Amount:** ₹${totalAmount}
+💼 **Commission (${adminPaymentRecord.commission_percentage}%):** ₹${commissionAmount}
+💵 **Net Amount:** ₹${adminPaymentRecord.net_amount_paise / 100}
+
+📊 **Payment Breakdown:**
+• **Advance Payment:** ₹${advanceAmount} (30%)
+• **Final Payment:** ₹${finalAmount} (70%)
+
+⏳ **Status:** Waiting for admin to process advance payment...`;
+
+        const actionData = {
+          title: "💳 **Admin Payment Processing Required**",
+          subtitle: "Please process the advance payment to continue:",
+          payment_breakdown: {
+            total_amount: totalAmount,
+            commission_amount: commissionAmount,
+            net_amount: adminPaymentRecord.net_amount_paise / 100,
+            advance_amount: advanceAmount,
+            final_amount: finalAmount,
+            commission_percentage: adminPaymentRecord.commission_percentage
+          },
+          admin_payment_tracking_id: adminPaymentRecord.id,
+          buttons: [
+            {
+              id: "process_advance_payment",
+              text: "Process Advance Payment",
+              action: "process_advance_payment",
+              style: "primary",
+              visible_to: ["admin"]
+            }
+          ]
+        };
+
+        await supabaseAdmin
+          .from("messages")
+          .insert({
+            conversation_id: conversation_id,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: null, // Visible to all participants
+            message: messageText,
+            message_type: "automated",
+            action_required: true,
+            action_data: actionData
+          });
+      }
+
       // Realtime emits (final contract)
       const io = req.app.get('io');
       if (io) {
         io.to(`room:${conversation_id}`).emit('conversation_state_changed', {
           conversation_id: conversation_id,
-          flow_state: 'payment_completed',
-          awaiting_role: 'influencer',
+          flow_state: nextFlowState,
+          awaiting_role: nextAwaitingRole,
           chat_status: 'real_time',
           current_action_data: {},
           updated_at: new Date().toISOString()
@@ -1744,14 +1946,14 @@ class CampaignController {
         io.to(`user_${conversation.brand_owner_id}`).emit('conversation_list_updated', {
           conversation_id: conversation_id,
           action: 'state_changed',
-          flow_state: 'payment_completed',
+          flow_state: nextFlowState,
           chat_status: 'real_time',
           timestamp: new Date().toISOString()
         });
         io.to(`user_${conversation.influencer_id}`).emit('conversation_list_updated', {
           conversation_id: conversation_id,
           action: 'state_changed',
-          flow_state: 'payment_completed',
+          flow_state: nextFlowState,
           chat_status: 'real_time',
           timestamp: new Date().toISOString()
         });

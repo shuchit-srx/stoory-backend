@@ -2297,46 +2297,117 @@ Please respond to confirm your interest and availability for this campaign.`,
       let newFlowState, newAwaitingRole, messageText, actionData;
 
       if (action === "approve_work") {
-        newFlowState = "work_approved";
-        newAwaitingRole = null; // Work completed, no further action needed
-        
-        messageText = `✅ **Work Approved!**\n\n🎉 Great work! The collaboration has been completed successfully.${feedback ? `\n\n**Feedback:** ${feedback}` : ''}\n\n✨ **Collaboration Status: CLOSED**`;
-        
-        actionData = {
-          title: "🎉 **Collaboration Completed**",
-          subtitle: "The work has been approved and the collaboration is now complete. This conversation is closed.",
-          is_closed: true,
-          chat_status: "closed",
-          buttons: []
-        };
+        // Check if admin payment tracking exists - if yes, await admin to process final payment
+        const { data: adminPaymentRecord } = await supabaseAdmin
+          .from("admin_payment_tracking")
+          .select("*")
+          .eq("conversation_id", conversationId)
+          .eq("advance_payment_status", "admin_confirmed")
+          .eq("final_payment_status", "pending")
+          .single();
 
-        // Update request status to completed
-        if (conversation.request_id) {
+        if (adminPaymentRecord) {
+          // Admin payment flow: transition to admin final payment pending
+          newFlowState = "admin_final_payment_pending";
+          newAwaitingRole = "admin";
+          
+          const finalAmount = adminPaymentRecord.final_amount_paise / 100;
+          const totalAmount = adminPaymentRecord.total_amount_paise / 100;
+          const commissionAmount = adminPaymentRecord.commission_amount_paise / 100;
+          
+          messageText = `✅ **Work Approved!**\n\n🎉 Great work! The collaboration work has been approved.${feedback ? `\n\n**Feedback:** ${feedback}` : ''}\n\n💳 **Final Payment Required**\n\n💰 **Final Amount:** ₹${finalAmount}\n💼 **Total Commission:** ₹${commissionAmount}\n💵 **Total Paid:** ₹${totalAmount}\n\n⏳ **Status:** Waiting for admin to process final payment...`;
+          
+          actionData = {
+            title: "✅ **Work Approved - Final Payment Required**",
+            subtitle: "Please process the final payment to complete the collaboration:",
+            payment_breakdown: {
+              total_amount: totalAmount,
+              commission_amount: commissionAmount,
+              net_amount: adminPaymentRecord.net_amount_paise / 100,
+              advance_amount: adminPaymentRecord.advance_amount_paise / 100,
+              final_amount: finalAmount,
+              commission_percentage: adminPaymentRecord.commission_percentage
+            },
+            admin_payment_tracking_id: adminPaymentRecord.id,
+            buttons: [
+              {
+                id: "process_final_payment",
+                text: "Process Final Payment",
+                action: "process_final_payment",
+                style: "success",
+                visible_to: ["admin"]
+              }
+            ]
+          };
+        } else {
+          // Direct payment flow: close conversation
+          newFlowState = "work_approved";
+          newAwaitingRole = null; // Work completed, no further action needed
+          
+          messageText = `✅ **Work Approved!**\n\n🎉 Great work! The collaboration has been completed successfully.${feedback ? `\n\n**Feedback:** ${feedback}` : ''}\n\n✨ **Collaboration Status: CLOSED**`;
+          
+          actionData = {
+            title: "🎉 **Collaboration Completed**",
+            subtitle: "The work has been approved and the collaboration is now complete. This conversation is closed.",
+            is_closed: true,
+            chat_status: "closed",
+            buttons: []
+          };
+
+          // Update request status to completed
+          if (conversation.request_id) {
+            await supabaseAdmin
+              .from("requests")
+              .update({ status: "completed" })
+              .eq("id", conversation.request_id);
+          }
+
+          // Update campaign/bid status to closed
+          if (conversation.campaign_id) {
+            await supabaseAdmin
+              .from("campaigns")
+              .update({ status: "closed" })
+              .eq("id", conversation.campaign_id);
+          } else if (conversation.bid_id) {
+            await supabaseAdmin
+              .from("bids")
+              .update({ status: "closed" })
+              .eq("id", conversation.bid_id);
+          }
+
+          // Mark conversation as CLOSED
           await supabaseAdmin
-            .from("requests")
-            .update({ status: "completed" })
-            .eq("id", conversation.request_id);
+            .from("conversations")
+            .update({
+              chat_status: "closed",
+              flow_state: "work_approved"
+            })
+            .eq("id", conversationId);
+
+          // Release escrow funds using proper escrow service
+          if (conversation.request_id) {
+            const escrowService = require('../services/escrowService');
+            const escrowResult = await escrowService.releaseEscrowFunds(
+              conversationId,
+              'Work approved by brand owner'
+            );
+
+            if (!escrowResult.success) {
+              console.error("Escrow release error:", escrowResult.error);
+            } else {
+              console.log("✅ Escrow funds released successfully");
+            }
+          }
         }
 
-        // Update campaign/bid status to closed
-        if (conversation.campaign_id) {
-          await supabaseAdmin
-            .from("campaigns")
-            .update({ status: "closed" })
-            .eq("id", conversation.campaign_id);
-        } else if (conversation.bid_id) {
-          await supabaseAdmin
-            .from("bids")
-            .update({ status: "closed" })
-            .eq("id", conversation.bid_id);
-        }
-
-        // Mark conversation as CLOSED (clear closed state)
+        // Update conversation state
         await supabaseAdmin
           .from("conversations")
           .update({
-            chat_status: "closed",
-            flow_state: "work_approved"
+            flow_state: newFlowState,
+            awaiting_role: newAwaitingRole,
+            chat_status: adminPaymentRecord ? "real_time" : "closed",
+            updated_at: new Date().toISOString()
           })
           .eq("id", conversationId);
 
@@ -2344,21 +2415,6 @@ Please respond to confirm your interest and availability for this campaign.`,
         if (this.io && conversation.brand_owner_id && conversation.influencer_id) {
           const { emitStatsUpdatesToBothUsers } = require('./statsUpdates');
           await emitStatsUpdatesToBothUsers(conversation.brand_owner_id, conversation.influencer_id, this.io);
-        }
-
-        // Release escrow funds using proper escrow service
-        if (conversation.request_id) {
-          const escrowService = require('../services/escrowService');
-          const escrowResult = await escrowService.releaseEscrowFunds(
-            conversationId,
-            'Work approved by brand owner'
-          );
-
-          if (!escrowResult.success) {
-            console.error("Escrow release error:", escrowResult.error);
-          } else {
-            console.log("✅ Escrow funds released successfully");
-          }
         }
 
       } else if (action === "request_revision") {

@@ -8,11 +8,14 @@ const { v4: uuidv4 } = require("uuid");
 class AuthController {
   /**
    * Verify PAN using Zoop
+   * If user is authenticated and PAN is already verified, returns early without API call
+   * On successful verification, updates database with verification status
    */
   async verifyPAN(req, res) {
     try {
       const panInput = req.body?.pan || req.body?.pan_number || req.query?.pan || "";
       const pan = panInput.toString().trim().toUpperCase();
+      const userId = req.user?.id; // Optional: user may or may not be authenticated
 
       // Basic PAN format validation
       const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
@@ -21,6 +24,48 @@ class AuthController {
           success: false,
           message: "Invalid PAN format. Expected AAAAA9999A",
         });
+      }
+
+      // If user is authenticated, check existing PAN status
+      if (userId) {
+        const { data: user, error: userError } = await supabaseAdmin
+          .from("users")
+          .select("pan_number, pan_verified, pan_verified_at, pan_holder_name")
+          .eq("id", userId)
+          .single();
+
+        if (!userError && user) {
+          // Check if this exact PAN is already verified for this user
+          if (user.pan_verified && user.pan_number === pan) {
+            return res.json({
+              success: true,
+              message: "PAN already verified",
+              result: {
+                user_full_name: user.pan_holder_name,
+                pan_status: "VALID",
+                status: "VALID",
+                already_verified: true,
+                verified_at: user.pan_verified_at
+              },
+              verified: true,
+              already_verified: true
+            });
+          }
+
+          // Check if user has a different PAN that's already verified
+          if (user.pan_verified && user.pan_number && user.pan_number !== pan) {
+            return res.status(400).json({
+              success: false,
+              message: `You already have a verified PAN: ${user.pan_number}. Cannot verify a different PAN.`,
+            });
+          }
+
+          // If user has the same PAN in database but not verified, we'll verify it
+          // (continue to Zoop API call below)
+          if (user.pan_number === pan && !user.pan_verified) {
+            console.log(`🔍 [verifyPAN] User has PAN ${pan} in database but not verified. Proceeding with verification.`);
+          }
+        }
       }
 
       // Require Zoop header-lite credentials (app-id + api-key)
@@ -52,27 +97,141 @@ class AuthController {
         task_id: req.body?.task_id || uuidv4(),
       };
 
-      const response = await axios.post(url, payload, { headers });
+      // Set timeout for Zoop API call (30 seconds)
+      const response = await axios.post(url, payload, { 
+        headers,
+        timeout: 30000 // 30 second timeout
+      });
+
+      // Log raw response for debugging (only in development)
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🔍 [verifyPAN] Raw Zoop response:', JSON.stringify(response?.data, null, 2));
+      }
 
       // Normalize Zoop response
       const data = response?.data || {};
       let isValid = false;
       let holderName = null;
       let responseCode = data?.response_code;
+      let errorMessage = null;
+
+      // Check for error responses first
+      if (data?.status === 'failed' || data?.success === false || data?.error) {
+        errorMessage = data?.message || data?.error?.message || data?.response_message || 'PAN verification failed';
+        return res.status(400).json({
+          success: false,
+          message: errorMessage,
+          vendor_error: data,
+          error_type: "verification_failed"
+        });
+      }
 
       // Header lite response shape (handle both live v1 and test v1)
-      const resultObj = data?.result || data?.data || {};
-      holderName = resultObj?.user_full_name || resultObj?.name || null;
-      const status = (resultObj?.pan_status || resultObj?.status || "").toUpperCase();
-      isValid = status === "VALID" || data?.transaction_status === 1;
-      responseCode = data?.response_code ?? data?.transaction_status ?? responseCode;
+      // Try multiple possible response structures
+      const resultObj = data?.result || data?.data || data?.response || data || {};
+      
+      // Extract holder name from various possible fields
+      holderName = resultObj?.user_full_name || 
+                   resultObj?.name || 
+                   resultObj?.holder_name ||
+                   resultObj?.customer_name ||
+                   data?.user_full_name ||
+                   data?.name ||
+                   null;
 
-      // Return only the PAN verification result payload
-      return res.json({
+      // Extract status from various possible fields
+      const status = (resultObj?.pan_status || 
+                     resultObj?.status || 
+                     resultObj?.verification_status ||
+                     data?.pan_status ||
+                     data?.status ||
+                     "").toUpperCase();
+
+      // Check if valid - multiple ways to determine validity
+      isValid = status === "VALID" || 
+                status === "SUCCESS" ||
+                data?.transaction_status === 1 ||
+                data?.status_code === 200 ||
+                (data?.response_code && String(data.response_code).startsWith('2')) ||
+                (resultObj?.is_valid === true);
+
+      // Get response code
+      responseCode = data?.response_code ?? 
+                    data?.transaction_status ?? 
+                    data?.status_code ??
+                    responseCode;
+
+      // If result object is empty but we got a 200 response, log warning
+      if (Object.keys(resultObj).length === 0 && !isValid) {
+        console.warn('⚠️ [verifyPAN] Empty result object from Zoop API. Response:', JSON.stringify(data, null, 2));
+      }
+
+      // If verification is successful and user is authenticated, update database
+      if (isValid && userId) {
+        const updateData = {
+          pan_number: pan,
+          pan_verified: true,
+          pan_verified_at: new Date().toISOString(),
+          pan_holder_name: holderName || null
+        };
+
+        const { data: updatedUser, error: updateError } = await supabaseAdmin
+          .from("users")
+          .update(updateData)
+          .eq("id", userId)
+          .select("pan_number, pan_verified, pan_verified_at, pan_holder_name")
+          .single();
+
+        if (updateError) {
+          console.error("❌ [verifyPAN] Failed to update PAN verification status:", updateError);
+          // Don't fail the request, just log the error
+        } else {
+          console.log("✅ [verifyPAN] PAN verification status updated in database:", {
+            pan_number: updatedUser?.pan_number,
+            pan_verified: updatedUser?.pan_verified,
+            pan_verified_at: updatedUser?.pan_verified_at
+          });
+        }
+      }
+
+      // Return the PAN verification result payload
+      const responsePayload = {
         success: true,
         result: resultObj,
-      });
+        verified: isValid,
+        ...(holderName ? { holder_name: holderName } : {}),
+        ...(responseCode ? { response_code: responseCode } : {}),
+        ...(userId && isValid ? { saved_to_profile: true } : {})
+      };
+
+      // If result is empty, include raw data for debugging
+      if (Object.keys(resultObj).length === 0) {
+        responsePayload.debug = {
+          raw_response: data,
+          message: "Zoop API returned empty result. Check raw_response for details."
+        };
+      }
+
+      return res.json(responsePayload);
     } catch (error) {
+      // Handle timeout errors
+      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        return res.status(504).json({
+          success: false,
+          message: "PAN verification request timed out. Please try again.",
+          error_type: "timeout"
+        });
+      }
+
+      // Handle network errors
+      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        return res.status(503).json({
+          success: false,
+          message: "PAN verification service is currently unavailable. Please try again later.",
+          error_type: "service_unavailable"
+        });
+      }
+
       const httpStatus = error?.response?.status || 500;
       const vendorError = error?.response?.data || { message: error.message };
       let message = vendorError?.response_message || vendorError?.message || "PAN verification failed";
@@ -83,6 +242,7 @@ class AuthController {
         success: false,
         message,
         vendor_error: vendorError,
+        error_type: "api_error"
       });
     }
   }
@@ -327,16 +487,43 @@ class AuthController {
       delete updateData.phone;
       delete updateData.created_at;
       delete updateData.updated_at;
+      // PAN verification fields are set by verifyPAN endpoint only
+      delete updateData.pan_verified;
+      delete updateData.pan_verified_at;
+      delete updateData.pan_holder_name;
 
-      // Map frontend field names to database schema:
-      // Frontend sends 'business_name' -> Database expects 'brand_name'
-      // Frontend sends 'business_type' -> Not in schema anymore (removed), ignore it
-      if (updateData.business_name !== undefined) {
-        updateData.brand_name = updateData.business_name;
-        delete updateData.business_name;
-        console.log('🔄 [updateProfile] Mapped business_name -> brand_name');
+      // Check if user is trying to update brand fields - only brand_owner can update these
+      const hasBrandFields = updateData.brand_name !== undefined || 
+                            updateData.brand_description !== undefined || 
+                            updateData.brand_profile_image_url !== undefined ||
+                            updateData.business_name !== undefined;
+
+      if (hasBrandFields) {
+        // Get user's current role
+        const { data: currentUser } = await supabaseAdmin
+          .from("users")
+          .select("role")
+          .eq("id", userId)
+          .single();
+
+        if (currentUser?.role !== 'brand_owner') {
+          // Remove brand fields if user is not a brand owner
+          delete updateData.brand_name;
+          delete updateData.brand_description;
+          delete updateData.brand_profile_image_url;
+          delete updateData.business_name;
+          console.log('⚠️ [updateProfile] Brand fields removed - user is not a brand owner');
+        } else {
+          // Map frontend field names to database schema:
+          // Frontend sends 'business_name' -> Database expects 'brand_name'
+          if (updateData.business_name !== undefined) {
+            updateData.brand_name = updateData.business_name;
+            delete updateData.business_name;
+            console.log('🔄 [updateProfile] Mapped business_name -> brand_name');
+          }
+        }
       }
-      
+
       // Remove business_type as it's not in the schema anymore
       if (updateData.business_type !== undefined) {
         delete updateData.business_type;

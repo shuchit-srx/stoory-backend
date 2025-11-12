@@ -177,21 +177,45 @@ class SubscriptionController {
           .single();
 
         if (subError) {
-          return res.status(500).json({ success: false, message: "Failed to create subscription" });
-        }
-
-        // Apply coupon usage immediately for auditing
-        if (coupon_code) {
-          await supabaseAdmin.rpc("apply_coupon", {
-            p_coupon_code: coupon_code,
-            p_user_id: userId,
-            p_order_amount: parseFloat(plan.price),
-            p_subscription_id: subscription.id,
+          console.error("❌ Error creating free subscription:", subError);
+          return res.status(500).json({ 
+            success: false, 
+            message: "Failed to create subscription",
+            error: subError.message 
           });
         }
 
+        // Apply coupon usage immediately for auditing (non-blocking)
+        let couponApplied = false;
+        let couponError = null;
+        if (coupon_code) {
+          try {
+            const { data: applyResult, error: applyError } = await supabaseAdmin.rpc("apply_coupon", {
+              p_coupon_code: coupon_code,
+              p_user_id: userId,
+              p_order_amount: parseFloat(plan.price),
+              p_subscription_id: subscription.id,
+            });
+
+            if (applyError || !applyResult?.valid) {
+              couponError = applyResult?.error || applyError?.message || "Failed to apply coupon";
+              console.warn("⚠️ Coupon application failed (subscription already created):", couponError);
+              // Don't fail the request - subscription is already created
+            } else {
+              couponApplied = true;
+            }
+          } catch (error) {
+            couponError = error.message;
+            console.warn("⚠️ Coupon application error (subscription already created):", error);
+            // Don't fail the request - subscription is already created
+          }
+        }
+
+        // Return success response even if coupon application failed
+        // Subscription is already created and active
         return res.json({
           success: true,
+          message: "Free subscription activated successfully",
           order: {
             id: `free_order_${Date.now()}`,
             amount: 0,
@@ -208,14 +232,19 @@ class SubscriptionController {
             discount_amount: discountAmount,
           },
           plan: plan,
-          coupon: couponData,
+          coupon: couponData ? {
+            ...couponData,
+            applied: couponApplied,
+            application_error: couponError || null
+          } : null,
           pricing: {
             original_price: plan.price,
             discount_amount: discountAmount,
             final_price: 0,
             savings: discountAmount
           },
-          is_free: true
+          is_free: true,
+          note: couponError ? "Subscription activated, but coupon tracking failed (subscription is still active)" : null
         });
       }
 

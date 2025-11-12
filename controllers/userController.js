@@ -1008,7 +1008,10 @@ class UserController {
                 'verified_at',
                 'verified_by',
                 'verification_notes',
-                'verification_priority'
+                'verification_priority',
+                'pan_verified',        // PAN verification status is set by verifyPAN endpoint only
+                'pan_verified_at',      // PAN verification timestamp is set by verifyPAN endpoint only
+                'pan_holder_name'       // PAN holder name is set by verifyPAN endpoint only
             ];
             
             restrictedFields.forEach(field => delete updateData[field]);
