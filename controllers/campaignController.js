@@ -9,6 +9,84 @@ const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID || "00000000-0000-0000-0000-00
 
 class CampaignController {
   /**
+   * Enrich campaigns with influencer's request status
+   */
+  static async enrichWithRequestStatus(campaigns, influencerId) {
+    if (!campaigns || !Array.isArray(campaigns) || campaigns.length === 0 || !influencerId) {
+      return campaigns;
+    }
+
+    const campaignIds = campaigns.map(c => c.id).filter(Boolean);
+    if (campaignIds.length === 0) {
+      return campaigns;
+    }
+
+    // Fetch all requests for this influencer for these campaigns
+    const { data: requests, error } = await supabaseAdmin
+      .from("requests")
+      .select("id, campaign_id, status, proposed_amount, final_agreed_amount, created_at, updated_at")
+      .eq("influencer_id", influencerId)
+      .in("campaign_id", campaignIds)
+      .not("campaign_id", "is", null);
+
+    if (error) {
+      console.error("Error fetching request status:", error);
+      return campaigns; // Return campaigns without enrichment on error
+    }
+
+    // Create a map of campaign_id -> request
+    const requestMap = {};
+    requests?.forEach(req => {
+      if (req.campaign_id && !requestMap[req.campaign_id]) {
+        // If multiple requests exist, use the most recent one
+        const existing = requestMap[req.campaign_id];
+        if (!existing || new Date(req.created_at) > new Date(existing.created_at)) {
+          requestMap[req.campaign_id] = req;
+        }
+      }
+    });
+
+    // Map request status to UI-friendly format
+    const mapRequestStatus = (status) => {
+      if (!status) return "none";
+      
+      const pendingStatuses = ["connected", "negotiating", "finalized", "paid", "work_submitted", "work_approved"];
+      if (pendingStatuses.includes(status)) return "pending";
+      if (status === "completed") return "accepted";
+      if (status === "cancelled") return "rejected";
+      return "pending"; // Default to pending for unknown statuses
+    };
+
+    // Enrich each campaign with request status
+    return campaigns.map(campaign => {
+      const request = requestMap[campaign.id];
+      
+      if (!request) {
+        return {
+          ...campaign,
+          request_status: "none",
+          request_id: null,
+          influencer_request: null
+        };
+      }
+
+      return {
+        ...campaign,
+        request_status: mapRequestStatus(request.status),
+        request_id: request.id,
+        influencer_request: {
+          id: request.id,
+          status: request.status,
+          proposed_amount: request.proposed_amount,
+          final_agreed_amount: request.final_agreed_amount,
+          created_at: request.created_at,
+          updated_at: request.updated_at
+        }
+      };
+    });
+  }
+
+  /**
    * Helper function to ensure campaign titles are present
    */
   static ensureCampaignTitles(campaigns) {
@@ -213,6 +291,13 @@ class CampaignController {
       
       let baseSelect = supabaseAdmin.from("campaigns").select(`
         *,
+        created_by_user:users!campaigns_created_by_fkey (
+          id,
+          name,
+          role,
+          brand_name,
+          profile_image_url
+        ),
         requests_count:requests(count),
         requests(proposed_amount)
       `);
@@ -268,14 +353,21 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(campaigns || [])
           );
+          
+          // Add request status for each campaign if user is influencer
+          const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
+            processedCampaigns,
+            userId
+          );
+          
           return res.json({
             success: true,
-            campaigns: processedCampaigns,
+            campaigns: campaignsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: count || processedCampaigns.length,
-              pages: Math.ceil((count || processedCampaigns.length) / limit),
+              total: count || campaignsWithRequestStatus.length,
+              pages: Math.ceil((count || campaignsWithRequestStatus.length) / limit),
             },
           });
         } else if (
@@ -331,14 +423,21 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(campaigns || [])
           );
+          
+          // Add request status for each campaign if user is influencer
+          const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
+            processedCampaigns,
+            userId
+          );
+          
           return res.json({
             success: true,
-            campaigns: processedCampaigns,
+            campaigns: campaignsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: processedCampaigns.length,
-              pages: Math.ceil(processedCampaigns.length / limit),
+              total: campaignsWithRequestStatus.length,
+              pages: Math.ceil(campaignsWithRequestStatus.length / limit),
             },
           });
         } else {
@@ -359,9 +458,15 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(filtered)
           );
+          
+          // Add request status for each campaign if user is influencer
+          const campaignsWithRequestStatus = req.user.role === "influencer" 
+            ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
+            : processedCampaigns;
+          
           return res.json({
             success: true,
-            campaigns: processedCampaigns,
+            campaigns: campaignsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
@@ -403,9 +508,15 @@ class CampaignController {
         const processedCampaigns = CampaignController.addInfluencerStats(
           CampaignController.ensureCampaignTitles(visible)
         );
+        
+        // Add request status for each campaign if user is influencer
+        const campaignsWithRequestStatus = req.user.role === "influencer"
+          ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
+          : processedCampaigns;
+        
         return res.json({
           success: true,
-          campaigns: processedCampaigns,
+          campaigns: campaignsWithRequestStatus,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -445,9 +556,15 @@ class CampaignController {
         const processedCampaigns = CampaignController.addInfluencerStats(
           CampaignController.ensureCampaignTitles(visible)
         );
+        
+        // Add request status for each campaign if user is influencer
+        const campaignsWithRequestStatus = req.user.role === "influencer"
+          ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
+          : processedCampaigns;
+        
         return res.json({
           success: true,
-          campaigns: processedCampaigns,
+          campaigns: campaignsWithRequestStatus,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),

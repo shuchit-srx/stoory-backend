@@ -19,6 +19,8 @@ router.get(
   "/conversations/campaigns",
   MessageController.getCampaignConversations
 ); // Campaign conversations only
+router.get("/conversations/check", MessageController.checkConversationExists); // Check if conversation exists by bid_id/campaign_id/user_id
+router.get("/conversations/index", MessageController.getConversationIndex); // Get full conversation index for user
 router.get(
   "/conversations/:conversation_id/messages",
   MessageController.getMessages

@@ -22,8 +22,10 @@ router.post('/send-otp', validateSendOTP, AuthController.sendOTP);
 router.post('/send-registration-otp', validateSendOTP, AuthController.sendRegistrationOTP);
 router.post('/verify-otp', validateVerifyOTP, AuthController.verifyOTP);
 router.post('/refresh-token', AuthController.refreshToken);
-// PAN verification (temporarily public for testing)
-router.post('/verify-pan', AuthController.verifyPAN);
+// PAN verification (works with or without authentication)
+// If authenticated: checks if already verified, saves verification status to profile
+// If not authenticated: just returns verification result
+router.post('/verify-pan', authService.authenticateTokenOptional, AuthController.verifyPAN);
 
 // WhatsApp service status (for debugging)
 router.get('/whatsapp-status', (req, res) => {

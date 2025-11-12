@@ -9,6 +9,84 @@ const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID || "00000000-0000-0000-0000-00
 
 class BidController {
   /**
+   * Enrich bids with influencer's request status
+   */
+  static async enrichWithRequestStatus(bids, influencerId) {
+    if (!bids || !Array.isArray(bids) || bids.length === 0 || !influencerId) {
+      return bids;
+    }
+
+    const bidIds = bids.map(b => b.id).filter(Boolean);
+    if (bidIds.length === 0) {
+      return bids;
+    }
+
+    // Fetch all requests for this influencer for these bids
+    const { data: requests, error } = await supabaseAdmin
+      .from("requests")
+      .select("id, bid_id, status, proposed_amount, final_agreed_amount, created_at, updated_at")
+      .eq("influencer_id", influencerId)
+      .in("bid_id", bidIds)
+      .not("bid_id", "is", null);
+
+    if (error) {
+      console.error("Error fetching request status:", error);
+      return bids; // Return bids without enrichment on error
+    }
+
+    // Create a map of bid_id -> request
+    const requestMap = {};
+    requests?.forEach(req => {
+      if (req.bid_id && !requestMap[req.bid_id]) {
+        // If multiple requests exist, use the most recent one
+        const existing = requestMap[req.bid_id];
+        if (!existing || new Date(req.created_at) > new Date(existing.created_at)) {
+          requestMap[req.bid_id] = req;
+        }
+      }
+    });
+
+    // Map request status to UI-friendly format
+    const mapRequestStatus = (status) => {
+      if (!status) return "none";
+      
+      const pendingStatuses = ["connected", "negotiating", "finalized", "paid", "work_submitted", "work_approved"];
+      if (pendingStatuses.includes(status)) return "pending";
+      if (status === "completed") return "accepted";
+      if (status === "cancelled") return "rejected";
+      return "pending"; // Default to pending for unknown statuses
+    };
+
+    // Enrich each bid with request status
+    return bids.map(bid => {
+      const request = requestMap[bid.id];
+      
+      if (!request) {
+        return {
+          ...bid,
+          request_status: "none",
+          request_id: null,
+          influencer_request: null
+        };
+      }
+
+      return {
+        ...bid,
+        request_status: mapRequestStatus(request.status),
+        request_id: request.id,
+        influencer_request: {
+          id: request.id,
+          status: request.status,
+          proposed_amount: request.proposed_amount,
+          final_agreed_amount: request.final_agreed_amount,
+          created_at: request.created_at,
+          updated_at: request.updated_at
+        }
+      };
+    });
+  }
+
+  /**
    * Helper function to add influencer count and proposed amount sum to bids
    */
   static addInfluencerStats(bids) {
@@ -181,7 +259,10 @@ class BidController {
                     *,
                     created_by_user:users!bids_created_by_fkey (
                         id,
-                        role
+                        name,
+                        role,
+                        brand_name,
+                        profile_image_url
                     ),
                     requests_count:requests(count),
                     requests(proposed_amount)
@@ -234,9 +315,16 @@ class BidController {
           }
 
           const processedBids = BidController.addInfluencerStats(bids || []);
+          
+          // Add request status for each bid if user is influencer
+          const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
+            processedBids,
+            userId
+          );
+          
           return res.json({
             success: true,
-            bids: processedBids,
+            bids: bidsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
@@ -300,9 +388,16 @@ class BidController {
           }
 
           const processedBids = BidController.addInfluencerStats(bids || []);
+          
+          // Add request status for each bid if user is influencer
+          const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
+            processedBids,
+            userId
+          );
+          
           return res.json({
             success: true,
-            bids: processedBids,
+            bids: bidsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
@@ -324,9 +419,16 @@ class BidController {
           const interactedSet = new Set(interactedBidIds);
           const filtered = (bids || []).filter((b) => !interactedSet.has(b.id));
           const processedBids = BidController.addInfluencerStats(filtered);
+          
+          // Add request status for each bid if user is influencer
+          const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
+            processedBids,
+            userId
+          );
+          
           return res.json({
             success: true,
-            bids: processedBids,
+            bids: bidsWithRequestStatus,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
@@ -365,9 +467,15 @@ class BidController {
           return new Date(b.created_at) - new Date(a.created_at);
         });
         const processedBids = BidController.addInfluencerStats(visible);
+        
+        // Add request status for each bid if user is influencer
+        const bidsWithRequestStatus = req.user.role === "influencer"
+          ? await BidController.enrichWithRequestStatus(processedBids, req.user.id)
+          : processedBids;
+        
         return res.json({
           success: true,
-          bids: processedBids,
+          bids: bidsWithRequestStatus,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -404,9 +512,15 @@ class BidController {
           return new Date(b.created_at) - new Date(a.created_at);
         });
         const processedBids = BidController.addInfluencerStats(visible);
+        
+        // Add request status for each bid if user is influencer
+        const bidsWithRequestStatus = req.user.role === "influencer"
+          ? await BidController.enrichWithRequestStatus(processedBids, req.user.id)
+          : processedBids;
+        
         return res.json({
           success: true,
-          bids: processedBids,
+          bids: bidsWithRequestStatus,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),

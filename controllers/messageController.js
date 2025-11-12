@@ -2349,6 +2349,135 @@ class MessageController {
   }
 
   /**
+   * Check if conversation exists by bid_id, campaign_id, or user_id
+   * Used by frontend to build conversation index for button state management
+   */
+  async checkConversationExists(req, res) {
+    try {
+      const userId = req.user.id;
+      const { bid_id, campaign_id, user_id } = req.query;
+
+      if (!bid_id && !campaign_id && !user_id) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one of bid_id, campaign_id, or user_id is required",
+        });
+      }
+
+      let query = supabaseAdmin
+        .from("conversations")
+        .select("id, bid_id, campaign_id, brand_owner_id, influencer_id")
+        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`); // User must be part of conversation
+
+      // Add filters based on provided parameters
+      if (bid_id) {
+        query = query.eq("bid_id", bid_id);
+      }
+      if (campaign_id) {
+        query = query.eq("campaign_id", campaign_id);
+      }
+      if (user_id) {
+        // For direct messages, check if conversation exists between current user and target user
+        query = query.or(`brand_owner_id.eq.${user_id},influencer_id.eq.${user_id}`)
+                     .is("campaign_id", null)
+                     .is("bid_id", null);
+      }
+
+      const { data: conversation, error } = await query.maybeSingle();
+
+      if (error) {
+        console.error("❌ Error checking conversation existence:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to check conversation",
+        });
+      }
+
+      return res.json({
+        success: true,
+        exists: !!conversation,
+        conversation_id: conversation?.id || null,
+        conversation: conversation || null,
+      });
+    } catch (error) {
+      console.error("❌ Error in checkConversationExists:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Get conversation index - returns all conversation mappings for a user
+   * Used by frontend to build persistent conversation index
+   */
+  async getConversationIndex(req, res) {
+    try {
+      const userId = req.user.id;
+      const { limit = 1000 } = req.query; // Large limit to get all conversations
+
+      console.log(`🔍 Building conversation index for user: ${userId}`);
+
+      // Get all conversations for this user
+      const { data: conversations, error } = await supabaseAdmin
+        .from("conversations")
+        .select("id, bid_id, campaign_id, brand_owner_id, influencer_id")
+        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`)
+        .order("updated_at", { ascending: false })
+        .limit(parseInt(limit));
+
+      if (error) {
+        console.error("❌ Error fetching conversations for index:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch conversations",
+        });
+      }
+
+      // Build index structure
+      const index = {
+        bids: {},
+        campaigns: {},
+        direct: {},
+        lastUpdated: Date.now(),
+      };
+
+      conversations?.forEach((conv) => {
+        if (conv.bid_id) {
+          index.bids[conv.bid_id] = conv.id;
+        }
+        if (conv.campaign_id) {
+          index.campaigns[conv.campaign_id] = conv.id;
+        }
+        if (!conv.bid_id && !conv.campaign_id) {
+          // Direct conversation - map by other user's ID
+          const otherUserId = conv.brand_owner_id === userId 
+            ? conv.influencer_id 
+            : conv.brand_owner_id;
+          if (otherUserId) {
+            index.direct[otherUserId] = conv.id;
+          }
+        }
+      });
+
+      console.log(`✅ Built conversation index: ${Object.keys(index.bids).length} bids, ${Object.keys(index.campaigns).length} campaigns, ${Object.keys(index.direct).length} direct`);
+
+      return res.json({
+        success: true,
+        index,
+        total: conversations?.length || 0,
+      });
+    } catch (error) {
+      console.error("❌ Error in getConversationIndex:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
    * Get bid conversations for a user based on their role
    */
   async getBidConversations(req, res) {
