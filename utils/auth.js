@@ -513,6 +513,82 @@ class AuthService {
   }
 
   /**
+   * Send OTP for phone number change (existing users updating profile)
+   */
+  async sendChangePhoneOTP(phone) {
+    try {
+      // Validate phone number format
+      if (!phone.startsWith("+")) {
+        return {
+          success: false,
+          message: "Phone number must include country code (e.g., +1234567890)",
+        };
+      }
+
+      // Check if it's a valid international format (7-15 digits after +)
+      const phoneRegex = /^\+[1-9]\d{6,14}$/;
+      if (!phoneRegex.test(phone)) {
+        return {
+          success: false,
+          message:
+            "Invalid phone number format. Use international format: +[country code][number]",
+        };
+      }
+
+      // Handle mock phone numbers
+      const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
+      if (
+        phone === this.mockPhone ||
+        phone === this.testUsers.admin.phone ||
+        phone === this.testUsers.brandOwner.phone ||
+        phone === this.testUsers.brandOwner2.phone ||
+        phone === this.testUsers.influencer.phone ||
+        phoneWithoutCountryCode === this.mockPhone ||
+        phoneWithoutCountryCode === this.testUsers.admin.phone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
+        phoneWithoutCountryCode === this.testUsers.influencer.phone
+      ) {
+        return {
+          success: true,
+          message: `Mock change phone OTP sent successfully! Use OTP: 123456 for testing.`,
+        };
+      }
+
+      // Check if new phone number is already taken by another user
+      const userCheck = await this.checkUserExists(phone);
+      if (!userCheck.success) {
+        return userCheck;
+      }
+
+      if (userCheck.exists) {
+        return {
+          success: false,
+          message: "This phone number is already linked to another account.",
+          code: "PHONE_ALREADY_EXISTS",
+        };
+      }
+
+      const otp = this.generateOTP();
+
+      // Store OTP in database
+      const storeResult = await this.storeOTP(phone, otp);
+      if (!storeResult.success) {
+        return storeResult;
+      }
+
+      // Send via WhatsApp
+      const whatsappResult = await this.sendWhatsAppOTP(phone, otp);
+      return whatsappResult;
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message,
+      };
+    }
+  }
+
+  /**
    * Verify OTP and create custom JWT session
    */
   async verifyOTP(phone, token, userData) {

@@ -592,11 +592,16 @@ class MessageController {
 
         // Store notification in database and emit to receiver
         const notificationService = require('../services/notificationService');
+        const notificationBody = newMessage.message || (newMessage.media_url ? '📷 Sent an attachment' : 'New message');
+
+        // Check if user is online
+        const isOnline = notificationService.isUserOnline(receiverId);
+
         notificationService.storeNotification({
           user_id: receiverId,
           type: 'message',
           title: `${senderName} sent you a message`,
-          message: newMessage.message,
+          message: notificationBody,
           data: {
             conversation_id: conversationId,
             message: newMessage,
@@ -606,7 +611,7 @@ class MessageController {
             sender_name: senderName
           },
           action_url: `/conversations/${conversationId}`
-        }, io).then(result => {
+        }, isOnline ? io : null).then(result => { // Only emit socket event if online
           if (result.success) {
             console.log(`✅ Notification stored successfully: ${result.notification.id}`);
           } else {
@@ -615,6 +620,28 @@ class MessageController {
         }).catch(error => {
           console.error(`❌ Error storing notification:`, error);
         });
+
+        // Send FCM only if offline
+        if (!isOnline) {
+          const fcmService = require('../services/fcmService');
+          fcmService.sendMessageNotification(
+            conversationId,
+            newMessage,
+            senderId,
+            receiverId,
+            io  // Pass io to check if user is in conversation room
+          ).then(result => {
+            if (result.success && !result.skipped) {
+              console.log(`✅ FCM notification sent: ${result.sent} successful`);
+            } else if (result.skipped) {
+              console.log(`ℹ️ [FCM] Skipped - user is viewing conversation`);
+            } else {
+              console.error(`❌ FCM notification failed:`, result.error);
+            }
+          }).catch(error => {
+            console.error(`❌ FCM notification error:`, error);
+          });
+        }
 
         // Emit notification to receiver's personal room with context
         io.to(`user_${receiverId}`).emit("notification", {
@@ -627,7 +654,7 @@ class MessageController {
             receiver_id: receiverId,
             sender_name: senderName,
             title: `${senderName} sent you a message`,
-            body: newMessage.message
+            body: notificationBody
           },
         });
 
@@ -2937,8 +2964,8 @@ const validateSendMessage = [
     .optional()
     .isString()
     .trim()
-    .isLength({ min: 1, max: 1000 })
-    .withMessage("Message must be between 1 and 1000 characters"),
+    .isLength({ min: 0, max: 1000 }) // Allow empty string (handled by custom validator)
+    .withMessage("Message must be between 0 and 1000 characters"),
 
   body("media_url")
     .optional()

@@ -787,7 +787,7 @@ class RequestController {
       // Check if request exists
       const { data: request, error: fetchError } = await supabaseAdmin
         .from("requests")
-        .select("influencer_id, status")
+        .select("influencer_id, campaign_id, bid_id, status")
         .eq("id", id)
         .single();
 
@@ -806,10 +806,30 @@ class RequestController {
         });
       }
 
-      if (request.status !== "pending") {
+      // Check if a conversation has already started
+      let conversationQuery = supabaseAdmin
+        .from("conversations")
+        .select("id")
+        .eq("influencer_id", userId);
+
+      if (request.campaign_id) {
+        conversationQuery = conversationQuery.eq("campaign_id", request.campaign_id);
+      } else if (request.bid_id) {
+        conversationQuery = conversationQuery.eq("bid_id", request.bid_id);
+      } else {
+        // Should not happen, but safe fallback
         return res.status(400).json({
           success: false,
-          message: "Cannot withdraw approved or in-progress request",
+          message: "Invalid request data: missing campaign or bid reference",
+        });
+      }
+
+      const { data: conversation, error: convError } = await conversationQuery.maybeSingle();
+
+      if (conversation) {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot withdraw request because a conversation has already started.",
         });
       }
 
@@ -831,6 +851,7 @@ class RequestController {
         message: "Application withdrawn successfully",
       });
     } catch (error) {
+      console.error("Error withdrawing request:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",

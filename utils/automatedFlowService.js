@@ -77,7 +77,12 @@ class AutomatedFlowService {
             title = message.action_data.title.replace(/\*\*/g, '');
           }
 
+          // Check if user is online
+          const isOnline = notificationService.isUserOnline(receiverId);
+
           // Store notification
+          // If online, emit socket event via storeNotification (pass this.io)
+          // If offline, don't emit socket event (pass null)
           await notificationService.storeNotification({
             user_id: receiverId,
             type: 'message',
@@ -92,16 +97,19 @@ class AutomatedFlowService {
               sender_name: senderName
             },
             action_url: `/conversations/${conversationId}`
-          }, this.io);
+          }, isOnline ? this.io : null);
 
-          // Send FCM
-          await fcmService.sendMessageNotification(
-            conversationId,
-            message,
-            senderId,
-            receiverId,
-            this.io
-          );
+          // Send FCM only if offline
+          // If they are online, they got the socket notification above
+          if (!isOnline) {
+            await fcmService.sendMessageNotification(
+              conversationId,
+              message,
+              senderId,
+              receiverId,
+              this.io
+            );
+          }
 
           // Update conversation lists for both users
           await conversationListUtils.emitConversationsUpsertToBothUsers(
@@ -1293,6 +1301,34 @@ Please respond to confirm your interest and availability for this campaign.`,
         : baseNegotiationHistory.length;
 
       let newFlowState, newAwaitingRole, newMessage, auditMessage;
+
+      // Idempotency Check: Validate action against current state
+      if (action === "accept_connection" || action === "reject_connection") {
+        if (conversation.flow_state !== "influencer_responding") {
+          console.log(`⚠️ [Idempotency] Ignoring ${action} for conversation ${conversationId}: state is ${conversation.flow_state}`);
+          return { success: true, message: "Action already processed", idempotency_skip: true };
+        }
+      }
+
+      if (action === "accept_project_details") {
+        if (conversation.flow_state !== "influencer_reviewing") {
+          console.log(`⚠️ [Idempotency] Ignoring ${action} for conversation ${conversationId}: state is ${conversation.flow_state}`);
+          return { success: true, message: "Action already processed", idempotency_skip: true };
+        }
+      }
+
+      if (action === "accept_negotiation" || action === "reject_negotiation") {
+        // These are brand owner actions usually, but if influencer triggers them (unlikely but possible via API), check state
+        // Actually, 'negotiate_price' is the influencer action here
+      }
+
+      if (action === "negotiate_price") {
+        if (conversation.flow_state !== "influencer_price_response") {
+          console.log(`⚠️ [Idempotency] Ignoring ${action} for conversation ${conversationId}: state is ${conversation.flow_state}`);
+          return { success: true, message: "Action already processed", idempotency_skip: true };
+        }
+      }
+
 
       switch (action) {
         case "negotiate_price":

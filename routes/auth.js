@@ -48,6 +48,10 @@ router.post('/profile/image', authService.authenticateToken, upload.single('imag
 router.delete('/profile/image', authService.authenticateToken, AuthController.deleteProfileImage);
 router.post('/profile/verification-document', authService.authenticateToken, upload.single('verification_document'), validateVerificationDocument, AuthController.uploadVerificationDocument);
 
+// Phone number update routes
+router.post('/change-phone-otp', authService.authenticateToken, validateSendOTP, AuthController.sendChangePhoneOTP);
+router.post('/verify-change-phone-otp', authService.authenticateToken, validateVerifyOTP, AuthController.verifyChangePhoneOTP);
+
 // Social platform routes
 router.get('/social-platforms', authService.authenticateToken, SocialPlatformController.getSocialPlatforms);
 router.post('/social-platforms', authService.authenticateToken, validateSocialPlatform, SocialPlatformController.addSocialPlatform);

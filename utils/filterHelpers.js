@@ -128,16 +128,22 @@ function applyCommonFilters(query, filters) {
         languages,
         locations,
         categories,
-        search
+        search,
+        // Logic parameters (default to OR)
+        languages_logic = 'OR',
+        locations_logic = 'OR',
+        categories_logic = 'OR',
+        filter_logic = 'OR' // Global fallback
     } = filters;
 
     // Budget range
     query = applyBudgetRangeFilter(query, 'min_budget', 'max_budget', min_budget, max_budget);
 
-    // Array filters (OR logic)
-    query = applyArrayFilter(query, 'languages', parseArrayParam(languages), 'OR');
-    query = applyArrayFilter(query, 'locations', parseArrayParam(locations), 'OR');
-    query = applyArrayFilter(query, 'categories', parseArrayParam(categories), 'OR');
+    // Array filters
+    // Use specific logic if provided, otherwise global fallback, otherwise default 'OR'
+    query = applyArrayFilter(query, 'languages', parseArrayParam(languages), languages_logic || filter_logic || 'OR');
+    query = applyArrayFilter(query, 'locations', parseArrayParam(locations), locations_logic || filter_logic || 'OR');
+    query = applyArrayFilter(query, 'categories', parseArrayParam(categories), categories_logic || filter_logic || 'OR');
 
     // Text search
     query = applyTextSearch(query, search);
@@ -158,16 +164,21 @@ function applyInfluencerFilters(query, filters) {
         max_budget,
         languages,
         locations,
-        categories
+        categories,
+        // Logic parameters (default to OR)
+        languages_logic = 'OR',
+        locations_logic = 'OR',
+        categories_logic = 'OR',
+        filter_logic = 'OR' // Global fallback
     } = filters;
 
     // Budget range (for influencers, use budget_range_min/max)
     query = applyBudgetRangeFilter(query, 'budget_range_min', 'budget_range_max', min_budget, max_budget);
 
-    // Array filters (OR logic)
-    query = applyArrayFilter(query, 'languages', parseArrayParam(languages), 'OR');
-    query = applyArrayFilter(query, 'locations', parseArrayParam(locations), 'OR');
-    query = applyArrayFilter(query, 'categories', parseArrayParam(categories), 'OR');
+    // Array filters
+    query = applyArrayFilter(query, 'languages', parseArrayParam(languages), languages_logic || filter_logic || 'OR');
+    query = applyArrayFilter(query, 'locations', parseArrayParam(locations), locations_logic || filter_logic || 'OR');
+    query = applyArrayFilter(query, 'categories', parseArrayParam(categories), categories_logic || filter_logic || 'OR');
 
     return query;
 }

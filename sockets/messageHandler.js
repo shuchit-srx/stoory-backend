@@ -410,6 +410,10 @@ class MessageHandler {
 
                 // Store notification in database
                 const notificationService = require('../services/notificationService');
+
+                // Check if receiver is online
+                const isReceiverOnline = this.isUserOnline(receiverId);
+
                 notificationService.storeNotification({
                     user_id: receiverId,
                     type: 'message',
@@ -423,24 +427,26 @@ class MessageHandler {
                         sender_name: senderName
                     },
                     action_url: `/conversations/${conversationId}`
-                }, this.io).catch(error => {
+                }, isReceiverOnline ? this.io : null).catch(error => { // Only emit socket event if online
                     console.error('❌ Error storing socket message notification:', error);
                 });
 
-                // Send FCM notification only if user is not actively viewing conversation
-                fcmService.sendMessageNotification(
-                    conversationId,
-                    savedMessage,
-                    socket.user.id,
-                    receiverId,
-                    this.io  // Pass io to check if user is in conversation room
-                ).then(result => {
-                    if (result.success && !result.skipped) {
-                        console.log(`✅ FCM notification sent: ${result.sent} successful`);
-                    } else if (result.skipped) {
-                        console.log(`ℹ️ [FCM] Skipped - user is viewing conversation`);
-                    }
-                }).catch(err => console.error('FCM error:', err));
+                // Send FCM notification only if user is offline
+                if (!isReceiverOnline) {
+                    fcmService.sendMessageNotification(
+                        conversationId,
+                        savedMessage,
+                        socket.user.id,
+                        receiverId,
+                        this.io  // Pass io to check if user is in conversation room
+                    ).then(result => {
+                        if (result.success && !result.skipped) {
+                            console.log(`✅ FCM notification sent: ${result.sent} successful`);
+                        } else if (result.skipped) {
+                            console.log(`ℹ️ [FCM] Skipped - user is viewing conversation`);
+                        }
+                    }).catch(err => console.error('FCM error:', err));
+                }
 
             } catch (error) {
                 console.error('chat:send error:', error);
