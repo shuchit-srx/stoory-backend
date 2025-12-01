@@ -99,7 +99,7 @@ class AuthController {
       };
 
       // Set timeout for Zoop API call (30 seconds)
-      const response = await axios.post(url, payload, { 
+      const response = await axios.post(url, payload, {
         headers,
         timeout: 30000 // 30 second timeout
       });
@@ -130,37 +130,37 @@ class AuthController {
       // Header lite response shape (handle both live v1 and test v1)
       // Try multiple possible response structures
       const resultObj = data?.result || data?.data || data?.response || data || {};
-      
+
       // Extract holder name from various possible fields
-      holderName = resultObj?.user_full_name || 
-                   resultObj?.name || 
-                   resultObj?.holder_name ||
-                   resultObj?.customer_name ||
-                   data?.user_full_name ||
-                   data?.name ||
-                   null;
+      holderName = resultObj?.user_full_name ||
+        resultObj?.name ||
+        resultObj?.holder_name ||
+        resultObj?.customer_name ||
+        data?.user_full_name ||
+        data?.name ||
+        null;
 
       // Extract status from various possible fields
-      const status = (resultObj?.pan_status || 
-                     resultObj?.status || 
-                     resultObj?.verification_status ||
-                     data?.pan_status ||
-                     data?.status ||
-                     "").toUpperCase();
+      const status = (resultObj?.pan_status ||
+        resultObj?.status ||
+        resultObj?.verification_status ||
+        data?.pan_status ||
+        data?.status ||
+        "").toUpperCase();
 
       // Check if valid - multiple ways to determine validity
-      isValid = status === "VALID" || 
-                status === "SUCCESS" ||
-                data?.transaction_status === 1 ||
-                data?.status_code === 200 ||
-                (data?.response_code && String(data.response_code).startsWith('2')) ||
-                (resultObj?.is_valid === true);
+      isValid = status === "VALID" ||
+        status === "SUCCESS" ||
+        data?.transaction_status === 1 ||
+        data?.status_code === 200 ||
+        (data?.response_code && String(data.response_code).startsWith('2')) ||
+        (resultObj?.is_valid === true);
 
       // Get response code
-      responseCode = data?.response_code ?? 
-                    data?.transaction_status ?? 
-                    data?.status_code ??
-                    responseCode;
+      responseCode = data?.response_code ??
+        data?.transaction_status ??
+        data?.status_code ??
+        responseCode;
 
       // If result object is empty but we got a 200 response, log warning
       if (Object.keys(resultObj).length === 0 && !isValid) {
@@ -210,7 +210,7 @@ class AuthController {
 
         if (updateError) {
           console.error("❌ [verifyPAN] Failed to update PAN verification status:", updateError);
-          
+
           // Check if error is due to unique constraint violation
           if (updateError.code === '23505' || updateError.message?.includes('unique') || updateError.message?.includes('duplicate')) {
             return res.status(400).json({
@@ -219,7 +219,7 @@ class AuthController {
               error_type: "duplicate_pan"
             });
           }
-          
+
           // For other database errors, return generic error
           return res.status(500).json({
             success: false,
@@ -380,6 +380,7 @@ class AuthController {
           success: true,
           user: result.user,
           token: result.token,
+          refreshToken: result.refreshToken,
           message: "Authentication successful",
         });
       } else {
@@ -409,7 +410,7 @@ class AuthController {
       // Try to get user first without relation to avoid relation query errors
       let user = null;
       let userError = null;
-      
+
       try {
         const { data, error } = await retrySupabaseQuery(
           () => supabaseAdmin
@@ -419,7 +420,7 @@ class AuthController {
             .maybeSingle(),
           { maxRetries: 3, initialDelay: 200 }
         );
-        
+
         if (error) {
           userError = error;
           console.error('❌ [getProfile] Supabase error fetching user:', error);
@@ -437,7 +438,7 @@ class AuthController {
 
       if (userError) {
         console.error('❌ [getProfile] Error details:', JSON.stringify(userError, null, 2));
-        
+
         // Check for specific error types
         if (userError.code === 'PGRST116' || userError.message?.includes('does not exist')) {
           return res.status(404).json({
@@ -445,7 +446,7 @@ class AuthController {
             message: "User not found"
           });
         }
-        
+
         // Check if it's a column error
         if (userError.message?.includes('column') || userError.hint?.includes('column')) {
           console.error('❌ [getProfile] Possible missing column in users table');
@@ -455,7 +456,7 @@ class AuthController {
             error: process.env.NODE_ENV === 'development' ? userError.message : undefined
           });
         }
-        
+
         return res.status(500).json({
           success: false,
           message: "Failed to fetch profile",
@@ -481,7 +482,7 @@ class AuthController {
       // Ensure social_platforms is always an array
       // If relation didn't return platforms, fetch them separately (fallback)
       let socialPlatforms = user.social_platforms || [];
-      
+
       if (!socialPlatforms || socialPlatforms.length === 0) {
         console.log('⚠️ [getProfile] Social platforms not found in relation, fetching separately...');
         const { data: platformsData, error: platformsError } = await supabaseAdmin
@@ -489,7 +490,7 @@ class AuthController {
           .select('id, platform_name, platform, username, profile_link, followers_count, engagement_rate, is_connected, created_at, updated_at')
           .eq('user_id', userId)
           .order('created_at', { ascending: false });
-        
+
         if (platformsError) {
           console.error('❌ [getProfile] Error fetching platforms separately:', platformsError);
         } else if (platformsData) {
@@ -560,10 +561,10 @@ class AuthController {
       delete updateData.pan_holder_name;
 
       // Check if user is trying to update brand fields - only brand_owner can update these
-      const hasBrandFields = updateData.brand_name !== undefined || 
-                            updateData.brand_description !== undefined || 
-                            updateData.brand_profile_image_url !== undefined ||
-                            updateData.business_name !== undefined;
+      const hasBrandFields = updateData.brand_name !== undefined ||
+        updateData.brand_description !== undefined ||
+        updateData.brand_profile_image_url !== undefined ||
+        updateData.business_name !== undefined;
 
       if (hasBrandFields) {
         // Get user's current role
@@ -977,20 +978,37 @@ class AuthController {
    */
   async refreshToken(req, res) {
     try {
-      const userId = req.user.id;
+      const { refreshToken } = req.body;
 
-      const result = await authService.refreshToken(userId);
+      console.log('🔄 [REFRESH] Received refresh token request');
+
+      if (!refreshToken) {
+        return res.status(400).json({
+          success: false,
+          message: "Refresh token is required",
+          code: "REFRESH_TOKEN_REQUIRED"
+        });
+      }
+
+      const result = await authService.refreshToken(refreshToken);
 
       if (result.success) {
+        console.log('✅ [REFRESH] Token refreshed successfully for user:', result.token ? 'Token generated' : 'No token');
         res.json({
           success: true,
-          token: result.token,
-          message: "Token refreshed successfully",
+          data: {
+            token: result.token,
+            refreshToken: result.refreshToken,
+          },
         });
       } else {
-        res.status(400).json({
+        console.log('❌ [REFRESH] Failed:', result.message, result.code);
+        // Return 401 for expired/invalid tokens to trigger logout
+        const status = result.code === "REFRESH_TOKEN_EXPIRED" || result.code === "INVALID_TOKEN_TYPE" ? 401 : 400;
+        res.status(status).json({
           success: false,
           message: result.message,
+          code: result.code
         });
       }
     } catch (error) {

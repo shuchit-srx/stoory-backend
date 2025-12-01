@@ -55,7 +55,7 @@ router.put('/social-platforms/:id', authService.authenticateToken, validateSocia
 router.delete('/social-platforms/:id', authService.authenticateToken, SocialPlatformController.deleteSocialPlatform);
 router.get('/social-platforms/stats', authService.authenticateToken, SocialPlatformController.getSocialPlatformStats);
 
-router.post('/logout', authService.authenticateToken, AuthController.logout);
+router.post('/logout', authService.authenticateTokenOptional, AuthController.logout);
 router.delete('/account', authService.authenticateToken, AuthController.deleteAccount);
 
 module.exports = router; 

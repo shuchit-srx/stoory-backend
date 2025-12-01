@@ -18,8 +18,10 @@ function applyArrayFilter(query, field, values, logic = 'OR') {
         return query;
     }
 
-    // Filter out null/undefined values
-    const cleanValues = values.filter(v => v != null && v !== '');
+    // Filter out null/undefined values and convert to lowercase
+    const cleanValues = values
+        .filter(v => v != null && v !== '')
+        .map(v => String(v).toLowerCase());
     if (cleanValues.length === 0) {
         return query;
     }

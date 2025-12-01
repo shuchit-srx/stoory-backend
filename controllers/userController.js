@@ -85,8 +85,8 @@ class UserController {
             // Parse list filters (comma-separated or array)
             const parseList = (val) => {
                 if (!val) return null;
-                if (Array.isArray(val)) return val.filter(Boolean);
-                if (typeof val === 'string') return val.split(',').map(v => v.trim()).filter(Boolean);
+                if (Array.isArray(val)) return val.filter(Boolean).map(v => String(v).toLowerCase());
+                if (typeof val === 'string') return val.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
                 return null;
             };
 
@@ -1105,6 +1105,20 @@ class UserController {
             ];
 
             restrictedFields.forEach(field => delete updateData[field]);
+
+            // Normalize array fields to lowercase
+            if (updateData.languages) {
+                const langs = Array.isArray(updateData.languages) ? updateData.languages : [updateData.languages];
+                updateData.languages = langs.map(v => String(v).toLowerCase());
+            }
+            if (updateData.categories) {
+                const cats = Array.isArray(updateData.categories) ? updateData.categories : [updateData.categories];
+                updateData.categories = cats.map(v => String(v).toLowerCase());
+            }
+            if (updateData.locations) {
+                const locs = Array.isArray(updateData.locations) ? updateData.locations : [updateData.locations];
+                updateData.locations = locs.map(v => String(v).toLowerCase());
+            }
 
             // Validate PAN number format if provided
             if (updateData.pan_number && !this.validatePANNumber(updateData.pan_number)) {

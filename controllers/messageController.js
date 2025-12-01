@@ -1445,7 +1445,7 @@ class MessageController {
           ),
           bids (
             id, title, description, min_budget, max_budget, requirements, 
-            language, platform, content_type, category, status
+            languages, platform, content_type, categories, status
           )
         `
         )

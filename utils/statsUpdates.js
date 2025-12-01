@@ -10,77 +10,35 @@ const { supabaseAdmin } = require('../supabase/client');
  * @param {string} userId - User ID
  * @returns {Promise<Object>} Stats object
  */
+/**
+ * Calculate bids stats for influencer - Global counts
+ * @param {string} userId - User ID (unused but kept for signature compatibility)
+ * @returns {Promise<Object>} Stats object
+ */
 async function getBidsStatsForInfluencer(userId) {
-  // Step 1: Get all requests for this influencer
-  const { data: influencerRequests, error: reqError } = await supabaseAdmin
-    .from("requests")
-    .select("bid_id, status")
-    .eq("influencer_id", userId)
-    .not("bid_id", "is", null);
-
-  if (reqError) {
-    console.error('Error fetching influencer requests:', reqError);
-    return { total: 0, new: 0, pending: 0, closed: 0 };
-  }
-
-  const pendingRequestStatuses = [
-    "connected",
-    "negotiating",
-    "paid",
-    "finalized",
-    "work_submitted",
-    "work_approved",
-  ];
-  const closedRequestStatuses = ["completed", "cancelled"];
-
-  // Step 2: Filter bid IDs by request status (EXACTLY like listing)
-  const pendingBidIds = new Set(
-    (influencerRequests || [])
-      .filter((r) => r.bid_id && pendingRequestStatuses.includes(r.status))
-      .map((r) => r.bid_id)
-  );
-
-  const closedBidIds = new Set(
-    (influencerRequests || [])
-      .filter((r) => r.bid_id && closedRequestStatuses.includes(r.status))
-      .map((r) => r.bid_id)
-  );
-
-  // Step 3: Get counts for each category (EXACTLY like listing queries, but get ALL without pagination)
-  
-  // "new" (open): ALL open bids (no request filter)
+  // "new" (open): ALL open bids
   const { count: openCount } = await supabaseAdmin
     .from("bids")
     .select("*", { count: 'exact', head: true })
     .eq("status", "open");
 
-  // "pending": Bids where request status matches AND bid.status = "pending"
-  let pendingCount = 0;
-  if (pendingBidIds.size > 0) {
-    const { count } = await supabaseAdmin
-      .from("bids")
-      .select("*", { count: 'exact', head: true })
-      .in("id", Array.from(pendingBidIds))
-      .eq("status", "pending");
-    pendingCount = count || 0;
-  }
+  // "pending": ALL pending bids
+  const { count: pendingCount } = await supabaseAdmin
+    .from("bids")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "pending");
 
-  // "closed": Bids where request status matches AND bid.status = "closed"
-  let closedCount = 0;
-  if (closedBidIds.size > 0) {
-    const { count } = await supabaseAdmin
-      .from("bids")
-      .select("*", { count: 'exact', head: true })
-      .in("id", Array.from(closedBidIds))
-      .eq("status", "closed");
-    closedCount = count || 0;
-  }
+  // "closed": ALL closed bids
+  const { count: closedCount } = await supabaseAdmin
+    .from("bids")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "closed");
 
   return {
-    total: (openCount || 0) + pendingCount + closedCount,
+    total: (openCount || 0) + (pendingCount || 0) + (closedCount || 0),
     new: openCount || 0,
-    pending: pendingCount,
-    closed: closedCount,
+    pending: pendingCount || 0,
+    closed: closedCount || 0,
   };
 }
 
@@ -121,109 +79,41 @@ async function getBidsStatsForBrandOwner(userId) {
  * @param {string} userId - User ID
  * @returns {Promise<Object>} Stats object
  */
+/**
+ * Calculate campaigns stats for influencer - Global counts
+ * @param {string} userId - User ID (unused but kept for signature compatibility)
+ * @returns {Promise<Object>} Stats object
+ */
 async function getCampaignsStatsForInfluencer(userId) {
-  // Step 1: Get all requests for this influencer
-  const { data: influencerRequests, error: reqError } = await supabaseAdmin
-    .from("requests")
-    .select("campaign_id, status")
-    .eq("influencer_id", userId)
-    .not("campaign_id", "is", null);
-
-  if (reqError) {
-    console.error('Error fetching influencer campaign requests:', reqError);
-    return {
-      total: 0,
-      new: 0,
-      pending: 0,
-      closed: 0,
-      byType: {
-        service: { new: 0, pending: 0, closed: 0, total: 0 },
-        product: { new: 0, pending: 0, closed: 0, total: 0 }
-      }
-    };
-  }
-
-  const pendingRequestStatuses = [
-    "connected",
-    "negotiating",
-    "paid",
-    "finalized",
-    "work_submitted",
-    "work_approved",
-  ];
-  const closedRequestStatuses = ["completed", "cancelled"];
-
-  // Step 2: Filter campaign IDs by request status (EXACTLY like listing)
-  const pendingCampaignIds = new Set(
-    (influencerRequests || [])
-      .filter((r) => r.campaign_id && pendingRequestStatuses.includes(r.status))
-      .map((r) => r.campaign_id)
-  );
-
-  const closedCampaignIds = new Set(
-    (influencerRequests || [])
-      .filter((r) => r.campaign_id && closedRequestStatuses.includes(r.status))
-      .map((r) => r.campaign_id)
-  );
-
-  // Step 3: Get counts and data for type breakdown
-  
-  // "new" (open): ALL open campaigns (no request filter)
+  // "new" (open): ALL open campaigns
   const { count: openCount } = await supabaseAdmin
     .from("campaigns")
     .select("*", { count: 'exact', head: true })
     .eq("status", "open");
 
-  // Get open campaigns for type breakdown
-  const { data: openCampaigns } = await supabaseAdmin
+  // "pending": ALL pending campaigns
+  const { count: pendingCount } = await supabaseAdmin
     .from("campaigns")
-    .select("campaign_type")
-    .eq("status", "open");
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "pending");
 
-  // "pending": Campaigns where request status matches AND campaign.status = "pending"
-  let pendingCount = 0;
-  let pendingCampaignsData = [];
-  if (pendingCampaignIds.size > 0) {
-    const { count } = await supabaseAdmin
-      .from("campaigns")
-      .select("*", { count: 'exact', head: true })
-      .in("id", Array.from(pendingCampaignIds))
-      .eq("status", "pending");
-    pendingCount = count || 0;
+  // "closed": ALL closed campaigns
+  const { count: closedCount } = await supabaseAdmin
+    .from("campaigns")
+    .select("*", { count: 'exact', head: true })
+    .eq("status", "closed");
 
-    const { data: campaigns } = await supabaseAdmin
-      .from("campaigns")
-      .select("campaign_type")
-      .in("id", Array.from(pendingCampaignIds))
-      .eq("status", "pending");
-    pendingCampaignsData = campaigns || [];
-  }
-
-  // "closed": Campaigns where request status matches AND campaign.status = "closed"
-  let closedCount = 0;
-  let closedCampaignsData = [];
-  if (closedCampaignIds.size > 0) {
-    const { count } = await supabaseAdmin
-      .from("campaigns")
-      .select("*", { count: 'exact', head: true })
-      .in("id", Array.from(closedCampaignIds))
-      .eq("status", "closed");
-    closedCount = count || 0;
-
-    const { data: campaigns } = await supabaseAdmin
-      .from("campaigns")
-      .select("campaign_type")
-      .in("id", Array.from(closedCampaignIds))
-      .eq("status", "closed");
-    closedCampaignsData = campaigns || [];
-  }
+  // Get all campaigns for type breakdown
+  const { data: allCampaigns } = await supabaseAdmin
+    .from("campaigns")
+    .select("status, campaign_type");
 
   // Build stats with type breakdown
   const stats = {
-    total: (openCount || 0) + pendingCount + closedCount,
+    total: (openCount || 0) + (pendingCount || 0) + (closedCount || 0),
     new: openCount || 0,
-    pending: pendingCount,
-    closed: closedCount,
+    pending: pendingCount || 0,
+    closed: closedCount || 0,
     byType: {
       service: { new: 0, pending: 0, closed: 0, total: 0 },
       product: { new: 0, pending: 0, closed: 0, total: 0 }
@@ -231,22 +121,18 @@ async function getCampaignsStatsForInfluencer(userId) {
   };
 
   // Count by type
-  openCampaigns?.forEach((campaign) => {
+  allCampaigns?.forEach((campaign) => {
     const campaignType = campaign.campaign_type || 'product';
-    stats.byType[campaignType].new++;
-    stats.byType[campaignType].total++;
-  });
-
-  pendingCampaignsData.forEach((campaign) => {
-    const campaignType = campaign.campaign_type || 'product';
-    stats.byType[campaignType].pending++;
-    stats.byType[campaignType].total++;
-  });
-
-  closedCampaignsData.forEach((campaign) => {
-    const campaignType = campaign.campaign_type || 'product';
-    stats.byType[campaignType].closed++;
-    stats.byType[campaignType].total++;
+    if (campaign.status === "open") {
+      stats.byType[campaignType].new++;
+      stats.byType[campaignType].total++;
+    } else if (campaign.status === "pending") {
+      stats.byType[campaignType].pending++;
+      stats.byType[campaignType].total++;
+    } else if (campaign.status === "closed") {
+      stats.byType[campaignType].closed++;
+      stats.byType[campaignType].total++;
+    }
   });
 
   return stats;
@@ -472,10 +358,10 @@ async function emitBidsStatsUpdated(userId, role, io) {
 
   try {
     const stats = await getBidsStatsForUser(userId, role);
-    
+
     const roomName = `user_${userId}`;
     console.log(`➡️ [EMIT] bids:stats_updated -> ${roomName}`, stats);
-    
+
     io.to(roomName).emit('bids:stats_updated', {
       user_id: userId,
       stats: stats,
@@ -499,10 +385,10 @@ async function emitCampaignsStatsUpdated(userId, role, io) {
 
   try {
     const stats = await getCampaignsStatsForUser(userId, role);
-    
+
     const roomName = `user_${userId}`;
     console.log(`➡️ [EMIT] campaigns:stats_updated -> ${roomName}`, stats);
-    
+
     io.to(roomName).emit('campaigns:stats_updated', {
       user_id: userId,
       stats: stats,
@@ -616,4 +502,6 @@ module.exports = {
   getBidsStatsForUser,
   getCampaignsStatsForUser,
   getUserRole,
+  getBidsStatsForInfluencer,
+  getCampaignsStatsForInfluencer,
 };

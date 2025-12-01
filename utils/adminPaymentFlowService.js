@@ -36,8 +36,9 @@ class AdminPaymentFlowService {
 
       // Calculate payment breakdown
       const paymentBreakdown = await this.calculatePaymentBreakdown(agreedAmount);
-      
+
       // Create admin payment tracking record
+      // Since advance is 0, we mark it as confirmed immediately
       const { data: paymentRecord, error: paymentError } = await supabaseAdmin
         .from("admin_payment_tracking")
         .insert({
@@ -52,7 +53,8 @@ class AdminPaymentFlowService {
           advance_amount_paise: paymentBreakdown.advance_amount_paise,
           final_amount_paise: paymentBreakdown.final_amount_paise,
           commission_percentage: paymentBreakdown.commission_percentage,
-          advance_payment_status: 'admin_received',
+          advance_payment_status: 'admin_confirmed', // Auto-confirm 0 advance
+          advance_confirmed_at: new Date().toISOString(),
           final_payment_status: 'pending'
         })
         .select()
@@ -62,37 +64,9 @@ class AdminPaymentFlowService {
         throw new Error(`Failed to create payment record: ${paymentError.message}`);
       }
 
-      // Create persistent admin notifications for advance processing
-      try {
-        const { data: admins } = await supabaseAdmin
-          .from('users')
-          .select('id')
-          .eq('role', 'admin')
-          .eq('is_deleted', false);
+      // Create persistent admin notifications (only if advance > 0, which is false now)
+      // Skipping advance notification as it is 0
 
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 60); // persist ~60 days
-
-        if (Array.isArray(admins)) {
-          for (const admin of admins) {
-            await notificationService.storeNotification({
-              user_id: admin.id,
-              type: 'admin_payment_pending_advance',
-              title: 'Advance payment pending release',
-              message: 'A new advance payment is awaiting admin release',
-              priority: 'high',
-              expires_at: expiresAt.toISOString(),
-              data: {
-                conversation_id: conversationId,
-                admin_payment_tracking_id: paymentRecord.id,
-                advance_amount_paise: paymentBreakdown.advance_amount_paise
-              }
-            });
-          }
-        }
-      } catch (e) {
-        console.warn('⚠️ Failed to create admin notifications for advance pending:', e.message);
-      }
 
       // Update conversation state
       await supabaseAdmin
@@ -148,8 +122,8 @@ class AdminPaymentFlowService {
       const totalAmountPaise = Math.round(agreedAmount * 100);
       const commissionAmountPaise = Math.round((totalAmountPaise * commissionPercentage) / 100);
       const netAmountPaise = totalAmountPaise - commissionAmountPaise;
-      const advanceAmountPaise = Math.round(netAmountPaise * 0.30); // 30%
-      const finalAmountPaise = netAmountPaise - advanceAmountPaise; // 70%
+      const advanceAmountPaise = 0; // 0%
+      const finalAmountPaise = netAmountPaise; // 100%
 
       return {
         total_amount_paise: totalAmountPaise,
@@ -171,8 +145,8 @@ class AdminPaymentFlowService {
   async sendPaymentBreakdownMessage(conversationId, breakdown, conversation) {
     try {
       const collaborationType = conversation.campaign_id ? 'Campaign' : 'Bid';
-      const collaborationTitle = conversation.campaign_id ? 
-        conversation.campaigns?.title : 
+      const collaborationTitle = conversation.campaign_id ?
+        conversation.campaigns?.title :
         conversation.bids?.title;
 
       const message = `💳 **Payment Breakdown - ${collaborationType} Collaboration**
@@ -182,11 +156,7 @@ class AdminPaymentFlowService {
 💼 **Commission (${breakdown.commission_percentage}%):** ₹${breakdown.commission_amount_paise / 100}
 💵 **Net Amount:** ₹${breakdown.net_amount_paise / 100}
 
-📊 **Payment Schedule:**
-• **Advance Payment:** ₹${breakdown.advance_amount_paise / 100} (30%)
-• **Final Payment:** ₹${breakdown.final_amount_paise / 100} (70%)
-
-⏳ **Status:** Waiting for admin to process advance payment...`;
+⏳ **Status:** Waiting for admin to process payment...`;
 
       // Send message to both participants
       const messages = [
@@ -254,13 +224,13 @@ class AdminPaymentFlowService {
         amount: breakdown.advance_amount_paise / 100,
         amount_paise: breakdown.advance_amount_paise,
         type: "credit",
-        status: "pending",
+        status: "completed", // Auto-completed as 0
         campaign_id: (await supabaseAdmin.from("conversations").select("campaign_id").eq("id", conversationId).single()).data.campaign_id,
         bid_id: (await supabaseAdmin.from("conversations").select("bid_id").eq("id", conversationId).single()).data.bid_id,
         conversation_id: conversationId,
         payment_stage: "advance",
         admin_payment_tracking_id: paymentRecordId,
-        description: "Advance payment (30% after commission)"
+        description: "Advance payment (0% - Skipped)"
       };
 
       // Create final transaction (pending)
@@ -275,7 +245,7 @@ class AdminPaymentFlowService {
         conversation_id: conversationId,
         payment_stage: "final",
         admin_payment_tracking_id: paymentRecordId,
-        description: "Final payment (70% after commission)"
+        description: "Final payment (100% after commission)"
       };
 
       const { data: transactions, error: transactionError } = await supabaseAdmin
@@ -351,7 +321,7 @@ class AdminPaymentFlowService {
             stage: 'advance',
             admin_payment_tracking_id: paymentRecordId
           }
-        }).catch(() => {});
+        }).catch(() => { });
 
         await supabaseAdmin
           .from("transactions")
@@ -393,7 +363,7 @@ class AdminPaymentFlowService {
               .eq('data->>admin_payment_tracking_id', String(paymentRecordId));
           }
         }
-      } catch {}
+      } catch { }
 
       return {
         success: true,
@@ -413,8 +383,8 @@ class AdminPaymentFlowService {
     try {
       const conversation = paymentRecord.conversations;
       const collaborationType = conversation.campaign_id ? 'Campaign' : 'Bid';
-      const collaborationTitle = conversation.campaign_id ? 
-        conversation.campaigns?.title : 
+      const collaborationTitle = conversation.campaign_id ?
+        conversation.campaigns?.title :
         conversation.bids?.title;
 
       const message = `✅ **Advance Payment Confirmed!**
@@ -529,7 +499,7 @@ class AdminPaymentFlowService {
             stage: 'final',
             admin_payment_tracking_id: paymentRecordId
           }
-        }).catch(() => {});
+        }).catch(() => { });
 
         await supabaseAdmin
           .from("transactions")
@@ -572,7 +542,7 @@ class AdminPaymentFlowService {
               .eq('data->>admin_payment_tracking_id', String(paymentRecordId));
           }
         }
-      } catch {}
+      } catch { }
 
       return {
         success: true,
@@ -592,19 +562,17 @@ class AdminPaymentFlowService {
     try {
       const conversation = paymentRecord.conversations;
       const collaborationType = conversation.campaign_id ? 'Campaign' : 'Bid';
-      const collaborationTitle = conversation.campaign_id ? 
-        conversation.campaigns?.title : 
+      const collaborationTitle = conversation.campaign_id ?
+        conversation.campaigns?.title :
         conversation.bids?.title;
 
       const message = `🎉 **Final Payment Confirmed!**
 
 📋 **Project:** ${collaborationTitle}
 💰 **Final Amount:** ₹${paymentRecord.final_amount_paise / 100}
-📊 **Type:** Final Payment (70% of net amount)
+📊 **Type:** Final Payment (100% of net amount)
 
 📈 **Payment Summary:**
-• **Advance Received:** ₹${paymentRecord.advance_amount_paise / 100}
-• **Final Received:** ₹${paymentRecord.final_amount_paise / 100}
 • **Total Earned:** ₹${paymentRecord.net_amount_paise / 100}
 • **Commission:** ₹${paymentRecord.commission_amount_paise / 100} (${paymentRecord.commission_percentage}%)
 

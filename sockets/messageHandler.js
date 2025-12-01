@@ -13,14 +13,42 @@ class MessageHandler {
     /**
      * Authenticate socket connection via JWT
      */
-    async authenticateSocket(socket, token) {
+    async authenticateSocket(socket, token, refreshToken = null) {
         try {
-            const result = authService.verifyToken(token);
+            // Strip "Bearer " prefix if present
+            const cleanToken = token && token.startsWith('Bearer ') ? token.slice(7) : token;
+
+            let result = authService.verifyToken(cleanToken);
+
+            // If token is invalid/expired and we have a refresh token, try to refresh
+            if (!result.success && refreshToken) {
+                console.log(`🔄 [SOCKET] Token expired for ${socket.id}, attempting refresh...`);
+                const refreshResult = await authService.refreshToken(refreshToken);
+
+                if (refreshResult.success) {
+                    console.log(`✅ [SOCKET] Token refreshed successfully for ${socket.id}`);
+                    // Verify the new token to get the user object
+                    result = authService.verifyToken(refreshResult.token);
+
+                    // If successful, attach new tokens to result so we can send them back
+                    if (result.success) {
+                        result.newTokens = {
+                            token: refreshResult.token,
+                            refreshToken: refreshResult.refreshToken
+                        };
+                    }
+                } else {
+                    console.warn(`❌ [SOCKET] Token refresh failed for ${socket.id}:`, refreshResult.message);
+                }
+            }
+
             if (!result.success) {
+                console.warn(`❌ [SOCKET] Token verification failed for ${socket.id}:`, result.message);
                 return null;
             }
             socket.user = result.user;
-            return result.user;
+            // Return user and potential new tokens
+            return { user: result.user, newTokens: result.newTokens };
         } catch (error) {
             console.error('Socket auth error:', error);
             return null;
@@ -33,19 +61,72 @@ class MessageHandler {
     handleConnection(socket) {
         console.log(`User connected: ${socket.id}`);
 
+        // Set auth timeout (45 seconds) to allow for slower token refreshes
+        const authTimeout = setTimeout(() => {
+            if (!socket.user) {
+                console.log(`⏱️ [SOCKET] Auth timeout for ${socket.id} - disconnecting`);
+                socket.emit('auth_error', { message: 'Authentication timeout' });
+                socket.disconnect();
+            }
+        }, 45000);
+
+        // Check for credentials in handshake (initial connection)
+        const handshakeAuth = socket.handshake.auth;
+        if (handshakeAuth && (handshakeAuth.token || handshakeAuth.refreshToken)) {
+            console.log(`🔐 [SOCKET] Handshake auth detected for ${socket.id}`);
+            // We can't use await here directly in the constructor/sync flow easily without being careful,
+            // but handleConnection is called synchronously. We'll fire and forget the auth check
+            // but since it's async, the timeout covers us if it hangs.
+            (async () => {
+                const { token, refreshToken } = handshakeAuth;
+                const authResult = await this.authenticateSocket(socket, token, refreshToken);
+
+                if (authResult?.user) {
+                    clearTimeout(authTimeout);
+                    console.log(`⏱️ [SOCKET] Auth timeout cleared (handshake) for ${socket.id}`);
+
+                    socket.user = authResult.user;
+                    socket.join(`user_${authResult.user.id}`);
+                    this.onlineUsers.set(socket.id, authResult.user.id);
+
+                    if (authResult.newTokens) {
+                        console.log(`✨ [SOCKET] Sending new tokens to client ${socket.id} (handshake)`);
+                        socket.emit('token_refreshed', authResult.newTokens);
+                    }
+
+                    socket.emit('authenticated', { userId: authResult.user.id });
+                    console.log(`✅ User ${authResult.user.id} authenticated via handshake on socket ${socket.id}`);
+                }
+            })();
+        }
+
         // Authenticate on connection
         socket.on('authenticate', async (data) => {
-            const { token } = data;
-            console.log(`🔐 [SOCKET] authenticate received on ${socket.id} tokenLen:${token ? String(token).length : 0}`);
-            const user = await this.authenticateSocket(socket, token);
+            const { token, refreshToken } = data;
+            console.log(`🔐 [SOCKET] authenticate received on ${socket.id} tokenLen:${token ? String(token).length : 0} hasRefresh:${!!refreshToken}`);
+
+            const authResult = await this.authenticateSocket(socket, token, refreshToken);
+            const user = authResult?.user;
+
+            // Clear timeout on response (success or fail)
+            clearTimeout(authTimeout);
+            console.log(`⏱️ [SOCKET] Auth timeout cleared for ${socket.id}`);
+
             if (user) {
                 socket.user = user;
                 socket.join(`user_${user.id}`);
                 this.onlineUsers.set(socket.id, user.id);
+
+                // If we refreshed the token, send it back to the client
+                if (authResult.newTokens) {
+                    console.log(`✨ [SOCKET] Sending new tokens to client ${socket.id}`);
+                    socket.emit('token_refreshed', authResult.newTokens);
+                }
+
                 socket.emit('authenticated', { userId: user.id });
                 console.log(`✅ User ${user.id} authenticated on socket ${socket.id}`);
             } else {
-                console.warn(`❌ [SOCKET] authentication failed on ${socket.id}`);
+                console.warn(`❌ [SOCKET] authentication failed on ${socket.id}:`, authResult === null ? 'Invalid token' : 'Unknown error');
                 socket.emit('auth_error', { message: 'Authentication failed' });
                 socket.disconnect();
             }
@@ -137,7 +218,7 @@ class MessageHandler {
         socket.on('typing_start', (data) => {
             const { conversationId, userId } = data;
             this.typingUsers.set(`${conversationId}_${userId}`, true);
-            
+
             // Emit to conversation room (spec schema)
             socket.to(`room:${conversationId}`).emit('user_typing', {
                 conversation_id: conversationId,
@@ -157,7 +238,7 @@ class MessageHandler {
         socket.on('typing_stop', (data) => {
             const { conversationId, userId } = data;
             this.typingUsers.delete(`${conversationId}_${userId}`);
-            
+
             // Emit to conversation room (spec schema)
             socket.to(`room:${conversationId}`).emit('user_typing', {
                 conversation_id: conversationId,
@@ -200,16 +281,16 @@ class MessageHandler {
                 const isDirectConversation = !conversation.campaign_id && !conversation.bid_id;
                 if (!isDirectConversation && conversation.chat_status !== 'real_time' && conversation.flow_state !== 'real_time') {
                     console.log(`🚫 [CHAT] Blocked chat:send in automated mode conv:${conversationId} sender:${socket.user.id}`);
-                    socket.emit('chat:error', { 
-                        message: 'Chat is in automated mode. Use action buttons to respond.', 
-                        tempId 
+                    socket.emit('chat:error', {
+                        message: 'Chat is in automated mode. Use action buttons to respond.',
+                        tempId
                     });
                     return;
                 }
 
                 // Determine receiver
-                const receiverId = conversation.brand_owner_id === socket.user.id 
-                    ? conversation.influencer_id 
+                const receiverId = conversation.brand_owner_id === socket.user.id
+                    ? conversation.influencer_id
                     : conversation.brand_owner_id;
 
                 // Persist message (idempotency via clientNonce if provided)
@@ -239,7 +320,7 @@ class MessageHandler {
                             .select('*')
                             .eq('id', existing.id)
                             .single();
-                        
+
                         socket.emit('chat:ack', { tempId, message: msg });
                         return;
                     }
@@ -319,7 +400,7 @@ class MessageHandler {
                         .eq('id', socket.user.id)
                         .eq('is_deleted', false)
                         .single();
-                    
+
                     if (!senderError && sender && sender.name) {
                         senderName = sender.name;
                     }
@@ -335,8 +416,8 @@ class MessageHandler {
                     title: `${senderName} sent you a message`,
                     message: savedMessage.message,
                     data: {
-                    conversation_id: conversationId,
-                    message: savedMessage,
+                        conversation_id: conversationId,
+                        message: savedMessage,
                         sender_id: socket.user.id,
                         receiver_id: receiverId,
                         sender_name: senderName
@@ -393,7 +474,7 @@ class MessageHandler {
         socket.on('join_global_updates', (userId) => {
             socket.join(`global_${userId}`);
             console.log(`User joined global updates: ${userId}`);
-            
+
             // Emit current online status
             socket.emit('user_status_update', {
                 user_id: userId,
@@ -454,9 +535,9 @@ class MessageHandler {
                     .eq('id', conversationId)
                     .single();
 
-                if (!conversation || 
-                    (conversation.brand_owner_id !== socket.user.id && 
-                     conversation.influencer_id !== socket.user.id)) {
+                if (!conversation ||
+                    (conversation.brand_owner_id !== socket.user.id &&
+                        conversation.influencer_id !== socket.user.id)) {
                     socket.emit('chat:error', { message: 'Access denied' });
                     return;
                 }
@@ -478,41 +559,41 @@ class MessageHandler {
                             .eq('receiver_id', socket.user.id)
                             .lte('created_at', targetMsg.created_at);
 
-                    if (!error) {
-                        console.log(`➡️ [EMIT] chat:read -> room:${conversationId} upTo:${upToMessageId} reader:${socket.user.id}`);
-                        this.io.to(`room:${conversationId}`).emit('chat:read', {
-                            conversation_id: conversationId,
-                            messageIds: [],
-                            upToMessageId,
-                            readerId: socket.user.id,
-                            readAt: new Date().toISOString()
-                        });
-                    }
-                } else if (messageIds && messageIds.length > 0) {
-                    // Mark specific messages as read
-                    const { error } = await supabaseAdmin
-                        .from('messages')
-                        .update({ seen: true })
-                        .in('id', messageIds)
-                        .eq('conversation_id', conversationId)
-                        .eq('receiver_id', socket.user.id);
+                        if (!error) {
+                            console.log(`➡️ [EMIT] chat:read -> room:${conversationId} upTo:${upToMessageId} reader:${socket.user.id}`);
+                            this.io.to(`room:${conversationId}`).emit('chat:read', {
+                                conversation_id: conversationId,
+                                messageIds: [],
+                                upToMessageId,
+                                readerId: socket.user.id,
+                                readAt: new Date().toISOString()
+                            });
+                        }
+                    } else if (messageIds && messageIds.length > 0) {
+                        // Mark specific messages as read
+                        const { error } = await supabaseAdmin
+                            .from('messages')
+                            .update({ seen: true })
+                            .in('id', messageIds)
+                            .eq('conversation_id', conversationId)
+                            .eq('receiver_id', socket.user.id);
 
-                    if (!error) {
-                        console.log(`➡️ [EMIT] chat:read -> room:${conversationId} ids:${messageIds.length} reader:${socket.user.id}`);
-                        this.io.to(`room:${conversationId}`).emit('chat:read', {
-                            conversation_id: conversationId,
-                            messageIds,
-                            readerId: socket.user.id,
-                            readAt: new Date().toISOString()
-                        });
+                        if (!error) {
+                            console.log(`➡️ [EMIT] chat:read -> room:${conversationId} ids:${messageIds.length} reader:${socket.user.id}`);
+                            this.io.to(`room:${conversationId}`).emit('chat:read', {
+                                conversation_id: conversationId,
+                                messageIds,
+                                readerId: socket.user.id,
+                                readAt: new Date().toISOString()
+                            });
+                        }
                     }
                 }
+            } catch (error) {
+                console.error('chat:read error:', error);
+                socket.emit('chat:error', { message: error.message, conversationId, messageIds, upToMessageId });
             }
-        } catch (error) {
-            console.error('chat:read error:', error);
-            socket.emit('chat:error', { message: error.message, conversationId, messageIds, upToMessageId });
-        }
-    });
+        });
 
         // Handle attachment upload progress
         socket.on('attachment_upload_progress', (data) => {
@@ -643,7 +724,7 @@ class MessageHandler {
      * Emit conversation state change event
      */
     emitConversationStateChange(conversationId, stateChange) {
-    this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
+        this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
             conversation_id: conversationId,
             previous_state: stateChange.from,
             new_state: stateChange.to,
@@ -659,7 +740,7 @@ class MessageHandler {
         try {
             const { data: conversation, error } = await supabaseAdmin
                 .from('conversations')
-                    .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
+                .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
                 .eq('id', conversationId)
                 .single();
 
@@ -673,9 +754,9 @@ class MessageHandler {
                 chat_status: conversation.chat_status,
                 flow_state: conversation.flow_state,
                 awaiting_role: conversation.awaiting_role,
-                conversation_type: conversation.campaign_id ? 'campaign' : 
-                                  conversation.bid_id ? 'bid' : 'direct',
-                    
+                conversation_type: conversation.campaign_id ? 'campaign' :
+                    conversation.bid_id ? 'bid' : 'direct',
+
                 current_action_data: conversation.current_action_data
             };
         } catch (error) {

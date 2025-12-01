@@ -151,8 +151,8 @@ class AutomatedFlowService {
       const totalAmountPaise = Math.round(agreedAmount * 100);
       const commissionAmountPaise = Math.round((totalAmountPaise * commissionPercentage) / 100);
       const netAmountPaise = totalAmountPaise - commissionAmountPaise;
-      const advanceAmountPaise = Math.round(netAmountPaise * 0.30); // 30%
-      const finalAmountPaise = netAmountPaise - advanceAmountPaise; // 70%
+      const advanceAmountPaise = 0; // 0%
+      const finalAmountPaise = netAmountPaise; // 100%
 
       return {
         total_amount_paise: totalAmountPaise,
@@ -166,8 +166,8 @@ class AutomatedFlowService {
           total: `₹${(totalAmountPaise / 100).toFixed(2)}`,
           commission: `₹${(commissionAmountPaise / 100).toFixed(2)} (${commissionPercentage}%)`,
           net_to_influencer: `₹${(netAmountPaise / 100).toFixed(2)}`,
-          advance: `₹${(advanceAmountPaise / 100).toFixed(2)} (30%)`,
-          final: `₹${(finalAmountPaise / 100).toFixed(2)} (70%)`
+          advance: `₹0.00 (0%)`,
+          final: `₹${(finalAmountPaise / 100).toFixed(2)} (100%)`
         }
       };
     } catch (error) {
@@ -1816,9 +1816,6 @@ Please respond to confirm your interest and availability for this campaign.`,
           `• Total Amount: ${paymentBreakdown.display.total}\n` +
           `• Platform Fee: ${paymentBreakdown.display.commission}\n` +
           `• Influencer Net: ${paymentBreakdown.display.net_to_influencer}\n\n` +
-          `💳 **Payment Schedule:**\n` +
-          `• Advance (30%): ${paymentBreakdown.display.advance}\n` +
-          `• Final (70%): ${paymentBreakdown.display.final}\n\n` +
           `The collaboration is now active and work can begin.`,
         message_type: "automated",
         action_required: false,
@@ -1849,19 +1846,9 @@ Please respond to confirm your interest and availability for this campaign.`,
         }
       };
 
-      // Create advance payment notification message for influencer
-      const advancePaymentMessage = {
-        conversation_id: conversationId,
-        sender_id: SYSTEM_USER_ID,
-        receiver_id: conversation.influencer_id,
-        message: `💰 **Advance Payment Update**\n\nYour advance payment (30% of net amount) will be sent by the admin soon. You will be notified once the payment is processed.`,
-        message_type: "automated",
-        action_required: false,
-      };
-
       const { data: messages, error: messageError } = await supabaseAdmin
         .from("messages")
-        .insert([confirmationMessage, workStartMessage, advancePaymentMessage])
+        .insert([confirmationMessage, workStartMessage])
         .select();
 
       if (messageError) {

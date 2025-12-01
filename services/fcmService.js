@@ -82,7 +82,19 @@ class FCMService {
         return { success: false, error: error.message };
       }
 
-      console.log(`✅ FCM token registered for user ${userId}`);
+      // Deactivate other tokens for this user to ensure only the last logged-in device is active
+      // This implements the "single active device" policy requested
+      const { error: deactivateError } = await supabaseAdmin
+        .from('fcm_tokens')
+        .update({ is_active: false })
+        .eq('user_id', userId)
+        .neq('token', token);
+
+      if (deactivateError) {
+        console.warn('⚠️ Failed to deactivate old FCM tokens:', deactivateError);
+      }
+
+      console.log(`✅ FCM token registered for user ${userId} (others deactivated)`);
       return { success: true, data };
     } catch (error) {
       console.error('❌ Error registering FCM token:', error);
@@ -158,15 +170,9 @@ class FCMService {
       const tokens = tokensResult.tokens.map(t => t.token);
       const results = await this.sendToTokens(tokens, notification);
 
-      // Update last_used_at for successful tokens
-      if (results.successful.length > 0) {
-        await supabaseAdmin
-          .from('fcm_tokens')
-          .update({ last_used_at: new Date().toISOString() })
-          .in('token', results.successful);
-      }
-
-      // Do not mark tokens inactive automatically; leave as-is
+      // NOTE: We no longer update last_used_at here. 
+      // last_used_at should reflect the last time the user actually used the app (login/register),
+      // not when we sent them a notification.
 
       return {
         success: true,
@@ -332,7 +338,7 @@ class FCMService {
   }
 
   /**
-   * Send message notification (only if user is not actively viewing conversation)
+   * Send chat message notification (only if user is not actively viewing conversation)
    */
   async sendMessageNotification(conversationId, message, senderId, receiverId, io = null) {
     try {
@@ -373,43 +379,101 @@ class FCMService {
         return { success: true, sent: 0, failed: 0, skipped: true };
       }
 
-      console.log(`📱 [FCM] Sending message notification to user ${receiverId} for conversation ${conversationId}`);
+      // Get sender name
+      const { data: sender } = await supabaseAdmin
+        .from('users')
+        .select('name')
+        .eq('id', senderId)
+        .single();
 
-      // Fetch sender's name
-      let senderName = 'Someone';
-      try {
-        const { data: sender, error } = await supabaseAdmin
-          .from('users')
-          .select('name')
-          .eq('id', senderId)
-          .eq('is_deleted', false)
-          .single();
-
-        if (!error && sender && sender.name) {
-          senderName = sender.name;
-        }
-      } catch (error) {
-        console.warn('⚠️ Could not fetch sender name for notification:', error.message);
-      }
+      const senderName = sender ? sender.name : 'Someone';
 
       const notification = {
         title: `${senderName} sent you a message`,
-        body: message.message.length > 100
-          ? message.message.substring(0, 100) + '...'
-          : message.message,
+        body: message.message || 'New message',
         data: {
           type: 'message',
-          conversation_id: conversationId,
-          message_id: message.id,
-          sender_id: senderId,
-          receiver_id: receiverId
-        },
-        clickAction: `/conversations/${conversationId}`
+          conversationId: conversationId, // REQUIRED per spec
+          conversation_id: conversationId, // Fallback
+          entity_id: conversationId, // Generic fallback
+          senderId: senderId, // REQUIRED per spec
+          sender_id: senderId, // Fallback
+          receiver_id: receiverId,
+          message_id: message.id
+        }
       };
 
       return await this.sendNotificationToUser(receiverId, notification);
     } catch (error) {
       console.error('❌ Error sending message notification:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Send campaign notification
+   */
+  async sendCampaignNotification(campaignId, title, body, receiverId) {
+    try {
+      const notification = {
+        title: title,
+        body: body,
+        data: {
+          type: 'campaign',
+          campaignId: campaignId, // REQUIRED per spec
+          campaign_id: campaignId, // Fallback
+          entity_id: campaignId // Generic fallback
+        }
+      };
+
+      return await this.sendNotificationToUser(receiverId, notification);
+    } catch (error) {
+      console.error('❌ Error sending campaign notification:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Send bid notification
+   */
+  async sendBidNotification(bidId, title, body, receiverId) {
+    try {
+      const notification = {
+        title: title,
+        body: body,
+        data: {
+          type: 'bid',
+          bidId: bidId, // REQUIRED per spec
+          bid_id: bidId, // Fallback
+          entity_id: bidId // Generic fallback
+        }
+      };
+
+      return await this.sendNotificationToUser(receiverId, notification);
+    } catch (error) {
+      console.error('❌ Error sending bid notification:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Send request notification (when influencer applies)
+   */
+  async sendRequestNotification(receiverId, title, body, imageUrl, data) {
+    try {
+      const notification = {
+        title: title,
+        body: body,
+        imageUrl: imageUrl,
+        data: {
+          type: 'request',
+          ...data
+        }
+      };
+
+      return await this.sendNotificationToUser(receiverId, notification);
+    } catch (error) {
+      console.error('❌ Error sending request notification:', error);
       return { success: false, error: error.message };
     }
   }

@@ -132,9 +132,11 @@ class NotificationController {
 
         res.json({
           success: true,
-          message: 'Notification marked as read',
-          notification: result.notification,
-          unread_count: unreadCount
+          data: {
+            message: 'Notification marked as read',
+            notification: result.notification,
+            unread_count: unreadCount
+          }
         });
       } else {
         res.status(400).json({
@@ -176,8 +178,10 @@ class NotificationController {
 
         res.json({
           success: true,
-          message: 'All notifications marked as read',
-          unread_count: 0
+          data: {
+            message: 'All notifications marked as read',
+            unread_count: 0
+          }
         });
       } else {
         res.status(400).json({
@@ -259,8 +263,10 @@ class NotificationController {
 
         return res.json({
           success: true,
-          message: 'Notification deleted',
-          unread_count: unreadCount
+          data: {
+            message: 'Notification deleted',
+            unread_count: unreadCount
+          }
         });
       }
       return res.status(400).json({ success: false, error: result.error });
@@ -292,13 +298,52 @@ class NotificationController {
 
         return res.json({
           success: true,
-          message: 'All notifications cleared',
-          unread_count: 0
+          data: {
+            message: 'All notifications cleared',
+            unread_count: 0
+          }
         });
       }
       return res.status(400).json({ success: false, error: result.error });
     } catch (error) {
       console.error('❌ Error in clearAll:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Register device token
+   */
+  async registerDevice(req, res) {
+    try {
+      const userId = req.user.id;
+      const { token, platform } = req.body;
+
+      if (!token) {
+        console.warn('⚠️ [REGISTER_DEVICE] Token missing in request body:', JSON.stringify(req.body));
+        return res.status(400).json({
+          success: false,
+          message: 'Token is required'
+        });
+      }
+
+      const fcmService = require('../services/fcmService');
+      const result = await fcmService.registerToken(userId, token, platform || 'unknown');
+
+      if (result.success) {
+        return res.json({
+          success: true,
+          message: 'Device registered successfully'
+        });
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Failed to register device',
+          error: result.error
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error in registerDevice:', error);
       res.status(500).json({ success: false, message: 'Internal server error' });
     }
   }

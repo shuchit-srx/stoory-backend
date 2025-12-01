@@ -161,10 +161,14 @@ class BidController {
         imageUrl = url;
       }
 
-      // Ensure array fields are arrays
-      const languagesArray = Array.isArray(languages) ? languages : (languages ? [languages] : []);
-      const categoriesArray = Array.isArray(categories) ? categories : (categories ? [categories] : []);
-      const locationsArray = Array.isArray(locations) ? locations : (locations ? [locations] : []);
+      // Ensure array fields are arrays and normalized to lowercase
+      const languagesRaw = Array.isArray(languages) ? languages : (languages ? [languages] : []);
+      const categoriesRaw = Array.isArray(categories) ? categories : (categories ? [categories] : []);
+      const locationsRaw = Array.isArray(locations) ? locations : (locations ? [locations] : []);
+
+      const languagesArray = languagesRaw.map(v => String(v).toLowerCase());
+      const categoriesArray = categoriesRaw.map(v => String(v).toLowerCase());
+      const locationsArray = locationsRaw.map(v => String(v).toLowerCase());
 
       const bidData = {
         title,
@@ -295,159 +299,44 @@ class BidController {
       // Role-based server-driven filtering
       if (req.user.role === "influencer") {
         const userId = req.user.id;
-        const normalizedStatus = (status || "open").toLowerCase();
+        let normalizedStatus = (status || "open").toLowerCase();
+        if (normalizedStatus === "new") normalizedStatus = "open";
 
-        // Fetch all bid_ids this influencer has interacted with
-        const { data: influencerRequests } = await supabaseAdmin
-          .from("requests")
-          .select("bid_id, status")
-          .eq("influencer_id", userId)
-          .not("bid_id", "is", null);
+        // Show all bids with the requested status (Global List)
+        let query = baseSelect.eq("status", normalizedStatus);
 
-        const interactedBidIds = (influencerRequests || [])
-          .map((r) => r.bid_id)
-          .filter(Boolean);
+        const {
+          data: bids,
+          error,
+          count,
+        } = await query
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
 
-        if (normalizedStatus === "open" || normalizedStatus === "new") {
-          // Open/new: show all open bids (including interacted)
-          let query = baseSelect.eq("status", "open");
-          const {
-            data: bids,
-            error,
-            count,
-          } = await query
-            .order("created_at", { ascending: false })
-            .range(offset, offset + limit - 1);
-
-          if (error) {
-            return res
-              .status(500)
-              .json({ success: false, message: "Failed to fetch bids" });
-          }
-
-          const processedBids = BidController.addInfluencerStats(bids || []);
-
-          // Add request status for each bid if user is influencer
-          const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
-            processedBids,
-            userId
-          );
-
-          return res.json({
-            success: true,
-            bids: bidsWithRequestStatus,
-            pagination: {
-              page: parseInt(page),
-              limit: parseInt(limit),
-              total: count || processedBids.length,
-              pages: Math.ceil((count || processedBids.length) / limit),
-            },
-          });
-        } else if (
-          normalizedStatus === "pending" ||
-          normalizedStatus === "closed"
-        ) {
-          // Map request statuses to tabs
-          const pendingRequestStatuses = [
-            "connected",
-            "negotiating",
-            "paid",
-            "finalized",
-            "work_submitted",
-            "work_approved",
-          ];
-          const closedRequestStatuses = ["completed", "cancelled"];
-          const allowedReqStatuses =
-            normalizedStatus === "pending"
-              ? pendingRequestStatuses
-              : closedRequestStatuses;
-
-          // Collect bid ids that have a matching request status for this influencer
-          const filteredIds = (influencerRequests || [])
-            .filter((r) => r.bid_id && allowedReqStatuses.includes(r.status))
-            .map((r) => r.bid_id);
-          const idsSet = new Set(filteredIds);
-
-          console.log(`[LISTING DEBUG] Status: ${normalizedStatus}, Filtered bid IDs: ${Array.from(idsSet).join(', ')}`);
-
-          if (idsSet.size === 0) {
-            return res.json({
-              success: true,
-              bids: [],
-              pagination: {
-                page: parseInt(page),
-                limit: parseInt(limit),
-                total: 0,
-                pages: 0,
-              },
-            });
-          }
-
-          let query = baseSelect
-            .eq("status", normalizedStatus)
-            .in("id", Array.from(idsSet));
-          const { data: bids, error } = await query
-            .order("created_at", { ascending: false })
-            .range(offset, offset + limit - 1);
-
-          console.log(`[LISTING DEBUG] Found ${bids?.length || 0} bids after status filter`);
-
-          if (error) {
-            return res
-              .status(500)
-              .json({ success: false, message: "Failed to fetch bids" });
-          }
-
-          const processedBids = BidController.addInfluencerStats(bids || []);
-
-          // Add request status for each bid if user is influencer
-          const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
-            processedBids,
-            userId
-          );
-
-          return res.json({
-            success: true,
-            bids: bidsWithRequestStatus,
-            pagination: {
-              page: parseInt(page),
-              limit: parseInt(limit),
-              total: processedBids.length,
-              pages: Math.ceil(processedBids.length / limit),
-            },
-          });
-        } else {
-          // Default: treat as open
-          let query = baseSelect.eq("status", "open");
-          const { data: bids, error } = await query
-            .order("created_at", { ascending: false })
-            .range(offset, offset + limit - 1);
-          if (error) {
-            return res
-              .status(500)
-              .json({ success: false, message: "Failed to fetch bids" });
-          }
-          const interactedSet = new Set(interactedBidIds);
-          const filtered = (bids || []).filter((b) => !interactedSet.has(b.id));
-          const processedBids = BidController.addInfluencerStats(filtered);
-
-          // Add request status for each bid if user is influencer
-          const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
-            processedBids,
-            userId
-          );
-
-          return res.json({
-            success: true,
-            bids: bidsWithRequestStatus,
-            pagination: {
-              page: parseInt(page),
-              limit: parseInt(limit),
-              total: processedBids.length,
-              pages: Math.ceil(processedBids.length / limit),
-            },
-          });
+        if (error) {
+          return res
+            .status(500)
+            .json({ success: false, message: "Failed to fetch bids" });
         }
+
+        const processedBids = BidController.addInfluencerStats(bids || []);
+
+        // Add request status for each bid if user is influencer
+        const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
+          processedBids,
+          userId
+        );
+
+        return res.json({
+          success: true,
+          bids: bidsWithRequestStatus,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: count || processedBids.length,
+            pages: Math.ceil((count || processedBids.length) / limit),
+          },
+        });
       } else if (req.user.role === "brand_owner") {
         // Brand owners only see their own bids
         let query = baseSelect.eq("created_by", req.user.id);
@@ -720,11 +609,20 @@ class BidController {
       if (max_budget !== undefined)
         updateData.max_budget = parseFloat(max_budget);
       if (requirements !== undefined) updateData.requirements = requirements;
-      if (languages !== undefined) updateData.languages = Array.isArray(languages) ? languages : (languages ? [languages] : []);
+      if (languages !== undefined) {
+        const langs = Array.isArray(languages) ? languages : (languages ? [languages] : []);
+        updateData.languages = langs.map(v => String(v).toLowerCase());
+      }
       if (platform !== undefined) updateData.platform = platform;
       if (content_type !== undefined) updateData.content_type = content_type;
-      if (categories !== undefined) updateData.categories = Array.isArray(categories) ? categories : (categories ? [categories] : []);
-      if (locations !== undefined) updateData.locations = Array.isArray(locations) ? locations : (locations ? [locations] : []);
+      if (categories !== undefined) {
+        const cats = Array.isArray(categories) ? categories : (categories ? [categories] : []);
+        updateData.categories = cats.map(v => String(v).toLowerCase());
+      }
+      if (locations !== undefined) {
+        const locs = Array.isArray(locations) ? locations : (locations ? [locations] : []);
+        updateData.locations = locs.map(v => String(v).toLowerCase());
+      }
       if (expiry_date !== undefined)
         updateData.expiry_date = expiry_date
           ? new Date(expiry_date).toISOString()
@@ -800,7 +698,7 @@ class BidController {
       // Check if bid exists and user has permission
       const { data: existingBid, error: checkError } = await supabaseAdmin
         .from("bids")
-        .select("created_by, image_url")
+        .select("created_by, image_url, status")
         .eq("id", id)
         .single();
 
@@ -818,14 +716,69 @@ class BidController {
         });
       }
 
+      // Prevent deletion if bid is pending or closed
+      if (["pending", "closed"].includes(existingBid.status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot delete a bid that is pending or closed",
+        });
+      }
+
       // Delete associated image if it exists
       if (existingBid.image_url) {
         await deleteImageFromStorage(existingBid.image_url);
       }
 
+      // CASCADE DELETE LOGIC
+      // 1. Get all requests for this bid
+      const { data: requests } = await supabaseAdmin
+        .from("requests")
+        .select("id")
+        .eq("bid_id", id);
+
+      if (requests && requests.length > 0) {
+        const requestIds = requests.map(r => r.id);
+
+        // 2. Get all conversations for these requests
+        const { data: conversations } = await supabaseAdmin
+          .from("conversations")
+          .select("id")
+          .in("request_id", requestIds);
+
+        if (conversations && conversations.length > 0) {
+          const conversationIds = conversations.map(c => c.id);
+
+          // 3. Delete messages
+          await supabaseAdmin
+            .from("messages")
+            .delete()
+            .in("conversation_id", conversationIds);
+
+          // 4. Delete conversations
+          await supabaseAdmin
+            .from("conversations")
+            .delete()
+            .in("id", conversationIds);
+        }
+
+        // 5. Delete requests
+        await supabaseAdmin
+          .from("requests")
+          .delete()
+          .in("id", requestIds);
+      }
+
       const { error } = await supabaseAdmin.from("bids").delete().eq("id", id);
 
       if (error) {
+        console.error("Error deleting bid:", error);
+        // Check for foreign key constraint violation
+        if (error.code === '23503') {
+          return res.status(409).json({
+            success: false,
+            message: "Cannot delete bid due to associated records (e.g., transactions, agreements).",
+          });
+        }
         return res.status(500).json({
           success: false,
           message: "Failed to delete bid",
@@ -844,6 +797,7 @@ class BidController {
         message: "Bid deleted successfully",
       });
     } catch (error) {
+      console.error("Exception in deleteBid:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",

@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require("../supabase/client");
 const paymentService = require("../utils/payment");
+const fcmService = require("../services/fcmService");
 const { body, validationResult } = require("express-validator");
 
 class RequestController {
@@ -45,7 +46,7 @@ class RequestController {
         // Check if campaign exists and is open
         const { data: campaign, error: campaignError } = await supabaseAdmin
           .from("campaigns")
-          .select("status, created_by")
+          .select("status, created_by, title, image_url")
           .eq("id", campaign_id)
           .single();
 
@@ -70,7 +71,7 @@ class RequestController {
         // Check if bid exists and is open
         const { data: bid, error: bidError } = await supabaseAdmin
           .from("bids")
-          .select("status, created_by")
+          .select("status, created_by, title, image_url")
           .eq("id", bid_id)
           .single();
 
@@ -177,6 +178,32 @@ class RequestController {
             timestamp: new Date().toISOString(),
           });
         }
+      }
+
+      // Send FCM notification to brand owner
+      try {
+        const influencerName = request.influencer?.name || "An influencer";
+        const sourceTitle = source.title || (sourceType === 'campaign' ? 'Campaign' : 'Bid');
+        const notificationTitle = "New Request Received";
+        const notificationBody = `${influencerName} sent a request for ${sourceTitle}`;
+        const imageUrl = source.image_url || request.influencer?.profile_image_url;
+
+        await fcmService.sendRequestNotification(
+          source.created_by,
+          notificationTitle,
+          notificationBody,
+          imageUrl,
+          {
+            requestId: request.id,
+            campaignId: sourceType === 'campaign' ? sourceId : null,
+            bidId: sourceType === 'bid' ? sourceId : null,
+            influencerId: userId,
+            sourceType: sourceType
+          }
+        );
+      } catch (notifyError) {
+        console.error("Failed to send request notification:", notifyError);
+        // Don't fail the request if notification fails
       }
 
       res.status(201).json({
@@ -289,8 +316,8 @@ class RequestController {
           r.final_agreed_amount !== null && r.final_agreed_amount !== undefined
             ? r.final_agreed_amount
             : r.proposed_amount !== undefined
-            ? r.proposed_amount
-            : null,
+              ? r.proposed_amount
+              : null,
       }));
 
       res.json({
@@ -1469,9 +1496,8 @@ class RequestController {
       res.json({
         success: true,
         request: updatedRequest,
-        message: `Revision requested. ${
-          request.max_revokes - (request.revoke_count + 1)
-        } revisions remaining.`,
+        message: `Revision requested. ${request.max_revokes - (request.revoke_count + 1)
+          } revisions remaining.`,
       });
     } catch (error) {
       console.error("Request revision error:", error);

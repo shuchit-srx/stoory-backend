@@ -69,4 +69,13 @@ router.delete('/cleanup-expired', (req, res) => {
   NotificationController.cleanupExpired(req, res);
 });
 
+/**
+ * @route POST /api/notifications/register-device
+ * @desc Register device token for push notifications
+ * @access Private
+ */
+router.post('/register-device', (req, res) => {
+  NotificationController.registerDevice(req, res);
+});
+
 module.exports = router;

@@ -168,9 +168,14 @@ class CampaignController {
       }
 
       // Handle both old format (database columns) and new format (form fields)
-      const languages = formData.languages || (formData.language ? [formData.language] : []);
-      const categories = formData.categories || (formData.category ? [formData.category] : []);
-      const locations = formData.locations || [];
+      const languagesRaw = formData.languages || (formData.language ? [formData.language] : []);
+      const categoriesRaw = formData.categories || (formData.category ? [formData.category] : []);
+      const locationsRaw = formData.locations || [];
+
+      // Normalize to lowercase
+      const languages = Array.isArray(languagesRaw) ? languagesRaw.map(v => String(v).toLowerCase()) : [];
+      const categories = Array.isArray(categoriesRaw) ? categoriesRaw.map(v => String(v).toLowerCase()) : [];
+      const locations = Array.isArray(locationsRaw) ? locationsRaw.map(v => String(v).toLowerCase()) : [];
 
       const campaignData = {
         title: formData.name || formData.title,
@@ -333,159 +338,46 @@ class CampaignController {
       // Role-based server-driven filtering
       if (req.user.role === "influencer") {
         const userId = req.user.id;
-        const normalizedStatus = (status || "open").toLowerCase();
+        let normalizedStatus = (status || "open").toLowerCase();
+        if (normalizedStatus === "new") normalizedStatus = "open";
 
-        // Fetch all campaign_ids this influencer has interacted with
-        const { data: influencerRequests } = await supabaseAdmin
-          .from("requests")
-          .select("campaign_id, status")
-          .eq("influencer_id", userId)
-          .not("campaign_id", "is", null);
+        // Show all campaigns with the requested status (Global List)
+        let query = baseSelect.eq("status", normalizedStatus);
 
-        const interactedCampaignIds = (influencerRequests || [])
-          .map((r) => r.campaign_id)
-          .filter(Boolean);
+        const {
+          data: campaigns,
+          error,
+          count,
+        } = await query
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
 
-        if (normalizedStatus === "open" || normalizedStatus === "new") {
-          // Open/new: show all open campaigns (including interacted)
-          let query = baseSelect.eq("status", "open");
-          const {
-            data: campaigns,
-            error,
-            count,
-          } = await query
-            .order("created_at", { ascending: false })
-            .range(offset, offset + limit - 1);
-          if (error) {
-            return res
-              .status(500)
-              .json({ success: false, message: "Failed to fetch campaigns" });
-          }
-          const processedCampaigns = CampaignController.addInfluencerStats(
-            CampaignController.ensureCampaignTitles(campaigns || [])
-          );
-
-          // Add request status for each campaign if user is influencer
-          const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
-            processedCampaigns,
-            userId
-          );
-
-          return res.json({
-            success: true,
-            campaigns: campaignsWithRequestStatus,
-            pagination: {
-              page: parseInt(page),
-              limit: parseInt(limit),
-              total: count || campaignsWithRequestStatus.length,
-              pages: Math.ceil((count || campaignsWithRequestStatus.length) / limit),
-            },
-          });
-        } else if (
-          normalizedStatus === "pending" ||
-          normalizedStatus === "closed"
-        ) {
-          // Map request statuses to tabs
-          const pendingRequestStatuses = [
-            "connected",
-            "negotiating",
-            "paid",
-            "finalized",
-            "work_submitted",
-            "work_approved",
-          ];
-          const closedRequestStatuses = ["completed", "cancelled"];
-          const allowedReqStatuses =
-            normalizedStatus === "pending"
-              ? pendingRequestStatuses
-              : closedRequestStatuses;
-
-          // Collect campaign ids that have a matching request status for this influencer
-          const filteredIds = (influencerRequests || [])
-            .filter(
-              (r) => r.campaign_id && allowedReqStatuses.includes(r.status)
-            )
-            .map((r) => r.campaign_id);
-          const idsSet = new Set(filteredIds);
-          if (idsSet.size === 0) {
-            return res.json({
-              success: true,
-              campaigns: [],
-              pagination: {
-                page: parseInt(page),
-                limit: parseInt(limit),
-                total: 0,
-                pages: 0,
-              },
-            });
-          }
-
-          let query = baseSelect
-            .eq("status", normalizedStatus)
-            .in("id", Array.from(idsSet));
-          const { data: campaigns, error } = await query
-            .order("created_at", { ascending: false })
-            .range(offset, offset + limit - 1);
-          if (error) {
-            return res
-              .status(500)
-              .json({ success: false, message: "Failed to fetch campaigns" });
-          }
-          const processedCampaigns = CampaignController.addInfluencerStats(
-            CampaignController.ensureCampaignTitles(campaigns || [])
-          );
-
-          // Add request status for each campaign if user is influencer
-          const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
-            processedCampaigns,
-            userId
-          );
-
-          return res.json({
-            success: true,
-            campaigns: campaignsWithRequestStatus,
-            pagination: {
-              page: parseInt(page),
-              limit: parseInt(limit),
-              total: campaignsWithRequestStatus.length,
-              pages: Math.ceil(campaignsWithRequestStatus.length / limit),
-            },
-          });
-        } else {
-          // Default: treat as open
-          let query = baseSelect.eq("status", "open");
-          const { data: campaigns, error } = await query
-            .order("created_at", { ascending: false })
-            .range(offset, offset + limit - 1);
-          if (error) {
-            return res
-              .status(500)
-              .json({ success: false, message: "Failed to fetch campaigns" });
-          }
-          const interactedSet = new Set(interactedCampaignIds);
-          const filtered = (campaigns || []).filter(
-            (c) => !interactedSet.has(c.id)
-          );
-          const processedCampaigns = CampaignController.addInfluencerStats(
-            CampaignController.ensureCampaignTitles(filtered)
-          );
-
-          // Add request status for each campaign if user is influencer
-          const campaignsWithRequestStatus = req.user.role === "influencer"
-            ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
-            : processedCampaigns;
-
-          return res.json({
-            success: true,
-            campaigns: campaignsWithRequestStatus,
-            pagination: {
-              page: parseInt(page),
-              limit: parseInt(limit),
-              total: processedCampaigns.length,
-              pages: Math.ceil(processedCampaigns.length / limit),
-            },
-          });
+        if (error) {
+          return res
+            .status(500)
+            .json({ success: false, message: "Failed to fetch campaigns" });
         }
+
+        const processedCampaigns = CampaignController.addInfluencerStats(
+          CampaignController.ensureCampaignTitles(campaigns || [])
+        );
+
+        // Add request status for each campaign if user is influencer
+        const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
+          processedCampaigns,
+          userId
+        );
+
+        return res.json({
+          success: true,
+          campaigns: campaignsWithRequestStatus,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: count || campaignsWithRequestStatus.length,
+            pages: Math.ceil((count || campaignsWithRequestStatus.length) / limit),
+          },
+        });
       } else if (req.user.role === "brand_owner") {
         // Brand owners only see their own campaigns
         let query = baseSelect.eq("created_by", req.user.id);
@@ -766,21 +658,24 @@ class CampaignController {
       if (formData.campaign_type !== undefined)
         updateData.campaign_type = formData.campaign_type;
 
-      // Handle array fields
+      // Handle array fields with normalization
       if (formData.categories !== undefined) {
-        updateData.categories = Array.isArray(formData.categories) ? formData.categories : [formData.categories];
+        const cats = Array.isArray(formData.categories) ? formData.categories : [formData.categories];
+        updateData.categories = cats.map(v => String(v).toLowerCase());
       } else if (formData.category !== undefined) {
-        updateData.categories = [formData.category];
+        updateData.categories = [String(formData.category).toLowerCase()];
       }
 
       if (formData.languages !== undefined) {
-        updateData.languages = Array.isArray(formData.languages) ? formData.languages : [formData.languages];
+        const langs = Array.isArray(formData.languages) ? formData.languages : [formData.languages];
+        updateData.languages = langs.map(v => String(v).toLowerCase());
       } else if (formData.language !== undefined) {
-        updateData.languages = [formData.language];
+        updateData.languages = [String(formData.language).toLowerCase()];
       }
 
       if (formData.locations !== undefined) {
-        updateData.locations = Array.isArray(formData.locations) ? formData.locations : [formData.locations];
+        const locs = Array.isArray(formData.locations) ? formData.locations : [formData.locations];
+        updateData.locations = locs.map(v => String(v).toLowerCase());
       }
 
       if (formData.targetAudience !== undefined)
@@ -871,7 +766,7 @@ class CampaignController {
       // Check if campaign exists and user has permission
       const { data: existingCampaign, error: checkError } = await supabaseAdmin
         .from("campaigns")
-        .select("created_by, image_url")
+        .select("created_by, image_url, status")
         .eq("id", id)
         .single();
 
@@ -889,9 +784,56 @@ class CampaignController {
         });
       }
 
+      // Prevent deletion if campaign is pending or closed
+      if (["pending", "closed"].includes(existingCampaign.status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot delete a campaign that is pending or closed",
+        });
+      }
+
       // Delete associated image if it exists
       if (existingCampaign.image_url) {
         await deleteImageFromStorage(existingCampaign.image_url);
+      }
+
+      // CASCADE DELETE LOGIC
+      // 1. Get all requests for this campaign
+      const { data: requests } = await supabaseAdmin
+        .from("requests")
+        .select("id")
+        .eq("campaign_id", id);
+
+      if (requests && requests.length > 0) {
+        const requestIds = requests.map(r => r.id);
+
+        // 2. Get all conversations for these requests
+        const { data: conversations } = await supabaseAdmin
+          .from("conversations")
+          .select("id")
+          .in("request_id", requestIds);
+
+        if (conversations && conversations.length > 0) {
+          const conversationIds = conversations.map(c => c.id);
+
+          // 3. Delete messages
+          await supabaseAdmin
+            .from("messages")
+            .delete()
+            .in("conversation_id", conversationIds);
+
+          // 4. Delete conversations
+          await supabaseAdmin
+            .from("conversations")
+            .delete()
+            .in("id", conversationIds);
+        }
+
+        // 5. Delete requests
+        await supabaseAdmin
+          .from("requests")
+          .delete()
+          .in("id", requestIds);
       }
 
       const { error } = await supabaseAdmin
@@ -900,6 +842,14 @@ class CampaignController {
         .eq("id", id);
 
       if (error) {
+        console.error("Error deleting campaign:", error);
+        // Check for foreign key constraint violation
+        if (error.code === '23503') {
+          return res.status(409).json({
+            success: false,
+            message: "Cannot delete campaign due to associated records (e.g., transactions, agreements). Please delete related records first.",
+          });
+        }
         return res.status(500).json({
           success: false,
           message: "Failed to delete campaign",
@@ -918,6 +868,7 @@ class CampaignController {
         message: "Campaign deleted successfully",
       });
     } catch (error) {
+      console.error("Exception in deleteCampaign:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",

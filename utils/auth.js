@@ -7,7 +7,8 @@ class AuthService {
   constructor() {
     this.jwtSecret =
       process.env.JWT_SECRET || "your-secret-key-change-in-production";
-    this.jwtExpiry = "7d"; // 7 days
+    this.jwtExpiry = "1d"; // 1 day
+    this.refreshJwtExpiry = "180d"; // 6 months
 
     // Mock login configuration
     this.mockPhone = "9876543210"; // Mock phone number for testing (without country code)
@@ -85,11 +86,11 @@ class AuthService {
           .eq("platform_name", p.platform)
           .limit(1)
           .maybeSingle?.() ?? await supabaseAdmin
-          .from("social_platforms")
-          .select("id")
-          .eq("user_id", userId)
-          .eq("platform_name", p.platform)
-          .single();
+            .from("social_platforms")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("platform_name", p.platform)
+            .single();
 
         const row = {
           user_id: userId,
@@ -518,7 +519,7 @@ class AuthService {
     try {
       // Handle mock phone numbers and OTP (with or without country code)
       const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
-      
+
       console.log('🔍 [DEBUG] Mock OTP Check:', {
         phone,
         phoneWithoutCountryCode,
@@ -535,11 +536,11 @@ class AuthService {
           phone === this.testUsers.brandOwner.phone ||
           phone === this.testUsers.brandOwner2.phone ||
           phone === this.testUsers.influencer.phone) ||
-         (phoneWithoutCountryCode === this.mockPhone ||
-          phoneWithoutCountryCode === this.testUsers.admin.phone ||
-          phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
-          phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
-          phoneWithoutCountryCode === this.testUsers.influencer.phone)) &&
+          (phoneWithoutCountryCode === this.mockPhone ||
+            phoneWithoutCountryCode === this.testUsers.admin.phone ||
+            phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
+            phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
+            phoneWithoutCountryCode === this.testUsers.influencer.phone)) &&
         token === "123456"
       ) {
         // Determine user role based on phone number
@@ -576,10 +577,10 @@ class AuthService {
         // If user exists but is deleted, restore the account
         if (existingUser && existingUser.is_deleted) {
           console.log('🔄 [ACCOUNT RESTORE] Restoring deleted mock account for phone:', phone);
-          
+
           const { data: restoredUser, error: restoreError } = await supabaseAdmin
             .from("users")
-            .update({ 
+            .update({
               is_deleted: false,
               updated_at: new Date().toISOString()
             })
@@ -598,7 +599,7 @@ class AuthService {
             try {
               const fcmService = require('../services/fcmService');
               const notificationService = require('../services/notificationService');
-              
+
               // Store in-app notification
               await notificationService.storeNotification({
                 user_id: user.id,
@@ -744,7 +745,8 @@ class AuthService {
           user: user,
           token: jwtToken,
           message: isRestoredAccount ? "Account restored and authentication successful" : "Mock authentication successful",
-          account_restored: isRestoredAccount
+          account_restored: isRestoredAccount,
+          refreshToken: this.generateRefreshToken(user)
         };
       }
 
@@ -780,10 +782,10 @@ class AuthService {
       // If user exists but is deleted, restore the account
       if (existingUser && existingUser.is_deleted) {
         console.log('🔄 [ACCOUNT RESTORE] Restoring deleted account for phone:', phone);
-        
+
         const { data: restoredUser, error: restoreError } = await supabaseAdmin
           .from("users")
-          .update({ 
+          .update({
             is_deleted: false,
             updated_at: new Date().toISOString()
           })
@@ -811,7 +813,7 @@ class AuthService {
         try {
           const fcmService = require('../services/fcmService');
           const notificationService = require('../services/notificationService');
-          
+
           // Store in-app notification
           await notificationService.storeNotification({
             user_id: user.id,
@@ -864,7 +866,7 @@ class AuthService {
           if (userData.categories) userCreateData.categories = userData.categories;
           if (userData.min_range) userCreateData.min_range = userData.min_range;
           if (userData.max_range) userCreateData.max_range = userData.max_range;
-          
+
           // Verification fields
           if (userData.pan_number) userCreateData.pan_number = userData.pan_number;
           if (userData.upi_id) userCreateData.upi_id = userData.upi_id;
@@ -884,7 +886,7 @@ class AuthService {
           if (userData.emergency_contact_name) userCreateData.emergency_contact_name = userData.emergency_contact_name;
           if (userData.emergency_contact_phone) userCreateData.emergency_contact_phone = userData.emergency_contact_phone;
           if (userData.emergency_contact_relation) userCreateData.emergency_contact_relation = userData.emergency_contact_relation;
-          
+
           // Brand fields (for brand owners) - using brand_name, brand_description from schema
           if (userData.brand_name) userCreateData.brand_name = userData.brand_name;
           if (userData.brand_description) userCreateData.brand_description = userData.brand_description;
@@ -938,7 +940,7 @@ class AuthService {
             categories: userData.categories,
             min_range: userData.min_range,
             max_range: userData.max_range,
-            
+
             // Verification fields
             pan_number: userData.pan_number,
             upi_id: userData.upi_id,
@@ -958,7 +960,7 @@ class AuthService {
             emergency_contact_name: userData.emergency_contact_name,
             emergency_contact_phone: userData.emergency_contact_phone,
             emergency_contact_relation: userData.emergency_contact_relation,
-            
+
             // Brand fields (for brand owners) - using brand_name, brand_description from schema
             brand_name: userData.brand_name,
             brand_description: userData.brand_description,
@@ -1028,7 +1030,8 @@ class AuthService {
         user: user,
         token: jwtToken,
         message: isRestoredAccount ? "Account restored and authentication successful" : "Authentication successful",
-        account_restored: isRestoredAccount
+        account_restored: isRestoredAccount,
+        refreshToken: this.generateRefreshToken(user)
       };
     } catch (error) {
       return {
@@ -1046,7 +1049,7 @@ class AuthService {
       const decoded = jwt.verify(token, this.jwtSecret);
       return { success: true, user: decoded };
     } catch (error) {
-      return { success: false, message: "Invalid token" };
+      return { success: false, message: error.message };
     }
   }
 
@@ -1064,7 +1067,8 @@ class AuthService {
     // Verify custom JWT token
     const result = this.verifyToken(token);
     if (!result.success) {
-      return res.status(403).json({ error: "Invalid token" });
+      console.log('⛔ [AUTH] Token verification failed:', result.message);
+      return res.status(401).json({ error: "Invalid token" });
     }
 
     req.user = result.user;
@@ -1134,10 +1138,60 @@ class AuthService {
   }
 
   /**
+   * Generate new Refresh Token
+   */
+  generateRefreshToken(user) {
+    return jwt.sign(
+      {
+        id: user.id,
+        phone: user.phone,
+        role: user.role,
+        type: 'refresh'
+      },
+      this.jwtSecret,
+      { expiresIn: this.refreshJwtExpiry }
+    );
+  }
+
+  /**
    * Refresh access token
    */
-  async refreshToken(userId) {
+  /**
+   * Refresh access token using refresh token
+   */
+  async refreshToken(refreshToken) {
     try {
+      if (!refreshToken) {
+        return {
+          success: false,
+          message: "Refresh token required",
+          code: "REFRESH_TOKEN_REQUIRED"
+        };
+      }
+
+      // Verify refresh token
+      let decoded;
+      try {
+        decoded = jwt.verify(refreshToken, this.jwtSecret);
+      } catch (err) {
+        return {
+          success: false,
+          message: "Invalid or expired refresh token",
+          code: "REFRESH_TOKEN_EXPIRED"
+        };
+      }
+
+      // Ensure it is a refresh token
+      if (decoded.type !== 'refresh') {
+        return {
+          success: false,
+          message: "Invalid token type",
+          code: "INVALID_TOKEN_TYPE"
+        };
+      }
+
+      const userId = decoded.id;
+
       const { data: user, error } = await supabaseAdmin
         .from("users")
         .select("*")
@@ -1149,18 +1203,24 @@ class AuthService {
         return {
           success: false,
           message: "User not found",
+          code: "USER_NOT_FOUND"
         };
       }
 
-      const token = this.generateToken(user);
+      // Generate new tokens (Rolling Refresh Token)
+      const newToken = this.generateToken(user);
+      const newRefreshToken = this.generateRefreshToken(user);
+
       return {
         success: true,
-        token: token,
+        token: newToken,
+        refreshToken: newRefreshToken
       };
     } catch (error) {
       return {
         success: false,
         message: error.message,
+        code: "INTERNAL_ERROR"
       };
     }
   }
