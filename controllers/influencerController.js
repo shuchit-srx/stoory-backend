@@ -21,6 +21,11 @@ class InfluencerController {
                 locations,
                 categories,
                 search,
+                // Logic parameters
+                languages_logic,
+                locations_logic,
+                categories_logic,
+                filter_logic
             } = filters;
 
             const offset = (page - 1) * limit;
@@ -53,6 +58,10 @@ class InfluencerController {
                 languages,
                 locations,
                 categories,
+                languages_logic,
+                locations_logic,
+                categories_logic,
+                filter_logic
             });
 
             // Text search on name

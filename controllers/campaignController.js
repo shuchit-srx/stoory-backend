@@ -299,6 +299,11 @@ class CampaignController {
         languages,
         locations,
         categories,
+        // Logic parameters
+        languages_logic,
+        locations_logic,
+        categories_logic,
+        filter_logic
       } = req.query;
 
       const offset = (page - 1) * limit;
@@ -326,7 +331,11 @@ class CampaignController {
         languages,
         locations,
         categories: categories || category, // Support both 'categories' and legacy 'category'
-        search
+        search,
+        languages_logic,
+        locations_logic,
+        categories_logic,
+        filter_logic
       });
 
       // Campaign type filter
@@ -390,6 +399,7 @@ class CampaignController {
           .order("created_at", { ascending: false })
           .range(offset, offset + limit - 1);
         if (error) {
+          console.error('❌ [getCampaigns] Brand Owner Database error:', error);
           return res
             .status(500)
             .json({ success: false, message: "Failed to fetch campaigns" });

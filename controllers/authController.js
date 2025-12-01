@@ -31,7 +31,7 @@ class AuthController {
       if (userId) {
         const { data: user, error: userError } = await supabaseAdmin
           .from("users")
-          .select("pan_number, pan_verified, pan_verified_at, pan_holder_name")
+          .select("pan_number, pan_verified, pan_verified_at, pan_holder_name, verification_status, role")
           .eq("id", userId)
           .single();
 
@@ -54,11 +54,17 @@ class AuthController {
           }
 
           // Check if user has a different PAN that's already verified
+          // ALLOW RE-VERIFICATION IF STATUS IS REJECTED
+          // This handles the case where a user verified a personal PAN but needs a business PAN (brand owner)
           if (user.pan_verified && user.pan_number && user.pan_number !== pan) {
-            return res.status(400).json({
-              success: false,
-              message: `You already have a verified PAN: ${user.pan_number}. Cannot verify a different PAN.`,
-            });
+            if (user.verification_status === 'rejected') {
+              console.log(`🔄 [verifyPAN] User has verified PAN ${user.pan_number} but status is REJECTED. Allowing re-verification with new PAN ${pan}.`);
+            } else {
+              return res.status(400).json({
+                success: false,
+                message: `You already have a verified PAN: ${user.pan_number}. Cannot verify a different PAN.`,
+              });
+            }
           }
 
           // If user has the same PAN in database but not verified, we'll verify it
@@ -399,6 +405,109 @@ class AuthController {
   }
 
   /**
+   * Send OTP for changing phone number
+   */
+  async sendChangePhoneOTP(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { new_phone } = req.body;
+      const userId = req.user.id;
+
+      // Ensure new phone is different from current
+      const { data: currentUser } = await supabaseAdmin
+        .from("users")
+        .select("phone")
+        .eq("id", userId)
+        .single();
+
+      if (currentUser && currentUser.phone === new_phone) {
+        return res.status(400).json({
+          success: false,
+          message: "New phone number must be different from current phone number"
+        });
+      }
+
+      const result = await authService.sendChangePhoneOTP(new_phone);
+
+      if (result.success) {
+        res.json({
+          success: true,
+          message: result.message,
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          message: result.message,
+          code: result.code,
+        });
+      }
+    } catch (error) {
+      console.error('❌ [sendChangePhoneOTP] Error:', error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Verify OTP and update phone number
+   */
+  async verifyChangePhoneOTP(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { new_phone, otp } = req.body;
+      const userId = req.user.id;
+
+      // Verify OTP
+      const verifyResult = await authService.verifyStoredOTP(new_phone, otp);
+      if (!verifyResult.success) {
+        return res.status(400).json({
+          success: false,
+          message: verifyResult.message
+        });
+      }
+
+      // Update user's phone number
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
+        .from("users")
+        .update({ phone: new_phone })
+        .eq("id", userId)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('❌ [verifyChangePhoneOTP] Database update error:', updateError);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update phone number. Please try again."
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Phone number updated successfully",
+        user: updatedUser
+      });
+
+    } catch (error) {
+      console.error('❌ [verifyChangePhoneOTP] Error:', error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
    * Get current user profile
    */
   async getProfile(req, res) {
@@ -591,6 +700,17 @@ class AuthController {
           }
         }
       }
+
+      // Normalize array fields to lowercase for consistent filtering
+      const arrayFields = ['categories', 'languages', 'locations', 'specializations'];
+      arrayFields.forEach(field => {
+        if (updateData[field] && Array.isArray(updateData[field])) {
+          updateData[field] = updateData[field]
+            .filter(item => item && typeof item === 'string')
+            .map(item => item.toLowerCase().trim());
+          console.log(`🔄 [updateProfile] Normalized ${field} to lowercase`);
+        }
+      });
 
       // Remove business_type as it's not in the schema anymore
       if (updateData.business_type !== undefined) {
