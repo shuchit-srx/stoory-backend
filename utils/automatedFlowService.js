@@ -2108,7 +2108,8 @@ Please respond to confirm your interest and availability for this campaign.`,
       // Update conversation to work_submitted state
       const updateData = {
         flow_state: "work_submitted",
-        awaiting_role: "brand_owner"
+        awaiting_role: "brand_owner",
+        chat_status: "automated"
       };
 
       // If this is a resubmission, update revision history
@@ -2266,17 +2267,6 @@ Please respond to confirm your interest and availability for this campaign.`,
             updated_at: new Date().toISOString()
           });
 
-          // Emit new message
-          if (message) {
-            console.log(`💬 [MSG] chat:new -> room:${conversationId} msg:${message.id}`);
-            this.io.to(`room:${conversationId}`).emit('chat:new', {
-              message: message
-            });
-            await this.emitAutomatedMessage(conversationId, message);
-          }
-
-          // conversations:upsert handled by emitAutomatedMessage
-
           // Emit global conversation update
           this.emitGlobalConversationUpdate(conversation, conversationId, {
             flow_state: "work_submitted",
@@ -2295,6 +2285,12 @@ Please respond to confirm your interest and availability for this campaign.`,
         } catch (socketError) {
           console.error("❌ [DEBUG] Socket emit error in handleWorkSubmission:", socketError);
         }
+      }
+
+      // Send automated message (Notifications + Socket if available)
+      // This handles DB notification storage and FCM push notifications
+      if (message) {
+        await this.emitAutomatedMessage(conversationId, message);
       }
 
       return {
@@ -2464,7 +2460,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         const revisionText = isFinalRevision
           ? `🔄 **Final Revision Requested** (${currentRevisionCount + 1}/${maxRevisions})\n\nThis is your final chance to make changes. Please address the feedback and resubmit your work:${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`
-          : `🔄 **Revision Requested** (${currentRevisionCount + 1}/${maxRevisions})\n\nPlease make the following changes and resubmit your work:${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`;
+          : `🔄 **Revision Requested** (${currentRevisionCount + 1}/${maxRevisions})\n\n ${feedback ? `\n\n**Feedback:** ${feedback}` : ''} \n\nRevise your work with the changes sent below: } `;
 
         messageText = revisionText;
 
@@ -2486,7 +2482,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         newFlowState = "work_rejected";
         newAwaitingRole = "influencer";
 
-        messageText = `❌ **Work Rejected**\n\nAfter ${conversation.revision_count || 0} revision attempts, the work has been rejected. You can choose to continue working or reject the project.${feedback ? `\n\n**Final Feedback:** ${feedback}` : ''}`;
+        messageText = `❌ ** Work Rejected **\n\nAfter ${conversation.revision_count || 0} revision attempts, the work has been rejected.You can choose to continue working or reject the project.${feedback ? `\n\n**Final Feedback:** ${feedback}` : ''} `;
 
         actionData = {
           title: "❌ **Work Rejected**",
@@ -2507,7 +2503,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           ]
         };
       } else {
-        throw new Error(`Unknown review action: ${action}`);
+        throw new Error(`Unknown review action: ${action} `);
       }
 
       // Prepare update data
@@ -2550,7 +2546,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .eq("id", conversationId);
 
       if (updateError) {
-        throw new Error(`Failed to update conversation: ${updateError.message}`);
+        throw new Error(`Failed to update conversation: ${updateError.message} `);
       }
 
       // Create review message
@@ -2569,7 +2565,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .single();
 
       if (messageError) {
-        throw new Error(`Failed to create message: ${messageError.message}`);
+        throw new Error(`Failed to create message: ${messageError.message} `);
       }
 
       // If work is approved, send both advance and final payment notifications to influencer
@@ -2591,8 +2587,8 @@ Please respond to confirm your interest and availability for this campaign.`,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.influencer_id,
             message: advanceSent
-              ? `✅ **Advance Payment Status**\n\nYour advance payment (30% of net amount: ₹${advanceAmount}) has already been sent.`
-              : `💰 **Advance Payment Update**\n\nYour advance payment (30% of net amount: ₹${advanceAmount}) will be sent by the admin soon. You will be notified once the payment is processed.`,
+              ? `✅ ** Advance Payment Status **\n\nYour advance payment(30 % of net amount: ₹${advanceAmount}) has already been sent.`
+              : `💰 ** Advance Payment Update **\n\nYour advance payment(30 % of net amount: ₹${advanceAmount}) will be sent by the admin soon.You will be notified once the payment is processed.`,
             message_type: "automated",
             action_required: false,
           };
@@ -2604,10 +2600,10 @@ Please respond to confirm your interest and availability for this campaign.`,
             .single();
 
           if (!advanceMsgError && this.io && advanceMsg) {
-            this.io.to(`room:${conversationId}`).emit('chat:new', {
+            this.io.to(`room:${conversationId} `).emit('chat:new', {
               message: advanceMsg
             });
-            console.log(`✅ [WORK APPROVAL] Advance payment status message sent to influencer: ${conversation.influencer_id}`);
+            console.log(`✅[WORK APPROVAL] Advance payment status message sent to influencer: ${conversation.influencer_id} `);
           }
 
           // Always send final payment notification message
@@ -2615,7 +2611,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Final Payment Update**\n\nYour final payment (70% of net amount) will be sent by the admin soon. You will be notified once the payment is processed.`,
+            message: `💰 ** Final Payment Update **\n\nYour final payment(70 % of net amount) will be sent by the admin soon.You will be notified once the payment is processed.`,
             message_type: "automated",
             action_required: false,
           };
@@ -2630,11 +2626,11 @@ Please respond to confirm your interest and availability for this campaign.`,
             console.error("❌ Failed to send final payment notification:", finalPaymentMsgError);
             // Don't throw - main message is created, this is just a notification
           } else {
-            console.log(`✅ [WORK APPROVAL] Final payment notification sent to influencer: ${conversation.influencer_id}`);
+            console.log(`✅[WORK APPROVAL] Final payment notification sent to influencer: ${conversation.influencer_id} `);
 
             // Emit socket event for the final payment message
             if (this.io && finalPaymentMsg) {
-              this.io.to(`room:${conversationId}`).emit('chat:new', {
+              this.io.to(`room:${conversationId} `).emit('chat:new', {
                 message: finalPaymentMsg
               });
             }
@@ -2664,8 +2660,8 @@ Please respond to confirm your interest and availability for this campaign.`,
           }
 
           // Emit conversation state change to conversation room
-          console.log(`🔀 [STATE] conversation_state_changed -> room:${conversationId} flow:${newFlowState} awaiting:${newAwaitingRole} chat_status:${chatStatusForEmit}`);
-          this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
+          console.log(`🔀[STATE] conversation_state_changed -> room:${conversationId} flow:${newFlowState} awaiting:${newAwaitingRole} chat_status:${chatStatusForEmit} `);
+          this.io.to(`room:${conversationId} `).emit('conversation_state_changed', {
             conversation_id: conversationId,
             flow_state: newFlowState,
             awaiting_role: newAwaitingRole,
@@ -2677,8 +2673,8 @@ Please respond to confirm your interest and availability for this campaign.`,
 
           // Emit new message to conversation room
           if (message) {
-            console.log(`💬 [MSG] chat:new -> room:${conversationId} msg:${message.id}`);
-            this.io.to(`room:${conversationId}`).emit('chat:new', {
+            console.log(`💬[MSG] chat: new -> room:${conversationId} msg:${message.id} `);
+            this.io.to(`room:${conversationId} `).emit('chat:new', {
               message: message
             });
 
@@ -2753,10 +2749,10 @@ Please respond to confirm your interest and availability for this campaign.`,
           if (result.success) {
             console.log(`✅ FCM work review notification sent: ${result.sent} successful, ${result.failed} failed`);
           } else {
-            console.error(`❌ FCM work review notification failed:`, result.error);
+            console.error(`❌ FCM work review notification failed: `, result.error);
           }
         }).catch(error => {
-          console.error(`❌ FCM work review notification error:`, error);
+          console.error(`❌ FCM work review notification error: `, error);
         });
       }
 
@@ -2794,7 +2790,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         case 'force_close':
           return await this.forceCloseConversation(conversationId, data);
         default:
-          throw new Error(`Unknown admin action: ${action}`);
+          throw new Error(`Unknown admin action: ${action} `);
       }
     } catch (error) {
       return { success: false, error: error.message };
@@ -2832,7 +2828,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .single();
 
       if (txnErr) {
-        throw new Error(`Transaction failed: ${txnErr.message}`);
+        throw new Error(`Transaction failed: ${txnErr.message} `);
       }
 
       // Create automated message with optional screenshot
@@ -2842,7 +2838,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           conversation_id: conversationId,
           sender_id: SYSTEM_USER_ID,
           receiver_id: null,
-          message: `Admin recorded payment from brand owner: ₹${amount}${commission_percent ? ` (commission ${commission_percent}%)` : ""}`,
+          message: `Admin recorded payment from brand owner: ₹${amount}${commission_percent ? ` (commission ${commission_percent}%)` : ""} `,
           message_type: "system_payment_update",
           media_url: attachments.length > 0 ? attachments[0].url : null,
           attachment_metadata: attachments,
@@ -2863,7 +2859,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Emit WebSocket events
       if (this.io) {
-        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+        this.io.to(`conversation_${conversationId} `).emit('new_message', {
           conversation_id: conversationId,
           message: message
         });
@@ -2916,7 +2912,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .single();
 
       if (txnErr) {
-        throw new Error(`Transaction failed: ${txnErr.message}`);
+        throw new Error(`Transaction failed: ${txnErr.message} `);
       }
 
       // Update conversation state to work_in_progress
@@ -2930,7 +2926,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .eq("id", conversationId);
 
       if (updateError) {
-        throw new Error(`Failed to update conversation state: ${updateError.message}`);
+        throw new Error(`Failed to update conversation state: ${updateError.message} `);
       }
 
       // Create automated message
@@ -2940,7 +2936,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           conversation_id: conversationId,
           sender_id: SYSTEM_USER_ID,
           receiver_id: conversation.influencer_id,
-          message: `✅ **Advance Payment Released!**\n\nAdmin has released an advance payment of ₹${amount} to the influencer. The conversation is now in **Work In Progress** state.`,
+          message: `✅ ** Advance Payment Released! **\n\nAdmin has released an advance payment of ₹${amount} to the influencer.The conversation is now in ** Work In Progress ** state.`,
           message_type: "system_payment_update",
           media_url: attachments.length > 0 ? attachments[0].url : null,
           attachment_metadata: attachments,
@@ -2961,7 +2957,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Emit WebSocket events
       if (this.io) {
-        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+        this.io.to(`conversation_${conversationId} `).emit('conversation_state_changed', {
           conversation_id: conversationId,
           previous_state: conversation.flow_state,
           new_state: "work_in_progress",
@@ -2970,17 +2966,17 @@ Please respond to confirm your interest and availability for this campaign.`,
           timestamp: new Date().toISOString()
         });
 
-        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+        this.io.to(`conversation_${conversationId} `).emit('new_message', {
           conversation_id: conversationId,
           message: message
         });
 
         // Notify both users about the payment
-        this.io.to(`user_${conversation.brand_owner_id}`).emit('notification', {
+        this.io.to(`user_${conversation.brand_owner_id} `).emit('notification', {
           type: 'payment_update',
           data: { conversation_id: conversationId, message: `Advance payment of ₹${amount} released to influencer.` }
         });
-        this.io.to(`user_${conversation.influencer_id}`).emit('notification', {
+        this.io.to(`user_${conversation.influencer_id} `).emit('notification', {
           type: 'payment_update',
           data: { conversation_id: conversationId, message: `You received an advance payment of ₹${amount}. Start working!` }
         });
@@ -3039,7 +3035,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .single();
 
       if (txnErr) {
-        throw new Error(`Transaction failed: ${txnErr.message}`);
+        throw new Error(`Transaction failed: ${txnErr.message} `);
       }
 
       // Move state to admin_final_payment_complete first, then to closed
@@ -3053,7 +3049,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .eq("id", conversationId);
 
       if (updateError) {
-        throw new Error(`Failed to update conversation state: ${updateError.message}`);
+        throw new Error(`Failed to update conversation state: ${updateError.message} `);
       }
 
       // Create automated message
@@ -3063,7 +3059,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           conversation_id: conversationId,
           sender_id: SYSTEM_USER_ID,
           receiver_id: conversation.influencer_id,
-          message: `🎉 **Final Payment Released!**\n\nAdmin has released the final payment of ₹${amount} to the influencer. The conversation is now **Closed**.`,
+          message: `🎉 ** Final Payment Released! **\n\nAdmin has released the final payment of ₹${amount} to the influencer.The conversation is now ** Closed **.`,
           message_type: "system_payment_update",
           media_url: attachments.length > 0 ? attachments[0].url : null,
           attachment_metadata: attachments,
@@ -3097,7 +3093,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Emit WebSocket events
       if (this.io) {
-        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+        this.io.to(`conversation_${conversationId} `).emit('conversation_state_changed', {
           conversation_id: conversationId,
           previous_state: conversation.flow_state,
           new_state: "closed",
@@ -3106,17 +3102,17 @@ Please respond to confirm your interest and availability for this campaign.`,
           timestamp: new Date().toISOString()
         });
 
-        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+        this.io.to(`conversation_${conversationId} `).emit('new_message', {
           conversation_id: conversationId,
           message: message
         });
 
         // Notify both users about the payment
-        this.io.to(`user_${conversation.brand_owner_id}`).emit('notification', {
+        this.io.to(`user_${conversation.brand_owner_id} `).emit('notification', {
           type: 'payment_update',
           data: { conversation_id: conversationId, message: `Final payment of ₹${amount} released to influencer.` }
         });
-        this.io.to(`user_${conversation.influencer_id}`).emit('notification', {
+        this.io.to(`user_${conversation.influencer_id} `).emit('notification', {
           type: 'payment_update',
           data: { conversation_id: conversationId, message: `You received the final payment of ₹${amount}. Great work!` }
         });
@@ -3171,7 +3167,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .single();
 
       if (txnErr) {
-        throw new Error(`Transaction failed: ${txnErr.message}`);
+        throw new Error(`Transaction failed: ${txnErr.message} `);
       }
 
       // Move state to closed
@@ -3185,7 +3181,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .eq("id", conversationId);
 
       if (updateError) {
-        throw new Error(`Failed to update conversation state: ${updateError.message}`);
+        throw new Error(`Failed to update conversation state: ${updateError.message} `);
       }
 
       // Create automated message
@@ -3195,7 +3191,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           conversation_id: conversationId,
           sender_id: SYSTEM_USER_ID,
           receiver_id: conversation.brand_owner_id,
-          message: `💰 **Refund Processed!**\n\nAdmin has processed a refund of ₹${amount} to the brand owner. The conversation is now **Closed**.`,
+          message: `💰 ** Refund Processed! **\n\nAdmin has processed a refund of ₹${amount} to the brand owner.The conversation is now ** Closed **.`,
           message_type: "system_payment_update",
           media_url: attachments.length > 0 ? attachments[0].url : null,
           attachment_metadata: attachments,
@@ -3216,7 +3212,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Emit WebSocket events
       if (this.io) {
-        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+        this.io.to(`conversation_${conversationId} `).emit('conversation_state_changed', {
           conversation_id: conversationId,
           previous_state: conversation.flow_state,
           new_state: "closed",
@@ -3225,17 +3221,17 @@ Please respond to confirm your interest and availability for this campaign.`,
           timestamp: new Date().toISOString()
         });
 
-        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+        this.io.to(`conversation_${conversationId} `).emit('new_message', {
           conversation_id: conversationId,
           message: message
         });
 
         // Notify both users about the refund
-        this.io.to(`user_${conversation.brand_owner_id}`).emit('notification', {
+        this.io.to(`user_${conversation.brand_owner_id} `).emit('notification', {
           type: 'payment_update',
           data: { conversation_id: conversationId, message: `You received a refund of ₹${amount}.` }
         });
-        this.io.to(`user_${conversation.influencer_id}`).emit('notification', {
+        this.io.to(`user_${conversation.influencer_id} `).emit('notification', {
           type: 'payment_update',
           data: { conversation_id: conversationId, message: `A refund of ₹${amount} was processed to the brand owner.` }
         });
@@ -3274,7 +3270,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .eq("id", conversationId);
 
       if (updateError) {
-        throw new Error(`Failed to update conversation state: ${updateError.message}`);
+        throw new Error(`Failed to update conversation state: ${updateError.message} `);
       }
 
       // Create automated message
@@ -3284,7 +3280,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           conversation_id: conversationId,
           sender_id: SYSTEM_USER_ID,
           receiver_id: null,
-          message: `🔒 **Conversation Closed by Admin**\n\n${reason || 'Admin has closed this conversation.'}${notes ? `\n\nNote: ${notes}` : ''}`,
+          message: `🔒 ** Conversation Closed by Admin **\n\n${reason || 'Admin has closed this conversation.'}${notes ? `\n\nNote: ${notes}` : ''} `,
           message_type: "system_payment_update",
           action_required: false,
           metadata: {
@@ -3302,7 +3298,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Emit WebSocket events
       if (this.io) {
-        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+        this.io.to(`conversation_${conversationId} `).emit('conversation_state_changed', {
           conversation_id: conversationId,
           previous_state: conversation.flow_state,
           new_state: "closed",
@@ -3311,17 +3307,17 @@ Please respond to confirm your interest and availability for this campaign.`,
           timestamp: new Date().toISOString()
         });
 
-        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+        this.io.to(`conversation_${conversationId} `).emit('new_message', {
           conversation_id: conversationId,
           message: message
         });
 
         // Notify both users
-        this.io.to(`user_${conversation.brand_owner_id}`).emit('notification', {
+        this.io.to(`user_${conversation.brand_owner_id} `).emit('notification', {
           type: 'conversation_closed',
           data: { conversation_id: conversationId, message: 'Conversation closed by admin.' }
         });
-        this.io.to(`user_${conversation.influencer_id}`).emit('notification', {
+        this.io.to(`user_${conversation.influencer_id} `).emit('notification', {
           type: 'conversation_closed',
           data: { conversation_id: conversationId, message: 'Conversation closed by admin.' }
         });
@@ -3353,7 +3349,7 @@ Please respond to confirm your interest and availability for this campaign.`,
       };
 
       if (!roleActions[userRole]?.includes(action)) {
-        throw new Error(`Role ${userRole} cannot perform action ${action}`);
+        throw new Error(`Role ${userRole} cannot perform action ${action} `);
       }
 
       // Get conversation and validate state
@@ -3372,7 +3368,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           result = await this.handleAdminAction(conversationId, action, data);
           break;
         default:
-          throw new Error(`Unknown role: ${userRole}`);
+          throw new Error(`Unknown role: ${userRole} `);
       }
 
       return result;
