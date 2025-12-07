@@ -13,7 +13,7 @@ class AttachmentController {
       console.log('🔍 [ATTACHMENT DEBUG] fileName:', req.body.fileName);
       console.log('🔍 [ATTACHMENT DEBUG] mimeType:', req.body.mimeType);
       console.log('🔍 [ATTACHMENT DEBUG] fileData length:', req.body.fileData ? req.body.fileData.length : 'undefined');
-      
+
       const { conversation_id } = req.params;
       const { fileName, mimeType, fileData } = req.body;
       const userId = req.user.id;
@@ -39,7 +39,7 @@ class AttachmentController {
       // Verify conversation exists and user has access
       console.log('🔍 [ATTACHMENT DEBUG] Looking up conversation:', conversation_id);
       console.log('🔍 [ATTACHMENT DEBUG] User ID:', userId);
-      
+
       const { data: conversation, error: convError } = await supabaseAdmin
         .from('conversations')
         .select('id, brand_owner_id, influencer_id')
@@ -128,13 +128,13 @@ class AttachmentController {
   async uploadWithFormData(req, res) {
     try {
       console.log('🔍 [FORMDATA DEBUG] uploadWithFormData called');
-      
+
       const { conversation_id } = req.params;
       const userId = req.user.id;
 
       // Parse FormData using multiparty
       const form = new multiparty.Form();
-      
+
       form.parse(req, async (err, fields, files) => {
         if (err) {
           console.error('FormData parsing error:', err);
@@ -160,7 +160,7 @@ class AttachmentController {
         const file = files.file[0];
         const fileName = file.originalFilename || 'unknown_file';
         const mimeType = file.headers['content-type'] || 'application/octet-stream';
-        
+
         // Read file from temporary path
         const fs = require('fs');
         const fileBuffer = fs.readFileSync(file.path);
@@ -201,8 +201,8 @@ class AttachmentController {
           }
 
           // Determine receiver ID
-          const receiverId = conversation.brand_owner_id === userId 
-            ? conversation.influencer_id 
+          const receiverId = conversation.brand_owner_id === userId
+            ? conversation.influencer_id
             : conversation.brand_owner_id;
 
           // Validate file
@@ -271,7 +271,7 @@ class AttachmentController {
             // Get conversation context
             const { data: conversationContext } = await supabaseAdmin
               .from('conversations')
-              .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
+              .select('id, chat_status, flow_state, awaiting_role, campaign_id, current_action_data')
               .eq('id', conversation_id)
               .single();
 
@@ -280,9 +280,8 @@ class AttachmentController {
               chat_status: conversationContext.chat_status,
               flow_state: conversationContext.flow_state,
               awaiting_role: conversationContext.awaiting_role,
-              conversation_type: conversationContext.campaign_id ? 'campaign' : 
-                                conversationContext.bid_id ? 'bid' : 'direct',
-              
+              conversation_type: conversationContext.campaign_id ? 'campaign' : 'direct',
+
               current_action_data: conversationContext.current_action_data
             } : null;
 
@@ -302,10 +301,10 @@ class AttachmentController {
                 body: newMessage.message,
                 created_at: newMessage.created_at,
                 conversation_context: context,
-                payload: { 
-                  conversation_id, 
-                  message_id: newMessage.id, 
-                  sender_id: userId 
+                payload: {
+                  conversation_id,
+                  message_id: newMessage.id,
+                  sender_id: userId
                 },
                 conversation_id,
                 message: newMessage,
@@ -351,7 +350,7 @@ class AttachmentController {
       console.log('🔍 [ATTACHMENT DEBUG] fileName:', req.body.fileName);
       console.log('🔍 [ATTACHMENT DEBUG] mimeType:', req.body.mimeType);
       console.log('🔍 [ATTACHMENT DEBUG] fileData length:', req.body.fileData ? req.body.fileData.length : 'undefined');
-      
+
       const { conversation_id } = req.params;
       console.log('🔍 [ATTACHMENT DEBUG] conversation_id from params:', conversation_id);
       const { message, message_type = 'user_input', fileName, mimeType, fileData } = req.body;
@@ -378,7 +377,7 @@ class AttachmentController {
       // Verify conversation exists and user has access
       console.log('🔍 [ATTACHMENT DEBUG] Looking up conversation:', conversation_id);
       console.log('🔍 [ATTACHMENT DEBUG] User ID:', userId);
-      
+
       const { data: conversation, error: convError } = await supabaseAdmin
         .from('conversations')
         .select('id, brand_owner_id, influencer_id')
@@ -418,8 +417,8 @@ class AttachmentController {
       }
 
       // Determine receiver ID
-      const receiverId = conversation.brand_owner_id === userId 
-        ? conversation.influencer_id 
+      const receiverId = conversation.brand_owner_id === userId
+        ? conversation.influencer_id
         : conversation.brand_owner_id;
 
       // Validate file
@@ -427,10 +426,10 @@ class AttachmentController {
       console.log('🔍 [ATTACHMENT DEBUG] File buffer size:', fileBuffer.length);
       console.log('🔍 [ATTACHMENT DEBUG] File name:', fileName);
       console.log('🔍 [ATTACHMENT DEBUG] MIME type:', mimeType);
-      
+
       const validation = attachmentService.validateFile(fileBuffer, fileName, mimeType);
       console.log('🔍 [ATTACHMENT DEBUG] Validation result:', validation);
-      
+
       if (!validation.valid) {
         console.log('❌ [ATTACHMENT DEBUG] File validation failed:', validation.error);
         return res.status(400).json({
@@ -438,7 +437,7 @@ class AttachmentController {
           message: validation.error
         });
       }
-      
+
       console.log('✅ [ATTACHMENT DEBUG] File validation passed');
 
       // Upload attachment
@@ -526,7 +525,7 @@ class AttachmentController {
         // Get conversation context
         const { data: conversationContext } = await supabaseAdmin
           .from('conversations')
-          .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
+          .select('id, chat_status, flow_state, awaiting_role, campaign_id, current_action_data')
           .eq('id', conversation_id)
           .single();
 
@@ -535,9 +534,8 @@ class AttachmentController {
           chat_status: conversationContext.chat_status,
           flow_state: conversationContext.flow_state,
           awaiting_role: conversationContext.awaiting_role,
-          conversation_type: conversationContext.campaign_id ? 'campaign' : 
-                            conversationContext.bid_id ? 'bid' : 'direct',
-          
+          conversation_type: conversationContext.campaign_id ? 'campaign' : 'direct',
+
           current_action_data: conversationContext.current_action_data
         } : null;
 
@@ -561,10 +559,10 @@ class AttachmentController {
             body: newMessage.message,
             created_at: newMessage.created_at,
             conversation_context: context,
-            payload: { 
-              conversation_id, 
-              message_id: newMessage.id, 
-              sender_id: userId 
+            payload: {
+              conversation_id,
+              message_id: newMessage.id,
+              sender_id: userId
             },
             conversation_id,
             message: newMessage,
@@ -581,7 +579,7 @@ class AttachmentController {
           action: 'message_sent',
           timestamp: new Date().toISOString()
         });
-        
+
         io.to(`user_${receiverId}`).emit('conversation_list_updated', {
           conversation_id,
           message: newMessage,
@@ -718,8 +716,8 @@ class AttachmentController {
       }
 
       // Check if user has access to this conversation
-      if (message.conversations.brand_owner_id !== userId && 
-          message.conversations.influencer_id !== userId) {
+      if (message.conversations.brand_owner_id !== userId &&
+        message.conversations.influencer_id !== userId) {
         return res.status(403).json({
           success: false,
           message: 'Access denied'
@@ -737,7 +735,7 @@ class AttachmentController {
         id: message.id,
         url: message.media_url,
         metadata: message.attachment_metadata,
-        preview: message.attachment_metadata ? 
+        preview: message.attachment_metadata ?
           attachmentService.getAttachmentPreview(message.attachment_metadata) : null
       };
 

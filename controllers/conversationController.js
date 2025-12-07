@@ -26,13 +26,13 @@ async function fetchConversation(conversationId) {
 
 // Determine agreed amount (final_agreed_amount from related request if available, else flow_data.agreed_amount)
 async function resolveAgreedAmount(conversation) {
-  // Try request by bid/campaign pair
-  if (conversation.bid_id || conversation.campaign_id) {
+  // Try request by campaign
+  if (conversation.campaign_id) {
     const { data: reqByPair } = await supabaseAdmin
       .from("requests")
       .select("id, final_agreed_amount")
       .eq("influencer_id", conversation.influencer_id)
-      .eq(conversation.bid_id ? "bid_id" : "campaign_id", conversation.bid_id || conversation.campaign_id)
+      .eq("campaign_id", conversation.campaign_id)
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
@@ -135,7 +135,6 @@ class ConversationController {
           brand_owner_id,
           influencer_id,
           campaign_id,
-          bid_id,
           flow_data,
           created_at,
           brand_owner:users!conversations_brand_owner_id_fkey(
@@ -144,8 +143,7 @@ class ConversationController {
           influencer:users!conversations_influencer_id_fkey(
             id, name, email, phone
           ),
-          campaigns(id, title, description, budget),
-          bids(id, title, description, amount)
+          campaigns(id, title, description, budget)
         `)
         .eq("id", id)
         .single();
@@ -171,16 +169,10 @@ class ConversationController {
       const paymentBreakdown = await mouService.getPaymentBreakdown(id);
 
       // Prepare preview data
-      const collaborationType = conversation.campaign_id ? "Campaign" : "Bid";
-      const collaborationTitle = conversation.campaign_id
-        ? conversation.campaigns?.title
-        : conversation.bids?.title;
-      const collaborationDescription = conversation.campaign_id
-        ? conversation.campaigns?.description
-        : conversation.bids?.description;
-      const totalAmount = conversation.campaign_id
-        ? conversation.campaigns?.budget
-        : conversation.bids?.amount;
+      const collaborationType = "Campaign";
+      const collaborationTitle = conversation.campaigns?.title;
+      const collaborationDescription = conversation.campaigns?.description;
+      const totalAmount = conversation.campaigns?.budget;
 
       return res.json({
         success: true,

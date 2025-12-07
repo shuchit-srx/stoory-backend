@@ -434,28 +434,7 @@ class FCMService {
     }
   }
 
-  /**
-   * Send bid notification
-   */
-  async sendBidNotification(bidId, title, body, receiverId) {
-    try {
-      const notification = {
-        title: title,
-        body: body,
-        data: {
-          type: 'bid',
-          bidId: bidId, // REQUIRED per spec
-          bid_id: bidId, // Fallback
-          entity_id: bidId // Generic fallback
-        }
-      };
 
-      return await this.sendNotificationToUser(receiverId, notification);
-    } catch (error) {
-      console.error('❌ Error sending bid notification:', error);
-      return { success: false, error: error.message };
-    }
-  }
 
   /**
    * Send request notification (when influencer applies)

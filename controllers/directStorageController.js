@@ -12,7 +12,7 @@ class DirectStorageController {
       console.log('🔍 [DIRECT STORAGE DEBUG] fileName:', req.body.fileName);
       console.log('🔍 [DIRECT STORAGE DEBUG] mimeType:', req.body.mimeType);
       console.log('🔍 [DIRECT STORAGE DEBUG] fileData length:', req.body.fileData ? req.body.fileData.length : 'undefined');
-      
+
       const { conversation_id } = req.params;
       const { message, message_type = 'user_input', fileName, mimeType, fileData } = req.body;
       const userId = req.user.id;
@@ -38,7 +38,7 @@ class DirectStorageController {
       // Verify conversation exists and user has access
       console.log('🔍 [DIRECT STORAGE DEBUG] Looking up conversation:', conversation_id);
       console.log('🔍 [DIRECT STORAGE DEBUG] User ID:', userId);
-      
+
       const { data: conversation, error: convError } = await supabaseAdmin
         .from('conversations')
         .select('id, brand_owner_id, influencer_id')
@@ -78,8 +78,8 @@ class DirectStorageController {
       }
 
       // Determine receiver ID
-      const receiverId = conversation.brand_owner_id === userId 
-        ? conversation.influencer_id 
+      const receiverId = conversation.brand_owner_id === userId
+        ? conversation.influencer_id
         : conversation.brand_owner_id;
 
       // Upload file directly to Supabase Storage
@@ -140,7 +140,7 @@ class DirectStorageController {
         // Get conversation context
         const { data: conversationContext } = await supabaseAdmin
           .from('conversations')
-          .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
+          .select('id, chat_status, flow_state, awaiting_role, campaign_id, current_action_data')
           .eq('id', conversation_id)
           .single();
 
@@ -149,9 +149,8 @@ class DirectStorageController {
           chat_status: conversationContext.chat_status,
           flow_state: conversationContext.flow_state,
           awaiting_role: conversationContext.awaiting_role,
-          conversation_type: conversationContext.campaign_id ? 'campaign' : 
-                            conversationContext.bid_id ? 'bid' : 'direct',
-          
+          conversation_type: conversationContext.campaign_id ? 'campaign' : 'direct',
+
           current_action_data: conversationContext.current_action_data
         } : null;
 
@@ -171,10 +170,10 @@ class DirectStorageController {
             body: newMessage.message,
             created_at: newMessage.created_at,
             conversation_context: context,
-            payload: { 
-              conversation_id, 
-              message_id: newMessage.id, 
-              sender_id: userId 
+            payload: {
+              conversation_id,
+              message_id: newMessage.id,
+              sender_id: userId
             },
             conversation_id,
             message: newMessage,
@@ -191,7 +190,7 @@ class DirectStorageController {
           action: 'message_sent',
           timestamp: new Date().toISOString()
         });
-        
+
         io.to(`user_${receiverId}`).emit('conversation_list_updated', {
           conversation_id,
           message: newMessage,
@@ -328,8 +327,8 @@ class DirectStorageController {
       }
 
       // Check if user has access to this conversation
-      if (message.conversations.brand_owner_id !== userId && 
-          message.conversations.influencer_id !== userId) {
+      if (message.conversations.brand_owner_id !== userId &&
+        message.conversations.influencer_id !== userId) {
         return res.status(403).json({
           success: false,
           message: 'Access denied'
@@ -347,7 +346,7 @@ class DirectStorageController {
         id: message.id,
         url: message.media_url,
         metadata: message.attachment_metadata,
-        preview: message.attachment_metadata ? 
+        preview: message.attachment_metadata ?
           storageService.getFilePreview(message.attachment_metadata) : null
       };
 

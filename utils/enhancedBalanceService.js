@@ -8,7 +8,7 @@ class EnhancedBalanceService {
   async getWalletBalance(userId) {
     try {
       console.log("🔍 [DEBUG] getWalletBalance called for user:", userId);
-      
+
       const result = await retrySupabaseQuery(
         () => supabaseAdmin
           .from("wallets")
@@ -17,7 +17,7 @@ class EnhancedBalanceService {
           .single(),
         { maxRetries: 3, initialDelay: 200 }
       );
-      
+
       const { data: wallet, error } = result;
 
       console.log("🔍 [DEBUG] Wallet query result:", { wallet, error });
@@ -84,7 +84,7 @@ class EnhancedBalanceService {
   async createWallet(userId) {
     try {
       console.log("🔍 [DEBUG] createWallet called for user:", userId);
-      
+
       const { data: wallet, error } = await supabaseAdmin
         .from("wallets")
         .insert({
@@ -145,12 +145,12 @@ class EnhancedBalanceService {
   async addFunds(userId, amountPaise, transactionData = {}) {
     try {
       console.log("🔍 [DEBUG] addFunds called with:", { userId, amountPaise, transactionData });
-      
+
       // Get or create wallet
       console.log("🔍 [DEBUG] Getting wallet balance for user:", userId);
       const walletResult = await this.getWalletBalance(userId);
       console.log("🔍 [DEBUG] Wallet result:", walletResult);
-      
+
       if (!walletResult.success) {
         console.error("❌ [DEBUG] Failed to get wallet balance:", walletResult.error);
         return walletResult;
@@ -163,10 +163,10 @@ class EnhancedBalanceService {
         frozen_balance_paise: wallet.frozen_balance_paise,
         withdrawn_balance_paise: wallet.withdrawn_balance_paise
       });
-      
+
       const newBalance = wallet.balance_paise + amountPaise;
       const newTotalBalance = newBalance + wallet.frozen_balance_paise + wallet.withdrawn_balance_paise;
-      
+
       console.log("🔍 [DEBUG] New balance calculations:", {
         newBalance,
         newTotalBalance,
@@ -217,9 +217,8 @@ class EnhancedBalanceService {
           sender_id: transactionData.brand_owner_id,
           receiver_id: userId,
           // Link to conversation via bid_id or campaign_id
-          ...(transactionData.bid_id ? 
-            { bid_id: transactionData.bid_id } : 
-            { campaign_id: transactionData.campaign_id }
+          ...(transactionData.campaign_id ?
+            { campaign_id: transactionData.campaign_id } : {}
           )
         })
         .select()
@@ -393,183 +392,7 @@ class EnhancedBalanceService {
     }
   }
 
-  /**
-   * Freeze funds in escrow (move from available to frozen)
-   */
-  async freezeFunds(userId, amountPaise, escrowHoldId, transactionData = {}) {
-    try {
-      const walletResult = await this.getWalletBalance(userId);
-      if (!walletResult.success) {
-        return walletResult;
-      }
 
-      const wallet = walletResult.wallet;
-
-      // Check if user has enough available balance
-      if (wallet.balance_paise < amountPaise) {
-        return {
-          success: false,
-          error: "Insufficient available balance for escrow hold",
-          available_balance: wallet.balance_paise,
-          requested_amount: amountPaise,
-        };
-      }
-
-      const newBalance = wallet.balance_paise - amountPaise;
-      const newFrozenBalance = wallet.frozen_balance_paise + amountPaise;
-      const newTotalBalance = newBalance + newFrozenBalance + wallet.withdrawn_balance_paise;
-
-      // Update wallet balances
-      const { error: updateError } = await supabaseAdmin
-        .from("wallets")
-        .update({
-          balance_paise: newBalance,
-          frozen_balance_paise: newFrozenBalance,
-          total_balance_paise: newTotalBalance,
-          balance: newBalance / 100, // Keep old balance field for compatibility
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", wallet.id);
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      // Create freeze transaction record
-      const { data: transaction, error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert({
-          wallet_id: wallet.id,
-          user_id: userId,
-          amount: amountPaise / 100,
-          amount_paise: amountPaise,
-          type: "debit",
-          direction: "debit",
-          status: "completed",
-          stage: "escrow_hold",
-          escrow_hold_id: escrowHoldId,
-          related_escrow_hold_id: escrowHoldId,
-          is_escrow_frozen: true,
-          escrow_status: "active",
-          notes: `Funds frozen in escrow (Hold ID: ${escrowHoldId})`,
-          balance_after_paise: newBalance,
-          frozen_balance_after_paise: newFrozenBalance,
-          withdrawn_balance_after_paise: wallet.withdrawn_balance_paise,
-          ...transactionData,
-        })
-        .select()
-        .single();
-
-      if (transactionError) {
-        throw transactionError;
-      }
-
-      return {
-        success: true,
-        transaction,
-        new_balance: newBalance,
-        new_balance_rupees: newBalance / 100,
-        new_frozen_balance: newFrozenBalance,
-        new_frozen_balance_rupees: newFrozenBalance / 100,
-        new_total_balance: newTotalBalance,
-        new_total_balance_rupees: newTotalBalance / 100,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-      };
-    }
-  }
-
-  /**
-   * Release funds from escrow (move from frozen to available)
-   */
-  async releaseFunds(userId, amountPaise, escrowHoldId, transactionData = {}) {
-    try {
-      const walletResult = await this.getWalletBalance(userId);
-      if (!walletResult.success) {
-        return walletResult;
-      }
-
-      const wallet = walletResult.wallet;
-
-      // Check if user has enough frozen balance
-      if (wallet.frozen_balance_paise < amountPaise) {
-        return {
-          success: false,
-          error: "Insufficient frozen balance for release",
-          frozen_balance: wallet.frozen_balance_paise,
-          requested_amount: amountPaise,
-        };
-      }
-
-      const newFrozenBalance = wallet.frozen_balance_paise - amountPaise;
-      const newBalance = wallet.balance_paise + amountPaise;
-      const newTotalBalance = newBalance + newFrozenBalance + wallet.withdrawn_balance_paise;
-
-      // Update wallet balances
-      const { error: updateError } = await supabaseAdmin
-        .from("wallets")
-        .update({
-          balance_paise: newBalance,
-          frozen_balance_paise: newFrozenBalance,
-          total_balance_paise: newTotalBalance,
-          balance: newBalance / 100, // Keep old balance field for compatibility
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", wallet.id);
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      // Create release transaction record
-      const { data: transaction, error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert({
-          wallet_id: wallet.id,
-          user_id: userId,
-          amount: amountPaise / 100,
-          amount_paise: amountPaise,
-          type: "credit",
-          direction: "credit",
-          status: "completed",
-          stage: "escrow_release",
-          escrow_hold_id: escrowHoldId,
-          related_escrow_hold_id: escrowHoldId,
-          is_escrow_frozen: false,
-          escrow_status: "released",
-          notes: `Funds released from escrow (Hold ID: ${escrowHoldId})`,
-          balance_after_paise: newBalance,
-          frozen_balance_after_paise: newFrozenBalance,
-          withdrawn_balance_after_paise: wallet.withdrawn_balance_paise,
-          ...transactionData,
-        })
-        .select()
-        .single();
-
-      if (transactionError) {
-        throw transactionError;
-      }
-
-      return {
-        success: true,
-        transaction,
-        new_balance: newBalance,
-        new_balance_rupees: newBalance / 100,
-        new_frozen_balance: newFrozenBalance,
-        new_frozen_balance_rupees: newFrozenBalance / 100,
-        new_total_balance: newTotalBalance,
-        new_total_balance_rupees: newTotalBalance / 100,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-      };
-    }
-  }
 
   /**
    * Get comprehensive transaction history
@@ -595,10 +418,6 @@ class EnhancedBalanceService {
             id,
             title,
             campaign_type
-          ),
-          bids (
-            id,
-            title
           )
         `,
           { count: "exact" }
@@ -626,7 +445,7 @@ class EnhancedBalanceService {
           .range(offset, offset + limit - 1),
         { maxRetries: 3, initialDelay: 200 }
       );
-      
+
       const { data: transactions, error, count } = result;
 
       if (error) {
@@ -637,21 +456,16 @@ class EnhancedBalanceService {
 
       // Format transactions: flatten nested objects and add user_id directly
       const formattedTransactions = (transactions || []).map(txn => {
-        // Extract wallet data (to get user_id)
-        const wallet = Array.isArray(txn.wallets) ? txn.wallets[0] : txn.wallets;
-        
         // Extract campaign data
         const campaign = Array.isArray(txn.campaigns) ? txn.campaigns[0] : txn.campaigns;
-        
-        // Extract bid data
-        const bid = Array.isArray(txn.bids) ? txn.bids[0] : txn.bids;
+
 
         // Return clean transaction object with flattened related data
         return {
           // All transaction fields
           id: txn.id,
           wallet_id: txn.wallet_id,
-          user_id: wallet?.user_id || userId, // Add user_id from wallet join
+          user_id: userId, // Use userId from params since we filter by it
           amount: txn.amount,
           amount_paise: txn.amount_paise,
           type: txn.type,
@@ -662,8 +476,8 @@ class EnhancedBalanceService {
           updated_at: txn.updated_at,
           notes: txn.notes,
           conversation_id: txn.conversation_id,
+          conversation_id: txn.conversation_id,
           campaign_id: txn.campaign_id,
-          bid_id: txn.bid_id,
           sender_id: txn.sender_id,
           receiver_id: txn.receiver_id,
           payment_stage: txn.payment_stage,
@@ -681,10 +495,6 @@ class EnhancedBalanceService {
             id: campaign.id,
             title: campaign.title,
             campaign_type: campaign.campaign_type
-          } : null,
-          bid: bid ? {
-            id: bid.id,
-            title: bid.title
           } : null
         };
       });
@@ -743,42 +553,9 @@ class EnhancedBalanceService {
     }
   }
 
-  /**
-   * Get escrow holds for a user
-   */
-  async getEscrowHolds(userId) {
-    try {
-      const { data: holds, error } = await supabaseAdmin
-        .from("escrow_holds")
-        .select(`
-          *,
-          conversations!inner (
-            brand_owner_id,
-            influencer_id,
-            flow_state,
-            conversation_type
-          )
-        `)
-        .or(
-          `conversations.brand_owner_id.eq.${userId},conversations.influencer_id.eq.${userId}`
-        )
-        .order("created_at", { ascending: false });
 
-      if (error) {
-        throw error;
-      }
 
-      return {
-        success: true,
-        holds: holds || [],
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-      };
-    }
-  }
+
 }
 
 module.exports = new EnhancedBalanceService();

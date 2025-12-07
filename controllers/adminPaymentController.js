@@ -35,8 +35,7 @@ class AdminPaymentController {
             bid_id,
             brand_owner_id,
             influencer_id,
-            campaigns (id, title, type:campaign_type),
-            bids (id, title, type:bid_type)
+            campaigns (id, title, type:campaign_type)
           )
         `)
         .order("created_at", { ascending: false });
@@ -60,10 +59,10 @@ class AdminPaymentController {
       // Format payment data
       const formattedPayments = payments.map(payment => {
         const conversation = payment.conversations;
-        const collaborationType = conversation.campaign_id ? 'Campaign' : 'Bid';
-        const collaborationTitle = conversation.campaign_id ? 
-          conversation.campaigns?.title : 
-          conversation.bids?.title;
+        const collaborationType = conversation.campaign_id ? 'Campaign' : 'Direct';
+        const collaborationTitle = conversation.campaign_id ?
+          conversation.campaigns?.title :
+          "Direct Payment";
 
         return {
           id: payment.id,
@@ -230,7 +229,7 @@ class AdminPaymentController {
 
       // Update the appropriate screenshot field
       const updateField = payment_type === 'advance' ? 'advance_screenshot_url' : 'final_screenshot_url';
-      
+
       const { data: updatedPayment, error } = await supabaseAdmin
         .from("admin_payment_tracking")
         .update({

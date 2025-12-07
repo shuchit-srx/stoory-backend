@@ -1619,7 +1619,7 @@ class CampaignController {
         if (conversation.request_id) {
           const { data: requestData } = await supabaseAdmin
             .from("requests")
-            .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
+            .select("id, final_agreed_amount, influencer_id, campaign_id")
             .eq("id", conversation.request_id)
             .single();
 
@@ -1633,7 +1633,7 @@ class CampaignController {
       if (!request && conversation.request_id) {
         const { data: requestData } = await supabaseAdmin
           .from("requests")
-          .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
+          .select("id, final_agreed_amount, influencer_id, campaign_id")
           .eq("id", conversation.request_id)
           .single();
 
@@ -1774,7 +1774,7 @@ class CampaignController {
           .insert({
             conversation_id: conversation_id,
             campaign_id: conversation.campaign_id,
-            bid_id: null,
+
             brand_owner_id: conversation.brand_owner_id,
             influencer_id: conversation.influencer_id,
             total_amount_paise: totalAmountPaise,
@@ -1801,7 +1801,7 @@ class CampaignController {
                 type: "credit",
                 status: "pending",
                 campaign_id: conversation.campaign_id || null,
-                bid_id: null,
+
                 conversation_id: conversation_id,
                 payment_stage: "advance",
                 admin_payment_tracking_id: adminPaymentRecord.id,
@@ -1814,7 +1814,7 @@ class CampaignController {
                 type: "credit",
                 status: "pending",
                 campaign_id: conversation.campaign_id || null,
-                bid_id: null,
+
                 conversation_id: conversation_id,
                 payment_stage: "final",
                 admin_payment_tracking_id: adminPaymentRecord.id,

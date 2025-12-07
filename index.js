@@ -11,7 +11,7 @@ const MessageHandler = require("./sockets/messageHandler");
 // Import routes
 const authRoutes = require("./routes/auth");
 const campaignRoutes = require("./routes/campaigns");
-const bidRoutes = require("./routes/bids");
+
 const requestRoutes = require("./routes/requests");
 const conversationRoutes = require("./routes/conversations");
 const userRoutes = require("./routes/users");
@@ -382,7 +382,7 @@ app.post("/api/debug/direct-send", async (req, res) => {
     const { supabaseAdmin } = require('./supabase/client');
     const { data: conversation, error: convError } = await supabaseAdmin
       .from('conversations')
-      .select('id, brand_owner_id, influencer_id, campaign_id, bid_id, chat_status, flow_state')
+      .select('id, brand_owner_id, influencer_id, campaign_id, chat_status, flow_state')
       .eq('id', conversationId)
       .single();
 
@@ -390,7 +390,7 @@ app.post("/api/debug/direct-send", async (req, res) => {
       return res.status(404).json({ success: false, error: 'Conversation not found', details: convError || null, conversationId });
     }
 
-    const isDirect = !conversation.campaign_id && !conversation.bid_id;
+    const isDirect = !conversation.campaign_id;
     if (!isDirect && conversation.chat_status !== 'real_time' && conversation.flow_state !== 'real_time') {
       return res.status(409).json({ success: false, error: 'Automated mode for this conversation' });
     }
@@ -461,7 +461,7 @@ app.get("/api/debug/conversation/:id", async (req, res) => {
     const { supabaseAdmin } = require('./supabase/client');
     const { data, error } = await supabaseAdmin
       .from('conversations')
-      .select('id, brand_owner_id, influencer_id, campaign_id, bid_id, chat_status, flow_state, created_at')
+      .select('id, brand_owner_id, influencer_id, campaign_id, chat_status, flow_state, created_at')
       .eq('id', conversationId)
       .maybeSingle();
 
@@ -639,7 +639,7 @@ app.post("/test-message", async (req, res) => {
     const { supabaseAdmin } = require('./supabase/client');
     const { data: conversation, error: convError } = await supabaseAdmin
       .from("conversations")
-      .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data")
+      .select("id, chat_status, flow_state, awaiting_role, campaign_id, current_action_data")
       .eq("id", conversationId)
       .single();
 
@@ -656,8 +656,7 @@ app.post("/test-message", async (req, res) => {
       chat_status: conversation.chat_status,
       flow_state: conversation.flow_state,
       awaiting_role: conversation.awaiting_role,
-      conversation_type: conversation.campaign_id ? 'campaign' :
-        conversation.bid_id ? 'bid' : 'direct',
+      conversation_type: conversation.campaign_id ? 'campaign' : 'direct',
       current_action_data: conversation.current_action_data
     } : null;
 
@@ -774,7 +773,7 @@ app.post("/webhook/razorpay", SubscriptionController.handleWebhook);
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/campaigns", campaignRoutes);
-app.use("/api/bids", bidRoutes);
+
 app.use("/api/requests", requestRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/conversations", conversationRoutes);

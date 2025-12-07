@@ -77,16 +77,15 @@ class MessageController {
           .from("conversations")
           .select(
             `
-            id, brand_owner_id, influencer_id, chat_status, campaign_id, bid_id, 
+            id, brand_owner_id, influencer_id, chat_status, campaign_id,
             created_at, updated_at, flow_state, awaiting_role,
-            campaigns(id, title, description, budget, status),
-            bids(id, title, description, min_budget, max_budget, status)
+            campaigns(id, title, description, budget, status)
           `
           )
           .eq("brand_owner_id", userId); // All conversations where they are the brand owner
 
         queryDescription =
-          "Brand owner conversations (campaigns, bids, and direct)";
+          "Brand owner conversations (campaigns and direct)";
       } else if (currentUser.role === "influencer") {
         // Influencers see ALL conversations where they are the influencer
         conversationsQuery = supabaseAdmin
@@ -102,7 +101,7 @@ class MessageController {
           .eq("influencer_id", userId); // All conversations where they are the influencer
 
         queryDescription =
-          "Influencer conversations (campaigns, bids, and direct)";
+          "Influencer conversations (campaigns and direct)";
       } else {
         // General users see direct conversations only (no campaigns/bids)
         conversationsQuery = supabaseAdmin
@@ -114,8 +113,7 @@ class MessageController {
           `
           )
           .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`)
-          .is("campaign_id", null) // No campaign
-          .is("bid_id", null); // No bid
+          .is("campaign_id", null); // No campaign
 
         queryDescription = "Direct conversations only";
       }
@@ -228,9 +226,6 @@ class MessageController {
               conversationType = "campaign";
               conversationTitle =
                 conv.campaigns.title || "Campaign Application";
-            } else if (conv.bid_id && conv.bids) {
-              conversationType = "bid";
-              conversationTitle = conv.bids.title || "Bid Application";
             }
 
             return {
@@ -245,7 +240,7 @@ class MessageController {
               is_brand_owner: conv.brand_owner_id === userId,
               conversation_type: conversationType,
               conversation_title: conversationTitle,
-              source_data: conv.campaigns || conv.bids || null,
+              source_data: conv.campaigns || null,
             };
           } catch (error) {
             console.error(`❌ Error enriching conversation ${conv.id}:`, error);
@@ -393,7 +388,6 @@ class MessageController {
         message,
         media_url,
         campaign_id,
-        bid_id,
         receiver_id,
         action_required,
         action_data,
@@ -405,7 +399,6 @@ class MessageController {
         message,
         media_url,
         campaign_id,
-        bid_id,
         receiver_id,
         senderId,
       });
@@ -426,7 +419,7 @@ class MessageController {
         const { data: existingConversation, error: existingError } =
           await supabaseAdmin
             .from("conversations")
-            .select("id, campaign_id, bid_id")
+            .select("id, campaign_id")
             .or(
               `and(brand_owner_id.eq.${senderId},influencer_id.eq.${receiver_id}),and(brand_owner_id.eq.${receiver_id},influencer_id.eq.${senderId})`
             )
@@ -451,11 +444,9 @@ class MessageController {
             payment_completed: false,
           };
 
-          // Add campaign_id or bid_id if provided
+          // Add campaign_id if provided
           if (campaign_id) {
             conversationData.campaign_id = campaign_id;
-          } else if (bid_id) {
-            conversationData.bid_id = bid_id;
           }
 
           const { data: newConversation, error: convError } =
@@ -481,7 +472,7 @@ class MessageController {
       // Validate conversation exists and user has access
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
-        .select("id, brand_owner_id, influencer_id, campaign_id, bid_id")
+        .select("id, brand_owner_id, influencer_id, campaign_id")
         .eq("id", conversationId)
         .single();
 
@@ -549,7 +540,7 @@ class MessageController {
       if (io) {
         const { data: conversation, error: convError } = await supabaseAdmin
           .from("conversations")
-          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, current_action_data")
           .eq("id", conversationId)
           .single();
 
@@ -562,8 +553,7 @@ class MessageController {
           chat_status: conversation.chat_status,
           flow_state: conversation.flow_state,
           awaiting_role: conversation.awaiting_role,
-          conversation_type: conversation.campaign_id ? 'campaign' :
-            conversation.bid_id ? 'bid' : 'direct',
+          conversation_type: conversation.campaign_id ? 'campaign' : 'direct',
 
           current_action_data: conversation.current_action_data
         } : null;
@@ -2443,32 +2433,29 @@ class MessageController {
   async checkConversationExists(req, res) {
     try {
       const userId = req.user.id;
-      const { bid_id, campaign_id, user_id } = req.query;
+      const { campaign_id, user_id } = req.query;
 
-      if (!bid_id && !campaign_id && !user_id) {
+      if (!campaign_id && !user_id) {
         return res.status(400).json({
           success: false,
-          message: "At least one of bid_id, campaign_id, or user_id is required",
+          message: "At least one of campaign_id or user_id is required",
         });
       }
 
       let query = supabaseAdmin
         .from("conversations")
-        .select("id, bid_id, campaign_id, brand_owner_id, influencer_id")
+        .select("id, campaign_id, brand_owner_id, influencer_id")
         .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`); // User must be part of conversation
 
       // Add filters based on provided parameters
-      if (bid_id) {
-        query = query.eq("bid_id", bid_id);
-      }
+
       if (campaign_id) {
         query = query.eq("campaign_id", campaign_id);
       }
       if (user_id) {
         // For direct messages, check if conversation exists between current user and target user
         query = query.or(`brand_owner_id.eq.${user_id},influencer_id.eq.${user_id}`)
-          .is("campaign_id", null)
-          .is("bid_id", null);
+          .is("campaign_id", null);
       }
 
       const { data: conversation, error } = await query.maybeSingle();
@@ -2510,7 +2497,7 @@ class MessageController {
       // Get all conversations for this user
       const { data: conversations, error } = await supabaseAdmin
         .from("conversations")
-        .select("id, bid_id, campaign_id, brand_owner_id, influencer_id")
+        .select("id, campaign_id, brand_owner_id, influencer_id")
         .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`)
         .order("updated_at", { ascending: false })
         .limit(parseInt(limit));
@@ -2525,20 +2512,17 @@ class MessageController {
 
       // Build index structure
       const index = {
-        bids: {},
         campaigns: {},
         direct: {},
         lastUpdated: Date.now(),
       };
 
       conversations?.forEach((conv) => {
-        if (conv.bid_id) {
-          index.bids[conv.bid_id] = conv.id;
-        }
+
         if (conv.campaign_id) {
           index.campaigns[conv.campaign_id] = conv.id;
         }
-        if (!conv.bid_id && !conv.campaign_id) {
+        if (!conv.campaign_id) {
           // Direct conversation - map by other user's ID
           const otherUserId = conv.brand_owner_id === userId
             ? conv.influencer_id
@@ -2549,7 +2533,7 @@ class MessageController {
         }
       });
 
-      console.log(`✅ Built conversation index: ${Object.keys(index.bids).length} bids, ${Object.keys(index.campaigns).length} campaigns, ${Object.keys(index.direct).length} direct`);
+      console.log(`✅ Built conversation index: ${Object.keys(index.campaigns).length} campaigns, ${Object.keys(index.direct).length} direct`);
 
       return res.json({
         success: true,
@@ -2559,182 +2543,6 @@ class MessageController {
     } catch (error) {
       console.error("❌ Error in getConversationIndex:", error);
       return res.status(500).json({
-        success: false,
-        message: "Internal server error",
-      });
-    }
-  }
-
-  /**
-   * Get bid conversations for a user based on their role
-   */
-  async getBidConversations(req, res) {
-    try {
-      const userId = req.user.id;
-      const userRole = req.user.role;
-      const { page = 1, limit = 10 } = req.query;
-      const offset = (page - 1) * limit;
-
-      console.log(
-        `🔍 Fetching bid conversations for user: ${userId}, role: ${userRole}`
-      );
-
-      // SECURITY: Always filter by userId - user must be either brand_owner or influencer in the conversation
-      // Get bid conversations only (must have bid_id)
-      let query = supabaseAdmin
-        .from("conversations")
-        .select(
-          `
-          id, brand_owner_id, influencer_id, bid_id, chat_status, 
-          created_at, updated_at, flow_state, awaiting_role,
-          bids!inner(
-            id, title, description, min_budget, max_budget, status, requirements,
-            language, platform, content_type, category
-          )
-        `
-        )
-        .not("bid_id", "is", null)
-        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`) // CRITICAL: Always filter by userId
-        .order("updated_at", { ascending: false })
-        .range(offset, offset + limit - 1)
-        .limit(limit);
-
-      const { data: conversations, error, count } = await query;
-
-      if (error) {
-        console.error("❌ Database error fetching bid conversations:", error);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch bid conversations",
-        });
-      }
-
-      console.log(`📊 Found ${conversations?.length || 0} bid conversations`);
-
-      // Handle case where no bid conversations exist
-      if (!conversations || conversations.length === 0) {
-        return res.json({
-          success: true,
-          conversations: [],
-          pagination: {
-            page: parseInt(page),
-            limit: parseInt(limit),
-            total: 0,
-          },
-          message: "No bid conversations found",
-        });
-      }
-
-      // Get user details for conversations
-      const userIds = new Set();
-      conversations.forEach((conv) => {
-        if (conv.brand_owner_id) userIds.add(conv.brand_owner_id);
-        if (conv.influencer_id) userIds.add(conv.influencer_id);
-      });
-
-      let userMap = {};
-
-      // Only fetch user details if there are conversations
-      if (userIds.size > 0) {
-        const { data: users, error: usersError } = await supabaseAdmin
-          .from("users")
-          .select("id, name, role, profile_image_url")
-          .in("id", Array.from(userIds));
-
-        if (usersError) {
-          console.error("❌ Error fetching user details:", usersError);
-          return res.status(500).json({
-            success: false,
-            message: "Failed to fetch user details",
-          });
-        }
-
-        users.forEach((user) => {
-          userMap[user.id] = user;
-        });
-      }
-
-      // Enrich conversations with user details and last message
-      const enrichedConversations = await Promise.all(
-        conversations.map(async (conv) => {
-          try {
-            // Get last message
-            const { data: lastMessage } = await supabaseAdmin
-              .from("messages")
-              .select("message, created_at, sender_id")
-              .eq("conversation_id", conv.id)
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .single();
-
-            const otherUserId =
-              conv.brand_owner_id === userId
-                ? conv.influencer_id
-                : conv.brand_owner_id;
-
-            const otherUser = userMap[otherUserId];
-
-            return {
-              id: conv.id,
-              bid_id: conv.bid_id,
-              created_at: conv.created_at,
-              updated_at: conv.updated_at,
-              chat_status: conv.chat_status,
-              flow_state: conv.flow_state,
-              awaiting_role: conv.awaiting_role,
-              is_brand_owner: conv.brand_owner_id === userId,
-              bid: conv.bids,
-              other_user: otherUser || {
-                id: otherUserId,
-                name: "Unknown User",
-                role: "unknown",
-              },
-              last_message: lastMessage || null,
-              conversation_type: "bid",
-              conversation_title: conv.bids?.title || "Bid Application",
-            };
-          } catch (error) {
-            console.error(
-              `❌ Error enriching bid conversation ${conv.id}:`,
-              error
-            );
-            return {
-              id: conv.id,
-              bid_id: conv.bid_id,
-              created_at: conv.created_at,
-              updated_at: conv.updated_at,
-              chat_status: conv.chat_status,
-              flow_state: conv.flow_state,
-              awaiting_role: conv.awaiting_role,
-              is_brand_owner: conv.brand_owner_id === userId,
-              bid: conv.bids,
-              other_user: {
-                id: "unknown",
-                name: "Error Loading User",
-                role: "unknown",
-              },
-              last_message: null,
-              conversation_type: "bid",
-              conversation_title: "Bid Application",
-            };
-          }
-        })
-      );
-
-      res.json({
-        success: true,
-        conversations: enrichedConversations,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: count || 0,
-        },
-        conversation_type: "bid",
-        message: `Found ${enrichedConversations.length} bid conversations`,
-      });
-    } catch (error) {
-      console.error("💥 Unexpected error in getBidConversations:", error);
-      res.status(500).json({
         success: false,
         message: "Internal server error",
       });
@@ -2752,7 +2560,7 @@ class MessageController {
       const offset = (page - 1) * limit;
 
       console.log(
-        `🔍 Fetching campaign conversations for user: ${userId}, role: ${userRole}`
+        `🔍 Fetching campaign conversations for user: ${userId}, role: ${userRole} `
       );
 
       // SECURITY: Always filter by userId - user must be either brand_owner or influencer in the conversation
@@ -2761,17 +2569,17 @@ class MessageController {
         .from("conversations")
         .select(
           `
-          id, brand_owner_id, influencer_id, campaign_id, chat_status, 
-          created_at, updated_at, flow_state, awaiting_role,
-          campaigns!inner(
-            id, title, description, min_budget, max_budget, status, requirements,
-            language, platform, content_type, category, campaign_type, deliverables
-          )
+      id, brand_owner_id, influencer_id, campaign_id, chat_status,
+        created_at, updated_at, flow_state, awaiting_role,
+        campaigns!inner(
+          id, title, description, min_budget, max_budget, status, requirements,
+          language, platform, content_type, category, campaign_type, deliverables
+        )
         `
         )
         .not("campaign_id", "is", null)
         .is("bid_id", null) // No bid associated
-        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`) // CRITICAL: Always filter by userId
+        .or(`brand_owner_id.eq.${userId}, influencer_id.eq.${userId} `) // CRITICAL: Always filter by userId
         .order("updated_at", { ascending: false })
         .range(offset, offset + limit - 1)
         .limit(limit);
@@ -2878,7 +2686,7 @@ class MessageController {
             };
           } catch (error) {
             console.error(
-              `❌ Error enriching campaign conversation ${conv.id}:`,
+              `❌ Error enriching campaign conversation ${conv.id}: `,
               error
             );
             return {

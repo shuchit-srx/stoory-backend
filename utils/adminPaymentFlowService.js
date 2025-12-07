@@ -24,8 +24,7 @@ class AdminPaymentFlowService {
         .from("conversations")
         .select(`
           *,
-          campaigns (id, title, type:campaign_type),
-          bids (id, title, type:bid_type)
+          campaigns (id, title, type:campaign_type)
         `)
         .eq("id", conversationId)
         .single();
@@ -44,7 +43,6 @@ class AdminPaymentFlowService {
         .insert({
           conversation_id: conversationId,
           campaign_id: conversation.campaign_id,
-          bid_id: conversation.bid_id,
           brand_owner_id: conversation.brand_owner_id,
           influencer_id: conversation.influencer_id,
           total_amount_paise: paymentBreakdown.total_amount_paise,
@@ -144,10 +142,8 @@ class AdminPaymentFlowService {
    */
   async sendPaymentBreakdownMessage(conversationId, breakdown, conversation) {
     try {
-      const collaborationType = conversation.campaign_id ? 'Campaign' : 'Bid';
-      const collaborationTitle = conversation.campaign_id ?
-        conversation.campaigns?.title :
-        conversation.bids?.title;
+      const collaborationType = 'Campaign';
+      const collaborationTitle = conversation.campaigns?.title;
 
       const message = `💳 **Payment Breakdown - ${collaborationType} Collaboration**
 
@@ -226,7 +222,6 @@ class AdminPaymentFlowService {
         type: "credit",
         status: "completed", // Auto-completed as 0
         campaign_id: (await supabaseAdmin.from("conversations").select("campaign_id").eq("id", conversationId).single()).data.campaign_id,
-        bid_id: (await supabaseAdmin.from("conversations").select("bid_id").eq("id", conversationId).single()).data.bid_id,
         conversation_id: conversationId,
         payment_stage: "advance",
         admin_payment_tracking_id: paymentRecordId,
@@ -241,7 +236,6 @@ class AdminPaymentFlowService {
         type: "credit",
         status: "pending",
         campaign_id: advanceTransaction.campaign_id,
-        bid_id: advanceTransaction.bid_id,
         conversation_id: conversationId,
         payment_stage: "final",
         admin_payment_tracking_id: paymentRecordId,
@@ -278,12 +272,11 @@ class AdminPaymentFlowService {
           *,
           conversations (
             id,
+            id,
             campaign_id,
-            bid_id,
             brand_owner_id,
             influencer_id,
-            campaigns (title),
-            bids (title)
+            campaigns (title)
           )
         `)
         .eq("id", paymentRecordId)
@@ -382,10 +375,8 @@ class AdminPaymentFlowService {
   async sendAdvancePaymentConfirmation(paymentRecord, screenshotUrl) {
     try {
       const conversation = paymentRecord.conversations;
-      const collaborationType = conversation.campaign_id ? 'Campaign' : 'Bid';
-      const collaborationTitle = conversation.campaign_id ?
-        conversation.campaigns?.title :
-        conversation.bids?.title;
+      const collaborationType = 'Campaign';
+      const collaborationTitle = conversation.campaigns?.title;
 
       const message = `✅ **Advance Payment Confirmed!**
 
@@ -457,12 +448,11 @@ class AdminPaymentFlowService {
           *,
           conversations (
             id,
+            id,
             campaign_id,
-            bid_id,
             brand_owner_id,
             influencer_id,
-            campaigns (title),
-            bids (title)
+            campaigns (title)
           )
         `)
         .eq("id", paymentRecordId)
@@ -561,10 +551,8 @@ class AdminPaymentFlowService {
   async sendFinalPaymentConfirmation(paymentRecord, screenshotUrl) {
     try {
       const conversation = paymentRecord.conversations;
-      const collaborationType = conversation.campaign_id ? 'Campaign' : 'Bid';
-      const collaborationTitle = conversation.campaign_id ?
-        conversation.campaigns?.title :
-        conversation.bids?.title;
+      const collaborationType = 'Campaign';
+      const collaborationTitle = conversation.campaigns?.title;
 
       const message = `🎉 **Final Payment Confirmed!**
 

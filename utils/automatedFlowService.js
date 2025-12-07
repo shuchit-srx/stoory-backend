@@ -55,7 +55,7 @@ class AutomatedFlowService {
         // Fetch conversation context
         const { data: conversation } = await supabaseAdmin
           .from("conversations")
-          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data, brand_owner_id, influencer_id, updated_at, created_at")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, current_action_data, brand_owner_id, influencer_id, updated_at, created_at")
           .eq("id", conversationId)
           .single();
 
@@ -65,8 +65,7 @@ class AutomatedFlowService {
             chat_status: conversation.chat_status,
             flow_state: conversation.flow_state,
             awaiting_role: conversation.awaiting_role,
-            conversation_type: conversation.campaign_id ? 'campaign' :
-              conversation.bid_id ? 'bid' : 'direct',
+            conversation_type: conversation.campaign_id ? 'campaign' : 'direct',
             current_action_data: conversation.current_action_data
           };
 
@@ -209,221 +208,7 @@ class AutomatedFlowService {
     }
   }
 
-  /**
-   * Initialize automated conversation for a bid application
-   */
-  async initializeBidConversation(bidId, influencerId, proposedAmount) {
-    try {
-      // Get bid details
-      const { data: bid, error: bidError } = await supabaseAdmin
-        .from("bids")
-        .select("*, users!bids_created_by_fkey(name, role)")
-        .eq("id", bidId)
-        .single();
 
-      if (bidError || !bid) {
-        throw new Error("Bid not found");
-      }
-
-      // Get influencer details
-      const { data: influencer, error: influencerError } = await supabaseAdmin
-        .from("users")
-        .select("name, role")
-        .eq("id", influencerId)
-        .single();
-
-      if (influencerError || !influencer) {
-        throw new Error("Influencer not found");
-      }
-
-      // Check if conversation already exists for this specific bid context
-      const { data: existingConversations, error: checkError } =
-        await supabaseAdmin
-          .from("conversations")
-          .select("*, messages(*)")
-          .eq("bid_id", bidId)
-          .eq("brand_owner_id", bid.created_by)
-          .eq("influencer_id", influencerId);
-
-      // If conversations exist for this bid context, use the most recent one
-      if (existingConversations && existingConversations.length > 0) {
-        const sortedConversations = existingConversations.sort(
-          (a, b) => new Date(b.created_at) - new Date(a.created_at)
-        );
-        const existingConversation = sortedConversations[0];
-
-        console.log(
-          "✅ Conversation already exists for this bid:",
-          existingConversation.id
-        );
-
-        // Get the latest message to show current state
-        const { data: latestMessage, error: msgError } = await supabaseAdmin
-          .from("messages")
-          .select("*")
-          .eq("conversation_id", existingConversation.id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .single();
-
-        if (msgError) {
-          console.log("⚠️  Could not fetch latest message:", msgError.message);
-        }
-
-        return {
-          success: true,
-          conversation: existingConversation,
-          message: latestMessage || null,
-          flow_state: existingConversation.flow_state || "initial",
-          awaiting_role: existingConversation.awaiting_role || "brand_owner",
-          is_existing: true,
-          status_message:
-            "Conversation already exists for this bid - redirecting to chat",
-        };
-      }
-
-      if (checkError) {
-        console.error("❌ Error checking existing conversations:", checkError);
-        throw new Error(
-          `Failed to check existing conversations: ${checkError.message}`
-        );
-      }
-
-      // Create conversation with automated flow
-      const conversationData = {
-        bid_id: bidId,
-        brand_owner_id: bid.created_by,
-        influencer_id: influencerId,
-        flow_state: "influencer_responding", // Start directly in influencer_responding state
-        awaiting_role: "influencer", // Influencer needs to respond
-        chat_status: "automated"
-      };
-
-      const { data: conversation, error: conversationError } =
-        await supabaseAdmin
-          .from("conversations")
-          .insert(conversationData)
-          .select()
-          .single();
-
-      if (conversationError) {
-        console.error("❌ Failed to create conversation:", conversationError);
-        throw new Error(
-          `Failed to create conversation: ${conversationError.message}`
-        );
-      }
-
-      // Ensure a request exists and store the proposed amount; link it to the conversation
-      let requestForPair = null;
-      const { data: existingRequest } = await supabaseAdmin
-        .from("requests")
-        .select("id, proposed_amount")
-        .eq("bid_id", bidId)
-        .eq("influencer_id", influencerId)
-        .single();
-
-      if (existingRequest) {
-        requestForPair = existingRequest;
-        // Update proposed_amount if provided
-        if (proposedAmount) {
-          await supabaseAdmin
-            .from("requests")
-            .update({ proposed_amount: parseFloat(proposedAmount) })
-            .eq("id", existingRequest.id);
-        }
-      } else {
-        const { data: newRequest } = await supabaseAdmin
-          .from("requests")
-          .insert({
-            bid_id: bidId,
-            influencer_id: influencerId,
-            status: "connected",
-            proposed_amount: proposedAmount ? parseFloat(proposedAmount) : null
-          })
-          .select()
-          .single();
-        requestForPair = newRequest;
-      }
-
-      if (requestForPair && requestForPair.id) {
-        await supabaseAdmin
-          .from("conversations")
-          .update({ request_id: requestForPair.id })
-          .eq("id", conversation.id);
-      }
-
-      // Create initial message from brand owner to influencer
-      const initialMessage = {
-        conversation_id: conversation.id,
-        sender_id: bid.created_by, // Brand owner sends the message
-        receiver_id: influencerId,
-        message: `🤝 **Interest in Collaboration**\n\nHi **${influencer.name}**! I'm interested in connecting with you for my bid **"${bid.title}"**.\n\nYour proposed amount of **₹${proposedAmount}** looks good. Let's discuss the project details and move forward with this collaboration.`,
-        message_type: "automated",
-        action_required: true,
-        action_data: {
-          title: "🎯 **Connection Response**",
-          subtitle:
-            "Choose how you'd like to respond to this connection request:",
-          buttons: [
-            {
-              id: "accept_connection",
-              text: "Accept Connection",
-              style: "success",
-              action: "accept_connection",
-            },
-            {
-              id: "reject_connection",
-              text: "Reject Connection",
-              style: "danger",
-              action: "reject_connection",
-            },
-          ],
-          flow_state: "influencer_responding",
-          message_type: "influencer_connection_response",
-          visible_to: "influencer",
-        },
-      };
-
-      // Insert only the initial actionable message
-      const messagesToInsert = [initialMessage];
-      const { data: messages, error: messageError } = await supabaseAdmin
-        .from("messages")
-        .insert(messagesToInsert)
-        .select();
-
-      if (messageError) {
-        console.error("❌ Failed to create initial message:", messageError);
-        throw new Error(
-          `Failed to create initial message: ${messageError.message}`
-        );
-      }
-
-      // Emit socket event for new message
-      if (messages && messages[0]) {
-        await this.emitAutomatedMessage(conversation.id, messages[0]);
-      }
-
-      // FCM notification handled by emitAutomatedMessage
-
-      console.log(
-        "✅ Bid conversation initialized successfully:",
-        conversation.id
-      );
-
-      return {
-        success: true,
-        conversation: conversation,
-        message: messages[0], // Initial message
-        flow_state: "influencer_responding", // Already in influencer_responding state
-        awaiting_role: "influencer", // Influencer needs to respond
-        is_existing: false,
-        status_message: "New bid conversation created successfully",
-      };
-    } catch (error) {
-      console.error("❌ Failed to initialize bid conversation:", error);
-      throw error;
-    }
-  }
 
   /**
    * Initialize automated conversation for a campaign connection
@@ -880,7 +665,7 @@ Please respond to confirm your interest and availability for this campaign.`,
                   conversation_id: conversationId,
                   brand_owner_id: conversation.brand_owner_id,
                   influencer_id: conversation.influencer_id,
-                  source_type: conversation.campaign_id ? "campaign" : conversation.bid_id ? "bid" : "direct",
+                  source_type: conversation.campaign_id ? "campaign" : "direct",
                   request_id: conversation.request_id || null,
                 },
               };
@@ -961,45 +746,6 @@ Please respond to confirm your interest and availability for this campaign.`,
                 status: "finalized"
               })
               .eq("id", conversation.request_id);
-          } else {
-            // Fallback: upsert request by bid_id + influencer_id
-            const { data: reqRow } = await supabaseAdmin
-              .from("requests")
-              .select("id")
-              .eq("bid_id", conversation.bid_id)
-              .eq("influencer_id", conversation.influencer_id)
-              .single();
-            if (reqRow) {
-              await supabaseAdmin
-                .from("requests")
-                .update({
-                  final_agreed_amount: agreedFromNegotiation,
-                  status: "finalized"
-                })
-                .eq("id", reqRow.id);
-              await supabaseAdmin
-                .from("conversations")
-                .update({ request_id: reqRow.id })
-                .eq("id", conversationId);
-            } else {
-              const { data: newReq } = await supabaseAdmin
-                .from("requests")
-                .insert({
-                  bid_id: conversation.bid_id,
-                  influencer_id: conversation.influencer_id,
-                  status: "finalized",
-                  proposed_amount: agreedFromNegotiation,
-                  final_agreed_amount: agreedFromNegotiation
-                })
-                .select()
-                .single();
-              if (newReq) {
-                await supabaseAdmin
-                  .from("conversations")
-                  .update({ request_id: newReq.id })
-                  .eq("id", conversationId);
-              }
-            }
           }
 
           newMessage = {

@@ -17,8 +17,7 @@ class MOUService {
           *,
           brand_owner:users!conversations_brand_owner_id_fkey(id, name, email, phone, brand_name),
           influencer:users!conversations_influencer_id_fkey(id, name, email, phone),
-          campaigns(id, title, description, budget),
-          bids(id, title, description, amount)
+          campaigns(id, title, description, budget)
         `)
         .eq("id", conversationId)
         .single();
@@ -40,26 +39,18 @@ class MOUService {
           name: conversation.influencer.name
         } : null,
         campaign_id: conversation.campaign_id,
-        bid_id: conversation.bid_id,
-        campaign_title: conversation.campaigns?.title,
-        bid_title: conversation.bids?.title
+        campaign_title: conversation.campaigns?.title
       });
 
       // Get payment breakdown
       const paymentBreakdown = await this.getPaymentBreakdown(conversationId);
       console.log(`💰 [MOU] Payment breakdown:`, paymentBreakdown);
-      
+
       // Get collaboration details
-      const collaborationType = conversation.campaign_id ? "Campaign" : "Bid";
-      const collaborationTitle = conversation.campaign_id
-        ? conversation.campaigns?.title
-        : conversation.bids?.title;
-      const collaborationDescription = conversation.campaign_id
-        ? conversation.campaigns?.description
-        : conversation.bids?.description;
-      const totalAmount = conversation.campaign_id
-        ? conversation.campaigns?.budget
-        : conversation.bids?.amount;
+      const collaborationType = "Campaign";
+      const collaborationTitle = conversation.campaigns?.title;
+      const collaborationDescription = conversation.campaigns?.description;
+      const totalAmount = conversation.campaigns?.budget;
 
       // Validate required data
       if (!conversation.brand_owner) {

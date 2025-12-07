@@ -101,7 +101,7 @@ class AdminWalletController {
           const transactionId = t.id?.toLowerCase() || '';
           const razorpayId = (t.razorpay_payment_id || '').toLowerCase();
           const notes = (t.notes || '').toLowerCase();
-          
+
           return (
             (user?.name?.toLowerCase().includes(searchLower)) ||
             (user?.phone?.toLowerCase().includes(searchLower)) ||
@@ -118,7 +118,7 @@ class AdminWalletController {
         // Handle nested user data - wallets is an array, get first element
         const wallet = Array.isArray(t.wallets) ? t.wallets[0] : t.wallets;
         const user = wallet?.users ? (Array.isArray(wallet.users) ? wallet.users[0] : wallet.users) : null;
-        
+
         return {
           id: t.id,
           transaction_id: t.razorpay_payment_id || t.id,
@@ -136,23 +136,18 @@ class AdminWalletController {
             email: user.email,
             role: user.role
           } : null,
-        campaign: t.campaigns ? (Array.isArray(t.campaigns) ? t.campaigns[0] : t.campaigns) : null,
-        bid: t.bids ? (Array.isArray(t.bids) ? t.bids[0] : t.bids) : null,
-        conversation: t.conversations ? (Array.isArray(t.conversations) ? t.conversations[0] : t.conversations) : null,
-        razorpay_order_id: t.razorpay_order_id,
-        razorpay_payment_id: t.razorpay_payment_id,
-        notes: t.notes
-      };
+          campaign: t.campaigns ? (Array.isArray(t.campaigns) ? t.campaigns[0] : t.campaigns) : null,
+          conversation: t.conversations ? (Array.isArray(t.conversations) ? t.conversations[0] : t.conversations) : null,
+          razorpay_order_id: t.razorpay_order_id,
+          razorpay_payment_id: t.razorpay_payment_id,
+          notes: t.notes
+        };
       }).map(t => ({
         ...t,
         campaign: t.campaign ? {
           id: t.campaign.id,
           title: t.campaign.title,
           type: t.campaign.campaign_type
-        } : null,
-        bid: t.bid ? {
-          id: t.bid.id,
-          title: t.bid.title
         } : null,
         conversation: t.conversation ? {
           id: t.conversation.id,
@@ -215,11 +210,6 @@ class AdminWalletController {
             campaign_type,
             created_by
           ),
-          bids (
-            id,
-            title,
-            created_by
-          ),
           conversations (
             id,
             conversation_type,
@@ -271,14 +261,7 @@ class AdminWalletController {
               created_by: campaign.created_by
             } : null;
           })(),
-          bid: (() => {
-            const bid = transaction.bids ? (Array.isArray(transaction.bids) ? transaction.bids[0] : transaction.bids) : null;
-            return bid ? {
-              id: bid.id,
-              title: bid.title,
-              created_by: bid.created_by
-            } : null;
-          })(),
+
           conversation: (() => {
             const conversation = transaction.conversations ? (Array.isArray(transaction.conversations) ? transaction.conversations[0] : transaction.conversations) : null;
             return conversation ? {
@@ -373,19 +356,19 @@ class AdminWalletController {
             email: user.email,
             role: user.role
           } : null,
-        balance: {
-          available: w.balance_paise || 0,
-          available_rupees: (w.balance_paise || 0) / 100,
-          frozen: w.frozen_balance_paise || 0,
-          frozen_rupees: (w.frozen_balance_paise || 0) / 100,
-          withdrawn: w.withdrawn_balance_paise || 0,
-          withdrawn_rupees: (w.withdrawn_balance_paise || 0) / 100,
-          total: w.total_balance_paise || (w.balance_paise || 0) + (w.frozen_balance_paise || 0) + (w.withdrawn_balance_paise || 0),
-          total_rupees: ((w.total_balance_paise || (w.balance_paise || 0) + (w.frozen_balance_paise || 0) + (w.withdrawn_balance_paise || 0)) / 100)
-        },
-        created_at: w.created_at,
-        updated_at: w.updated_at
-      };
+          balance: {
+            available: w.balance_paise || 0,
+            available_rupees: (w.balance_paise || 0) / 100,
+            frozen: w.frozen_balance_paise || 0,
+            frozen_rupees: (w.frozen_balance_paise || 0) / 100,
+            withdrawn: w.withdrawn_balance_paise || 0,
+            withdrawn_rupees: (w.withdrawn_balance_paise || 0) / 100,
+            total: w.total_balance_paise || (w.balance_paise || 0) + (w.frozen_balance_paise || 0) + (w.withdrawn_balance_paise || 0),
+            total_rupees: ((w.total_balance_paise || (w.balance_paise || 0) + (w.frozen_balance_paise || 0) + (w.withdrawn_balance_paise || 0)) / 100)
+          },
+          created_at: w.created_at,
+          updated_at: w.updated_at
+        };
       });
 
       res.json({
@@ -430,7 +413,7 @@ class AdminWalletController {
 
       // Get transaction summary
       const summaryResult = await enhancedBalanceService.getTransactionSummary(userId, 30);
-      
+
       // Get recent transactions
       const historyResult = await enhancedBalanceService.getTransactionHistory(userId, 1, 10);
 
@@ -515,14 +498,14 @@ class AdminWalletController {
 
       transactions.forEach(t => {
         const amountPaise = t.amount_paise || Math.round((t.amount || 0) * 100);
-        
+
         // Categorize based on transaction type and direction
         if (t.stage === 'refund' || t.type === 'refund') {
           refunds += amountPaise;
         } else if (t.type === 'withdrawal' && t.direction === 'debit') {
           payouts += amountPaise;
-        } else if (t.campaign_id || t.bid_id) {
-          // Campaign/bid payments
+        } else if (t.campaign_id) {
+          // Campaign payments
           if (t.direction === 'credit') {
             campaignPayments += amountPaise;
           }
@@ -539,7 +522,7 @@ class AdminWalletController {
 
       res.json({
         success: true,
-        period: dateFrom && dateTo 
+        period: dateFrom && dateTo
           ? `${dateFrom} to ${dateTo}`
           : `Last ${days} days`,
         date_from: startDate.toISOString(),
@@ -640,7 +623,7 @@ class AdminWalletController {
 
       transactions.forEach(t => {
         const amountPaise = t.amount_paise || Math.round((t.amount || 0) * 100);
-        
+
         if (t.status === 'pending') {
           pendingTransactions++;
           pendingAmount += amountPaise;
@@ -654,7 +637,7 @@ class AdminWalletController {
 
       res.json({
         success: true,
-        period: dateFrom && dateTo 
+        period: dateFrom && dateTo
           ? `${dateFrom} to ${dateTo}`
           : `Last ${days} days`,
         date_from: startDate.toISOString(),
@@ -819,7 +802,7 @@ class AdminWalletController {
         const amountPaise = t.amount_paise || Math.round((t.amount || 0) * 100);
         grouped[key].count++;
         grouped[key].total_amount_paise += amountPaise;
-        
+
         if (t.direction === 'credit') {
           grouped[key].credits_paise += amountPaise;
         } else if (t.direction === 'debit') {

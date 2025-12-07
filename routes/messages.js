@@ -14,12 +14,7 @@ router.use((req, res, next) => {
 // Conversation routes - Role-based filtering
 router.get("/conversations", MessageController.getConversations); // Campaign/Bid conversations only
 router.get("/conversations/direct", MessageController.getDirectConversations); // Direct conversations only
-router.get("/conversations/bids", MessageController.getBidConversations); // Bid conversations only
-router.get(
-  "/conversations/campaigns",
-  MessageController.getCampaignConversations
-); // Campaign conversations only
-router.get("/conversations/check", MessageController.checkConversationExists); // Check if conversation exists by bid_id/campaign_id/user_id
+router.get("/conversations/check", MessageController.checkConversationExists); // Check if conversation exists by campaign_id/user_id
 router.get("/conversations/index", MessageController.getConversationIndex); // Get full conversation index for user
 router.get(
   "/conversations/:conversation_id/messages",
