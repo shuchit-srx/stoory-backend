@@ -10,85 +10,83 @@ class BulkCampaignController {
         try {
             const userId = req.user.id;
 
-            // 1. Active Campaigns Count (bulk_campaigns where status='active')
-            const { count: activeCampaignsCount, error: activeError } = await supabaseAdmin
+            // 1. Get all campaigns created by this user first
+            // We need this list to filter submissions manually
+            const { data: userCampaigns, error: campaignsError } = await supabaseAdmin
                 .from('bulk_campaigns')
-                .select('*', { count: 'exact', head: true })
-                .eq('created_by', userId)
-                .eq('status', 'active');
+                .select('*')
+                .eq('created_by', userId);
 
-            if (activeError) throw activeError;
+            if (campaignsError) throw campaignsError;
+
+            const userCampaignIds = userCampaigns.map(c => c.id);
+            const activeCampaigns = userCampaigns.filter(c => c.status === 'active');
+            const activeCampaignIds = activeCampaigns.map(c => c.id);
+
+            // 1. Active Campaigns Count
+            const activeCampaignsCount = activeCampaigns.length;
 
             // 2. Total Creators (Unique count across active bulk campaigns)
-            // fetch influencer_ids from bulk_submissions where campaign is active
-            const { data: activeCreators, error: creatorsError } = await supabaseAdmin
-                .from('bulk_submissions')
-                .select('influencer_id, bulk_campaigns!inner(status)')
-                .eq('bulk_campaigns.created_by', userId)
-                .eq('bulk_campaigns.status', 'active')
-                .in('status', ['approved', 'work_submitted', 'completed']); // 'active' creators
+            let uniqueCreators = 0;
+            if (activeCampaignIds.length > 0) {
+                const { data: activeCreators, error: creatorsError } = await supabaseAdmin
+                    .from('bulk_submissions')
+                    .select('influencer_id')
+                    .in('bulk_campaign_id', activeCampaignIds)
+                    .in('status', ['approved', 'work_submitted', 'completed']); // 'active' creators
 
-            if (creatorsError) throw creatorsError;
-
-            const uniqueCreators = new Set(activeCreators.map(s => s.influencer_id)).size;
+                if (creatorsError) throw creatorsError;
+                uniqueCreators = new Set(activeCreators.map(s => s.influencer_id)).size;
+            }
 
             // 3. Pending Actions
-            // Submission Reviews: status = 'work_submitted'
-            const { count: submissionReviews, error: subError } = await supabaseAdmin
-                .from('bulk_submissions')
-                .select('*', { count: 'exact', head: true })
-                .eq('status', 'work_submitted')
-                // Ensure linked to user's campaigns
-                .match({ 'bulk_campaigns.created_by': userId });
-            // Note: Supabase JS select with inner join usually requires explicit filters or rpc if complex
-            // Let's use the explicit relation filter approach
+            let submissionReviewsCount = 0;
+            let applicationReviewsCount = 0;
+            let totalSpent = 0;
 
-            const { data: pendingSubmissions, error: pendingSubError } = await supabaseAdmin
-                .from('bulk_submissions')
-                .select('id, bulk_campaigns!inner(created_by)')
-                .eq('bulk_campaigns.created_by', userId)
-                .eq('status', 'work_submitted');
+            if (userCampaignIds.length > 0) {
+                // Submission Reviews: status = 'work_submitted'
+                const { count: subCount, error: pendingSubError } = await supabaseAdmin
+                    .from('bulk_submissions')
+                    .select('*', { count: 'exact', head: true })
+                    .in('bulk_campaign_id', userCampaignIds)
+                    .eq('status', 'work_submitted');
 
-            if (pendingSubError) throw pendingSubError;
-            const submissionReviewsCount = pendingSubmissions.length;
+                if (pendingSubError) throw pendingSubError;
+                submissionReviewsCount = subCount || 0;
 
-            // Application Reviews: status = 'applied'
-            const { data: pendingApplications, error: pendingAppError } = await supabaseAdmin
-                .from('bulk_submissions')
-                .select('id, bulk_campaigns!inner(created_by)')
-                .eq('bulk_campaigns.created_by', userId)
-                .eq('status', 'applied');
+                // Application Reviews: status = 'applied'
+                const { count: appCount, error: pendingAppError } = await supabaseAdmin
+                    .from('bulk_submissions')
+                    .select('*', { count: 'exact', head: true })
+                    .in('bulk_campaign_id', userCampaignIds)
+                    .eq('status', 'applied');
 
-            if (pendingAppError) throw pendingAppError;
-            const applicationReviewsCount = pendingApplications.length;
+                if (pendingAppError) throw pendingAppError;
+                applicationReviewsCount = appCount || 0;
 
-            // 4. Financials
-            // Total Budget Committed: Sum of budget of all active campaigns? Or sum of agreed amounts?
-            // Requirement says: "Total Budget Committed" and "Total Spent (Approved deliverables)"
+                // 4. Financials - Total Spent (Approved deliverables)
+                const { data: approvedSubmissions, error: spentError } = await supabaseAdmin
+                    .from('bulk_submissions')
+                    .select('final_agreed_amount')
+                    .in('bulk_campaign_id', userCampaignIds)
+                    .eq('status', 'completed');
 
-            // Get all campaigns to sum budget
-            const { data: campaigns, error: campError } = await supabaseAdmin
-                .from('bulk_campaigns')
-                .select('budget, id')
-                .eq('created_by', userId)
-                .neq('status', 'draft'); // Assuming drafted budget isn't committed
+                if (spentError) throw spentError;
+                totalSpent = approvedSubmissions.reduce((sum, s) => sum + (parseFloat(s.final_agreed_amount) || 0), 0);
+            }
 
-            if (campError) throw campError;
-            const totalBudgetCommitted = campaigns.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0);
-
-            // Get all approved submissions to sum spent
-            const { data: approvedSubmissions, error: spentError } = await supabaseAdmin
-                .from('bulk_submissions')
-                .select('final_agreed_amount, bulk_campaigns!inner(created_by)')
-                .eq('bulk_campaigns.created_by', userId)
-                .eq('status', 'completed'); // or 'work_approved' depending on lifecycle
-
-            if (spentError) throw spentError;
-            const totalSpent = approvedSubmissions.reduce((sum, s) => sum + (parseFloat(s.final_agreed_amount) || 0), 0);
+            // Total Budget Committed (Sum of budget of all non-draft campaigns)
+            // Using the campaigns we already fetched
+            const totalBudgetCommitted = userCampaigns
+                .filter(c => c.status !== 'draft')
+                .reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0);
 
 
             // 5. Widgets Data (Simplified for now)
             // Recent Campaigns
+            // We can re-query with limit/order or just sort the fetched ones if list is small.
+            // But let's follow the original pattern for latest 3 to be safe on pagination logic later.
             const { data: recentCampaigns, error: recentError } = await supabaseAdmin
                 .from('bulk_campaigns')
                 .select('id, title, status, updated_at')
@@ -114,8 +112,7 @@ class BulkCampaignController {
                         }
                     },
                     widgets: {
-                        recent_campaigns: recentCampaigns,
-                        // placeholders for others
+                        recent_campaigns: recentCampaigns || [],
                         activity_feed: [],
                         performance_chart: []
                     }
@@ -140,10 +137,7 @@ class BulkCampaignController {
 
             let query = supabaseAdmin
                 .from('bulk_campaigns')
-                .select(`
-          *,
-          bulk_submissions(count)
-        `)
+                .select('*')
                 .eq('created_by', userId);
 
             if (status) {

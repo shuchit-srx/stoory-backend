@@ -796,6 +796,7 @@ app.use("/api/social-platforms", socialPlatformRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/influencers", influencerRoutes);
 
+
 // 404 handler for API routes
 app.use("/api/*", (req, res) => {
   res.status(404).json({
@@ -897,3 +898,5 @@ server.listen(PORT, "0.0.0.0", () => {
 });
 
 module.exports = { app, server, io };
+
+
