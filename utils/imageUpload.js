@@ -137,8 +137,18 @@ async function deleteImageFromStorage(imageUrl) {
     }
 }
 
+// Multer configuration for bulk campaign files (allows multiple file types)
+const uploadBulkCampaignFiles = multer({
+    storage: storage,
+    limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB limit for bulk campaign files
+    }
+    // No fileFilter - allow all file types for bulk campaigns
+});
+
 module.exports = {
     upload,
+    uploadBulkCampaignFiles,
     uploadImageToStorage,
     deleteImageFromStorage
 };
