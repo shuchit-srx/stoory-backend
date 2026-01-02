@@ -1,4 +1,4 @@
-const { supabaseAdmin } = require("../../supabase/client");
+const { supabaseAdmin } = require("../db/config");
 
 /**
  * Campaign Service

@@ -1,4 +1,4 @@
-const { supabaseAdmin } = require('../../supabase/client');
+const { supabaseAdmin } = require('../db/config');
 const { maskContent } = require('../utils/contentSafety');
 
 const ChatService = {

@@ -1,4 +1,4 @@
-const { supabaseAdmin } = require("../../supabase/client");
+const { supabaseAdmin } = require("../db/config");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");

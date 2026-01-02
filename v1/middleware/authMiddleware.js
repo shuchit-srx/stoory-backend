@@ -1,5 +1,5 @@
 const jwt = require("jsonwebtoken");
-const { supabaseAdmin } = require("../../supabase/client");
+const { supabaseAdmin } = require("../db/config");
 
 class AuthMiddleware {
   constructor() {
