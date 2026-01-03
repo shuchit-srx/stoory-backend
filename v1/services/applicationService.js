@@ -3,6 +3,47 @@ const { canTransition } = require('./applicationStateMachine');
 
 class ApplicationService {
   /**
+   * Helper method to update accepted_count in v1_campaigns table
+   * Counts applications with status ACCEPTED or COMPLETED for the campaign
+   */
+  async updateCampaignAcceptedCount(campaignId) {
+    try {
+      if (!campaignId) {
+        return { success: false, message: 'Campaign ID is required' };
+      }
+
+      // Count applications with status ACCEPTED or COMPLETED for this campaign
+      const { count, error: countError } = await supabaseAdmin
+        .from('v1_applications')
+        .select('*', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .in('status', ['ACCEPTED', 'COMPLETED']);
+
+      if (countError) {
+        console.error('[ApplicationService/updateCampaignAcceptedCount] Count error:', countError);
+        return { success: false, message: 'Failed to count applications', error: countError.message };
+      }
+
+      const acceptedCount = count || 0;
+
+      // Update accepted_count in v1_campaigns table
+      const { error: updateError } = await supabaseAdmin
+        .from('v1_campaigns')
+        .update({ accepted_count: acceptedCount })
+        .eq('id', campaignId);
+
+      if (updateError) {
+        console.error('[ApplicationService/updateCampaignAcceptedCount] Update error:', updateError);
+        return { success: false, message: 'Failed to update accepted_count', error: updateError.message };
+      }
+
+      return { success: true, count: acceptedCount };
+    } catch (err) {
+      console.error('[ApplicationService/updateCampaignAcceptedCount] Exception:', err);
+      return { success: false, message: 'Failed to update accepted_count', error: err.message };
+    }
+  }
+  /**
    * Check if brand owns the campaign (via application)
    */
   async checkBrandOwnership(applicationId, brandId) {
@@ -208,6 +249,17 @@ class ApplicationService {
           success: false,
           message: updateError.message || 'Failed to accept application',
         };
+      }
+
+      // Update accepted_count in v1_campaigns table
+      // Count all applications with status ACCEPTED or COMPLETED for this campaign
+      const campaignId = app.campaign_id;
+      if (campaignId) {
+        const countUpdateResult = await this.updateCampaignAcceptedCount(campaignId);
+        if (!countUpdateResult.success) {
+          console.error('[ApplicationService/accept] Failed to update accepted_count:', countUpdateResult.message);
+          // Don't fail the entire operation if count update fails, just log it
+        }
       }
 
       return {
