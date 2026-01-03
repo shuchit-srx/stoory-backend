@@ -4,4 +4,5 @@ module.exports = {
   ApplicationService: require("./applicationService"),
   AuthService: require("./authService"),
   ChatService: require("./chatService"),
+  UserService: require("./userService"),
 };
