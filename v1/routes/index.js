@@ -21,4 +21,8 @@ router.use('/chat', chatRoutes); // → /api/v1/chat/*
 const userRoutes = require('./users');
 router.use('/users', userRoutes); // → /api/v1/users/*
 
+// Mount v1 plan routes
+const planRoutes = require('./plans');
+router.use('/plans', planRoutes); // → /api/v1/plans/*
+
 module.exports = router;
