@@ -23,7 +23,7 @@ router.use(authMiddleware.authenticateToken);
  */
 router.post(
   "/",
-  authMiddleware.requireRole(["BRAND"]),
+  authMiddleware.requireRole(["BRAND_OWNER"]),
   (req, res, next) => {
     upload.single("coverImage")(req, res, (err) => {
       if (err) {
@@ -64,7 +64,7 @@ router.get(
  */
 router.get(
   "/my",
-  authMiddleware.requireRole(["BRAND"]),
+  authMiddleware.requireRole(["BRAND_OWNER"]),
   validateCampaignFilters,
   CampaignController.getMyCampaigns
 );
@@ -83,7 +83,7 @@ router.get("/:id", CampaignController.getCampaign);
  */
 router.put(
   "/:id",
-  authMiddleware.requireRole(["BRAND"]),
+  authMiddleware.requireRole(["BRAND_OWNER"]),
   (req, res, next) => {
     upload.single("coverImage")(req, res, (err) => {
       if (err) {
@@ -111,7 +111,7 @@ router.put(
  */
 router.delete(
   "/:id",
-  authMiddleware.requireRole(["BRAND"]),
+  authMiddleware.requireRole(["BRAND_OWNER"]),
   CampaignController.deleteCampaign
 );
 

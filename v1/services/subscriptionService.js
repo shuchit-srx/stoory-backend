@@ -222,7 +222,7 @@ class SubscriptionService {
    */
   async getCurrentSubscription(userId) {
     try {
-      // First verify the user exists and is a BRAND
+      // First verify the user exists and is a BRAND_OWNER
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
         .select("id, role")
@@ -236,10 +236,10 @@ class SubscriptionService {
         };
       }
 
-      if (user.role !== "BRAND") {
+      if (user.role !== "BRAND_OWNER") {
         return {
           success: false,
-          message: "User is not a BRAND",
+          message: "User is not a BRAND_OWNER",
         };
       }
 

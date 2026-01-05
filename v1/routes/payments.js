@@ -23,7 +23,7 @@ router.get(
 router.post(
   "/applications/:applicationId",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole(["BRAND", "ADMIN"]),
+  authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
   validateApplicationIdParam,
   PaymentController.createApplicationPaymentOrder
 );
@@ -32,7 +32,7 @@ router.post(
 router.post(
   "/verify",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole(["BRAND", "ADMIN"]),
+  authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
   validateVerifyPayment,
   PaymentController.verifyPayment
 );

@@ -98,7 +98,7 @@ class AuthService {
 
     const role = String(userDataRole).toLowerCase().trim();
     if (role === "influencer") return "INFLUENCER";
-    if (role === "brand_owner" || role === "brand") return "BRAND";
+    if (role === "brand_owner" || role === "brand" || role === "owner") return "BRAND_OWNER";
     if (role === "admin") return "ADMIN";
     return "INFLUENCER"; // default
   }
@@ -260,7 +260,7 @@ class AuthService {
             );
             // Continue anyway - user is created, profile can be added later
           }
-        } else if (role === "BRAND") {
+        } else if (role === "BRAND_OWNER") {
           const profileResult = await this.createBrandProfile(user, userData);
           if (!profileResult.success) {
             console.error(
@@ -646,7 +646,7 @@ class AuthService {
         .from("v1_users")
         .select("*")
         .eq("email", email)
-        .eq("role", "BRAND")
+        .eq("role", "BRAND_OWNER")
         .eq("is_deleted", false)
         .maybeSingle();
 
@@ -730,7 +730,7 @@ class AuthService {
           id,
           email,
           password_hash: passwordHash,
-          role: "BRAND",
+          role: "BRAND_OWNER",
           name: name || null,
           email_verified: false,
           password_reset_token: emailVerificationToken, // Temporarily store here
@@ -884,7 +884,7 @@ class AuthService {
         .from("v1_users")
         .select("*")
         .eq("password_reset_token", token)
-        .eq("role", "BRAND")
+        .eq("role", "BRAND_OWNER")
         .eq("is_deleted", false)
         .gt("password_reset_token_expires_at", new Date().toISOString())
         .maybeSingle();
@@ -1080,7 +1080,7 @@ class AuthService {
         .from("v1_users")
         .select("*")
         .eq("password_reset_token", token)
-        .eq("role", "BRAND")
+        .eq("role", "BRAND_OWNER")
         .eq("is_deleted", false)
         .gt("password_reset_token_expires_at", new Date().toISOString())
         .maybeSingle();
@@ -1233,7 +1233,7 @@ class AuthService {
 
           updatedProfile = createdProfile;
         } else {
-          // For BRAND or other roles, handle differently if needed
+          // For BRAND_OWNER or other roles, handle differently if needed
           return {
             success: false,
             message: "Profile image upload only supported for influencers",
@@ -1492,13 +1492,13 @@ class AuthService {
   // }
 
   /**
-   * Complete profile - handles both INFLUENCER and BRAND roles
+   * Complete profile - handles both INFLUENCER and BRAND_OWNER roles
    */
   async completeProfile(userId, userRole, profileData) {
     try {
       if (userRole === "INFLUENCER") {
         return await this.completeInfluencerProfile(userId, profileData);
-      } else if (userRole === "BRAND") {
+      } else if (userRole === "BRAND_OWNER") {
         return await this.completeBrandProfile(userId, profileData);
       } else {
         return {

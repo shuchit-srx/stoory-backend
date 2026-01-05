@@ -13,7 +13,7 @@ const { validateCreatePlan, validateUpdatePlan } = require("../validators/planVa
 router.get(
   "/",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole(["BRAND", "ADMIN"]),
+  authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
   PlanController.getAllPlans
 );
 

@@ -101,7 +101,7 @@ class SubscriptionController {
       const result = await SubscriptionService.getCurrentSubscription(userId);
 
       if (!result.success) {
-        const statusCode = result.message === "User not found" || result.message === "User is not a BRAND" ? 404 : 500;
+        const statusCode = result.message === "User not found" || result.message === "User is not a BRAND_OWNER" ? 404 : 500;
         return res.status(statusCode).json({
           success: false,
           message: result.message || "Failed to fetch subscription",

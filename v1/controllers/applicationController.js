@@ -157,7 +157,7 @@ class ApplicationController {
       
       // If user is a brand owner, get their brand profile ID
       let brandId = null;
-      if (user.role === 'BRAND') {
+      if (user.role === 'BRAND_OWNER') {
         const brandProfileResult = await this.getBrandProfileId(user.id);
         if (!brandProfileResult || !brandProfileResult.success) {
           const errorMsg = brandProfileResult?.error || "Unknown error";

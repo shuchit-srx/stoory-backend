@@ -20,6 +20,18 @@ const server = http.createServer(app);
 app.use(cors());
 app.use(express.json());
 
+// Health check endpoint (must be before /api/v1 routes)
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Stoory Backend v1 is running",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "development",
+    version: "1.0.0"
+  });
+});
+
+
 // Mount the router on the app at /api/v1
 app.use("/api/v1", router);
 

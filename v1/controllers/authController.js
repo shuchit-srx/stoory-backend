@@ -362,7 +362,7 @@ class AuthController {
         if (max_value !== undefined) {
           profileData.max_value = max_value;
         }
-      } else if (userRole === "BRAND") {
+      } else if (userRole === "BRAND_OWNER") {
         // Brand-specific fields
         if (brand_name !== undefined) {
           profileData.brand_name = brand_name;
@@ -414,7 +414,7 @@ class AuthController {
           if (result.profile_image_url) {
             response.profile_image_url = result.profile_image_url;
           }
-        } else if (userRole === "BRAND") {
+        } else if (userRole === "BRAND_OWNER") {
           if (result.brand_logo_url) {
             response.brand_logo_url = result.brand_logo_url;
           }

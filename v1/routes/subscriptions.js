@@ -12,7 +12,7 @@ const authMiddleware = require("../middleware/authMiddleware");
 router.post(
   "/",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole("BRAND"),
+  authMiddleware.requireRole("BRAND_OWNER"),
   SubscriptionController.createSubscription
 );
 
@@ -36,7 +36,7 @@ router.get(
 router.delete(
   "/",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole("BRAND"),
+  authMiddleware.requireRole("BRAND_OWNER"),
   SubscriptionController.cancelSubscription
 );
 

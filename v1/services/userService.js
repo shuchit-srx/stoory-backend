@@ -7,7 +7,7 @@ const { supabaseAdmin } = require("../db/config");
 class UserService {
   /**
    * Get user details with all related data
-   * Returns different data based on user role (BRAND or INFLUENCER)
+   * Returns different data based on user role (BRAND_OWNER or INFLUENCER)
    */
   async getUser(userId) {
     try {
@@ -27,7 +27,7 @@ class UserService {
       }
 
       // Get role-specific data
-      if (user.role === "BRAND") {
+      if (user.role === "BRAND_OWNER") {
         return await this.getBrandUserData(user);
       } else if (user.role === "INFLUENCER") {
         return await this.getInfluencerUserData(user);
