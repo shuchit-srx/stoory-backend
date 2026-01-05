@@ -1121,17 +1121,20 @@ class AuthService {
     }
   }
 
-  // ---------- Profile Image Upload ----------
+  // ---------- Profile Image Upload (moved to ProfileService) ----------
+  // All profile-related methods have been moved to ProfileService
+  // See v1/services/profileService.js for completeProfile, uploadProfileImage, etc.
 
-  async uploadProfileImage(userId, fileBuffer, fileName) {
-    try {
-      const {
-        uploadImageToStorage,
-        deleteImageFromStorage,
-      } = require("../../utils/imageUpload");
+  // ---------- Complete Profile (moved to ProfileService) ----------
+  // All profile completion methods have been moved to ProfileService
+  // The methods below are kept for backward compatibility but delegate to ProfileService
 
-      // 1) Get user to check role
-      const { data: user, error: userError } = await supabaseAdmin
+  /**
+   * Normalize platform name to match database enum (INSTAGRAM | FACEBOOK | YOUTUBE)
+   * NOTE: This method is kept for backward compatibility but profile-related methods
+   * have been moved to ProfileService
+   */
+  normalizePlatform(platformName) {
         .from("v1_users")
         .select("id, role")
         .eq("id", userId)
@@ -1493,30 +1496,19 @@ class AuthService {
 
   /**
    * Complete profile - handles both INFLUENCER and BRAND_OWNER roles
+   * NOTE: This method has been moved to ProfileService
+   * @deprecated Use ProfileService.completeProfile instead
    */
   async completeProfile(userId, userRole, profileData) {
-    try {
-      if (userRole === "INFLUENCER") {
-        return await this.completeInfluencerProfile(userId, profileData);
-      } else if (userRole === "BRAND_OWNER") {
-        return await this.completeBrandProfile(userId, profileData);
-      } else {
-        return {
-          success: false,
-          message: "Profile completion not supported for this role",
-        };
-      }
-    } catch (err) {
-      console.error("[v1/completeProfile] Exception:", err);
-      return {
-        success: false,
-        message: err.message || "Internal server error",
-      };
-    }
+    // Redirect to ProfileService for backward compatibility
+    const { ProfileService } = require("./profileService");
+    return await ProfileService.completeProfile(userId, userRole, profileData);
   }
 
   /**
    * Complete influencer profile with PAN, social platforms, languages, categories
+   * NOTE: This method has been moved to ProfileService
+   * @deprecated Use ProfileService.completeInfluencerProfile instead
    */
   async completeInfluencerProfile(userId, profileData) {
     try {
@@ -1806,6 +1798,8 @@ class AuthService {
 
   /**
    * Complete brand profile with PAN, brand_name, bio, brand_logo
+   * NOTE: This method has been moved to ProfileService
+   * @deprecated Use ProfileService.completeBrandProfile instead
    */
   async completeBrandProfile(userId, profileData) {
     try {
@@ -2114,6 +2108,8 @@ class AuthService {
 
   /**
    * Calculate brand profile completion percentage
+   * NOTE: This method has been moved to ProfileService
+   * @deprecated Use ProfileService.calculateBrandProfileCompletion instead
    */
   calculateBrandProfileCompletion(profile) {
     let completed = 0;
@@ -2140,8 +2136,9 @@ class AuthService {
 
   /**
    * Calculate influencer profile completion percentage
+   * NOTE: This method has been moved to ProfileService
+   * @deprecated Use ProfileService.calculateProfileCompletion instead
    */
- 
   calculateProfileCompletion(profile, extras = {}) {
     let completed = 0;
     let total = 0;

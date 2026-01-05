@@ -6,6 +6,10 @@ const router = express.Router();
 const authRoutes = require("./auth");
 router.use("/auth", authRoutes); // → /api/v1/auth/*
 
+// Mount v1 profile routes
+const profileRoutes = require("./profile");
+router.use("/profile", profileRoutes); // → /api/v1/profile/*
+
 // Mount v1 campaign routes
 const campaignRoutes = require("./campaigns");
 router.use("/campaigns", campaignRoutes); // → /api/v1/campaigns/*

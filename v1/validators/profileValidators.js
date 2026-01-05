@@ -1,10 +1,5 @@
 const { body } = require("express-validator");
 
-/**
- * Profile Management Validators
- * For profile completion endpoints
- */
-
 const validateCompleteProfile = [
   // Common fields
   body("pan_number")
@@ -17,6 +12,7 @@ const validateCompleteProfile = [
     .isString()
     .withMessage("UPI ID must be a string"),
   
+
   // Influencer-specific fields
   body("social_platforms")
     .optional()
@@ -48,6 +44,7 @@ const validateCompleteProfile = [
     .isIn(["MANUAL", "GRAPH_API"])
     .withMessage("Data source must be MANUAL or GRAPH_API"),
   
+
   // Languages - array of strings
   body("languages")
     .optional()
@@ -58,6 +55,7 @@ const validateCompleteProfile = [
     .isString()
     .withMessage("Each language must be a string"),
   
+
   // Categories - array of strings
   body("categories")
     .optional()
@@ -68,6 +66,7 @@ const validateCompleteProfile = [
     .isString()
     .withMessage("Each category must be a string"),
   
+
   // Common profile fields (used by both influencer and brand)
   body("bio")
     .optional()
@@ -105,6 +104,7 @@ const validateCompleteProfile = [
     .isNumeric()
     .withMessage("Max value must be a number"),
   
+    
   // Brand-specific fields
   body("brand_name")
     .optional()
