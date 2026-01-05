@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const PlanController = require("../controllers/planController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { normalizeEnums } = require("../middleware/enumNormalizer");
 const { validateCreatePlan, validateUpdatePlan } = require("../validators/planValidators");
 
 /**
@@ -22,6 +23,7 @@ router.post(
   "/",
   authMiddleware.authenticateToken,
   authMiddleware.requireRole("ADMIN"),
+  normalizeEnums,
   validateCreatePlan,
   PlanController.createPlan
 );
@@ -31,6 +33,7 @@ router.put(
   "/:id",
   authMiddleware.authenticateToken,
   authMiddleware.requireRole("ADMIN"),
+  normalizeEnums,
   validateUpdatePlan,
   PlanController.updatePlan
 );

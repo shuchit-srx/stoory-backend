@@ -840,7 +840,6 @@ class ProfileService {
         success: true,
         user: filteredUserData,
         profile: updatedProfile,
-        brand_logo_url: brandLogoUrl || updatedProfile.brand_logo_url,
         message: "Profile updated successfully",
       };
     } catch (err) {

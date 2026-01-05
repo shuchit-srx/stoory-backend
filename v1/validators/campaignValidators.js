@@ -14,27 +14,28 @@ const validateCreateCampaign = [
     .trim(),
   body("type")
     .optional()
-    .isIn(["NORMAL", "BULK", "normal", "bulk"])
-    .withMessage("Type must be NORMAL or BULK"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NORMAL", "BULK"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Type must be NORMAL or BULK");
+      }
+      return true;
+    }),
   body("status")
     .optional()
-    .isIn([
-      "DRAFT",
-      "LIVE",
-      "LOCKED",
-      "ACTIVE",
-      "COMPLETED",
-      "EXPIRED",
-      "CANCELLED",
-      "draft",
-      "live",
-      "locked",
-      "active",
-      "completed",
-      "expired",
-      "cancelled",
-    ])
-    .withMessage("Invalid status"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+      }
+      return true;
+    }),
   body("min_influencers")
     .optional()
     .isInt({ min: 0 })
@@ -83,8 +84,15 @@ const validateCreateCampaign = [
   body("influencer_tier")
     .optional()
     .isString()
-    .isIn(["NANO", "MICRO", "MID", "MACRO", "nano", "micro", "mid", "macro"])
-    .withMessage("influencer_tier must be NANO, MICRO, MID, or MACRO"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("influencer_tier must be NANO, MICRO, MID, or MACRO");
+      }
+      return true;
+    }),
   body("categories")
     .optional()
     .isString()
@@ -127,27 +135,28 @@ const validateUpdateCampaign = [
     .trim(),
   body("type")
     .optional()
-    .isIn(["NORMAL", "BULK", "normal", "bulk"])
-    .withMessage("Type must be NORMAL or BULK"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NORMAL", "BULK"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Type must be NORMAL or BULK");
+      }
+      return true;
+    }),
   body("status")
     .optional()
-    .isIn([
-      "DRAFT",
-      "LIVE",
-      "LOCKED",
-      "ACTIVE",
-      "COMPLETED",
-      "EXPIRED",
-      "CANCELLED",
-      "draft",
-      "live",
-      "locked",
-      "active",
-      "completed",
-      "expired",
-      "cancelled",
-    ])
-    .withMessage("Invalid status"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+      }
+      return true;
+    }),
   body("min_influencers")
     .optional()
     .isInt({ min: 0 })
@@ -195,8 +204,15 @@ const validateUpdateCampaign = [
   body("influencer_tier")
     .optional()
     .isString()
-    .isIn(["NANO", "MICRO", "MID", "MACRO", "nano", "micro", "mid", "macro"])
-    .withMessage("influencer_tier must be NANO, MICRO, MID, or MACRO"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("influencer_tier must be NANO, MICRO, MID, or MACRO");
+      }
+      return true;
+    }),
   body("categories")
     .optional()
     .isString()
@@ -234,27 +250,28 @@ const validateUpdateCampaign = [
 const validateCampaignFilters = [
   query("status")
     .optional()
-    .isIn([
-      "DRAFT",
-      "LIVE",
-      "LOCKED",
-      "ACTIVE",
-      "COMPLETED",
-      "EXPIRED",
-      "CANCELLED",
-      "draft",
-      "live",
-      "locked",
-      "active",
-      "completed",
-      "expired",
-      "cancelled",
-    ])
-    .withMessage("Invalid status filter"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Invalid status filter. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+      }
+      return true;
+    }),
   query("type")
     .optional()
-    .isIn(["NORMAL", "BULK", "normal", "bulk"])
-    .withMessage("Invalid type filter"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NORMAL", "BULK"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Invalid type filter. Must be NORMAL or BULK");
+      }
+      return true;
+    }),
   query("brand_id")
     .optional()
     .isUUID()

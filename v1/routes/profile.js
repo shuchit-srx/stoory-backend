@@ -3,12 +3,14 @@ const router = express.Router();
 const { ProfileController } = require("../controllers/profileController");
 const { validateCompleteProfile } = require("../validators");
 const authMiddleware = require("../middleware/authMiddleware");
+const { normalizeEnums } = require("../middleware/enumNormalizer");
 const { upload } = require("../../utils/imageUpload");
 
 // Single endpoint for updating profile based on user role
 router.put(
   "/update",
   authMiddleware.authenticateToken,
+  normalizeEnums,
   // Handle multipart/form-data for profile image (influencers) or brand logo (brands)
   (req, res, next) => {
     const contentType = req.headers["content-type"] || "";

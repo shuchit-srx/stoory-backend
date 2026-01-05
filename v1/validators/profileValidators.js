@@ -70,8 +70,15 @@ const validateCompleteProfile = [
   body("social_platforms.*.data_source")
     .optional()
     .isString()
-    .isIn(["MANUAL", "GRAPH_API"])
-    .withMessage("Data source must be MANUAL or GRAPH_API"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["MANUAL", "GRAPH_API"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Data source must be MANUAL or GRAPH_API");
+      }
+      return true;
+    }),
   
 
   // Languages - array of strings
@@ -115,15 +122,29 @@ const validateCompleteProfile = [
   body("gender")
     .optional()
     .isString()
-    .isIn(["MALE", "FEMALE", "OTHER"])
-    .withMessage("Gender must be MALE, FEMALE, or OTHER"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["MALE", "FEMALE", "OTHER"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Gender must be MALE, FEMALE, or OTHER");
+      }
+      return true;
+    }),
   
   // Influencer-specific fields
   body("tier")
     .optional()
     .isString()
-    .isIn(["NANO", "MICRO", "MID", "MACRO"])
-    .withMessage("Tier must be NANO, MICRO, MID, or MACRO"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Tier must be NANO, MICRO, MID, or MACRO");
+      }
+      return true;
+    }),
   body("min_value")
     .optional()
     .isNumeric()

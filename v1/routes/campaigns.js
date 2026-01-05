@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const CampaignController = require("../controllers/campaignController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { normalizeEnums } = require("../middleware/enumNormalizer");
 const {
   validateCreateCampaign,
   validateUpdateCampaign,
@@ -24,6 +25,7 @@ router.use(authMiddleware.authenticateToken);
 router.post(
   "/",
   authMiddleware.requireRole(["BRAND_OWNER"]),
+  normalizeEnums,
   (req, res, next) => {
     upload.single("coverImage")(req, res, (err) => {
       if (err) {
@@ -53,6 +55,7 @@ router.post(
  */
 router.get(
   "/",
+  normalizeEnums,
   validateCampaignFilters,
   CampaignController.getCampaigns
 );
@@ -65,6 +68,7 @@ router.get(
 router.get(
   "/my",
   authMiddleware.requireRole(["BRAND_OWNER"]),
+  normalizeEnums,
   validateCampaignFilters,
   CampaignController.getMyCampaigns
 );
@@ -84,6 +88,7 @@ router.get("/:id", CampaignController.getCampaign);
 router.put(
   "/:id",
   authMiddleware.requireRole(["BRAND_OWNER"]),
+  normalizeEnums,
   (req, res, next) => {
     upload.single("coverImage")(req, res, (err) => {
       if (err) {

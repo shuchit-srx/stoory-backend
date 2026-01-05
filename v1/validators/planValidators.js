@@ -30,8 +30,15 @@ const validateCreatePlan = [
     .notEmpty()
     .withMessage("billing_cycle is required")
     .isString()
-    .isIn(["MONTHLY", "YEARLY", "monthly", "yearly"])
-    .withMessage("billing_cycle must be MONTHLY or YEARLY"),
+    .custom((value) => {
+      if (!value) return false;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["MONTHLY", "YEARLY"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("billing_cycle must be MONTHLY or YEARLY");
+      }
+      return true;
+    }),
 
   body("is_active")
     .optional()
@@ -67,8 +74,15 @@ const validateUpdatePlan = [
   body("billing_cycle")
     .optional()
     .isString()
-    .isIn(["MONTHLY", "YEARLY", "monthly", "yearly"])
-    .withMessage("billing_cycle must be MONTHLY or YEARLY"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["MONTHLY", "YEARLY"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("billing_cycle must be MONTHLY or YEARLY");
+      }
+      return true;
+    }),
 
   body("is_active")
     .optional()
