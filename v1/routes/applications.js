@@ -4,6 +4,7 @@ const authMiddleware = require('../middleware/authMiddleware');
 const {
   validateApply,
   validateAccept,
+  validateBulkAccept,
   validateCancel,
   validateComplete,
 } = require('../validators/applicationValidators');
@@ -22,6 +23,14 @@ router.post(
   authMiddleware.requireRole('BRAND'),
   validateAccept,
   applicationController.accept
+);
+
+router.post(
+  '/bulk-accept',
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole('BRAND'),
+  validateBulkAccept,
+  applicationController.bulkAccept
 );
 
 router.post(

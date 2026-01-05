@@ -197,6 +197,190 @@ class ApplicationService {
 }
 
   /**
+   * Bulk accept multiple applications for a campaign
+   */
+  async bulkAccept({ campaignId, applications, brandId }) {
+    try {
+      if (!campaignId) {
+        return { success: false, message: 'campaignId is required' };
+      }
+
+      if (!Array.isArray(applications) || applications.length === 0) {
+        return {
+          success: false,
+          message: 'applications array is required and must not be empty',
+        };
+      }
+
+      // Verify brand owns the campaign
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('id, brand_id')
+        .eq('id', campaignId)
+        .maybeSingle();
+
+      if (campaignError) {
+        console.error('[ApplicationService/bulkAccept] Campaign check error:', campaignError);
+        return { success: false, message: 'Database error' };
+      }
+
+      if (!campaign) {
+        return { success: false, message: 'Campaign not found' };
+      }
+
+      if (campaign.brand_id !== brandId) {
+        return { success: false, message: 'Unauthorized: You do not own this campaign' };
+      }
+
+      // Verify all application IDs belong to this campaign and fetch their current status
+      const applicationIds = applications.map(app => app.applicationId);
+      const { data: existingApplications, error: fetchError } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, campaign_id, status, brand_id')
+        .in('id', applicationIds);
+
+      if (fetchError) {
+        console.error('[ApplicationService/bulkAccept] Fetch applications error:', fetchError);
+        return { success: false, message: 'Database error' };
+      }
+
+      if (!existingApplications || existingApplications.length !== applicationIds.length) {
+        return { success: false, message: 'One or more applications not found' };
+      }
+
+      // Verify all applications belong to the specified campaign
+      const invalidApplications = existingApplications.filter(app => app.campaign_id !== campaignId);
+      if (invalidApplications.length > 0) {
+        return {
+          success: false,
+          message: `One or more applications do not belong to campaign ${campaignId}`,
+        };
+      }
+
+      const results = [];
+      const errors = [];
+      const campaignIdsToUpdate = new Set();
+
+      // Process each application
+      for (const appData of applications) {
+        const { applicationId, agreedAmount, platformFeePercent, requiresScript } = appData;
+        let individualResult = { applicationId, success: false, message: 'Unknown error' };
+
+        try {
+          // Validate inputs
+          if (typeof agreedAmount !== 'number' || agreedAmount <= 0) {
+            individualResult.message = 'Invalid agreedAmount. Must be a positive number.';
+            errors.push({ applicationId, error: individualResult.message });
+            results.push(individualResult);
+            continue;
+          }
+
+          if (typeof platformFeePercent !== 'number' || platformFeePercent < 0 || platformFeePercent > 100) {
+            individualResult.message = 'Invalid platformFeePercent. Must be between 0 and 100.';
+            errors.push({ applicationId, error: individualResult.message });
+            results.push(individualResult);
+            continue;
+          }
+
+          // Find the existing application
+          const existingApp = existingApplications.find(app => app.id === applicationId);
+          if (!existingApp) {
+            individualResult.message = 'Application not found';
+            errors.push({ applicationId, error: individualResult.message });
+            results.push(individualResult);
+            continue;
+          }
+
+          // Check state transition
+          if (!canTransition(existingApp.status, 'ACCEPTED')) {
+            individualResult.message = `Cannot accept application. Current status: ${existingApp.status}`;
+            errors.push({ applicationId, error: individualResult.message });
+            results.push(individualResult);
+            continue;
+          }
+
+          const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
+          const netAmount = agreedAmount - platformFeeAmount;
+          const phase = requiresScript ? 'SCRIPT' : 'WORK';
+
+          // Update application
+          const { data: updated, error: updateError } = await supabaseAdmin
+            .from('v1_applications')
+            .update({
+              status: 'ACCEPTED',
+              phase: phase,
+              agreed_amount: agreedAmount,
+              platform_fee_percent: platformFeePercent,
+              platform_fee_amount: platformFeeAmount,
+              net_amount: netAmount,
+              brand_id: brandId
+            })
+            .eq('id', applicationId)
+            .select()
+            .single();
+
+          if (updateError) {
+            console.error(`[ApplicationService/bulkAccept] Update error for ${applicationId}:`, updateError);
+            individualResult.message = updateError.message || 'Failed to accept application';
+            errors.push({ applicationId, error: individualResult.message });
+            results.push(individualResult);
+            continue;
+          }
+
+          individualResult = {
+            applicationId,
+            success: true,
+            message: 'Application accepted successfully',
+            application: updated,
+          };
+          results.push(individualResult);
+
+          if (existingApp.campaign_id) {
+            campaignIdsToUpdate.add(existingApp.campaign_id);
+          }
+
+        } catch (err) {
+          console.error(`[ApplicationService/bulkAccept] Exception for ${applicationId}:`, err);
+          individualResult.message = err.message || 'Failed to accept application';
+          errors.push({ applicationId, error: individualResult.message });
+          results.push(individualResult);
+        }
+      }
+
+      // Update accepted_count for all affected campaigns (usually just one)
+      for (const campId of campaignIdsToUpdate) {
+        const countUpdateResult = await this.updateCampaignAcceptedCount(campId);
+        if (!countUpdateResult.success) {
+          console.error(`[ApplicationService/bulkAccept] Failed to update accepted_count for campaign ${campId}:`, countUpdateResult.message);
+          // Log error but don't fail the entire bulk operation
+        }
+      }
+
+      const succeededCount = results.filter(r => r.success).length;
+      const failedCount = results.filter(r => !r.success).length;
+
+      const overallSuccess = errors.length === 0;
+      const overallMessage = `Bulk accept completed. ${succeededCount} succeeded, ${failedCount} failed.`;
+
+      return {
+        success: overallSuccess,
+        message: overallMessage,
+        total: applications.length,
+        succeeded: succeededCount,
+        failed: failedCount,
+        results: results,
+        ...(errors.length > 0 && { errors }),
+      };
+    } catch (err) {
+      console.error('[ApplicationService/bulkAccept] Exception:', err);
+      return {
+        success: false,
+        message: err.message || 'Failed to bulk accept applications',
+      };
+    }
+  }
+
+  /**
    * Accept an application
    */
   async accept({

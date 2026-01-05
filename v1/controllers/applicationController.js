@@ -104,6 +104,48 @@ class ApplicationController {
     }
   }
 
+  async bulkAccept(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const userId = req.user.id;
+
+      // Get brand_id from brand profile
+      const brandProfileResult = await this.getBrandProfileId(userId);
+      if (!brandProfileResult || !brandProfileResult.success) {
+        const errorMsg = brandProfileResult?.error || "Unknown error";
+        const isNotFound = errorMsg.includes("not found");
+        const status = isNotFound ? 404 : 500;
+        return res.status(status).json({
+          success: false,
+          message: isNotFound
+            ? "Brand profile not found. Please complete your profile first."
+            : "Failed to fetch brand profile",
+          error: errorMsg,
+        });
+      }
+
+      const result = await ApplicationService.bulkAccept({
+        campaignId: req.body.campaignId,
+        applications: req.body.applications,
+        brandId: brandProfileResult.brandId,
+      });
+
+      // Return 200 for full success, 207 for partial success
+      const statusCode = result.success ? 200 : 207;
+      return res.status(statusCode).json(result);
+    } catch (err) {
+      console.error('[ApplicationController/bulkAccept] Exception:', err);
+      return res.status(500).json({
+        success: false,
+        message: err.message || 'Failed to bulk accept applications',
+      });
+    }
+  }
+
   async cancel(req, res) {
     try {
       const errors = validationResult(req);
@@ -176,6 +218,7 @@ class ApplicationController {
 const applicationController = new ApplicationController();
 applicationController.apply = applicationController.apply.bind(applicationController);
 applicationController.accept = applicationController.accept.bind(applicationController);
+applicationController.bulkAccept = applicationController.bulkAccept.bind(applicationController);
 applicationController.cancel = applicationController.cancel.bind(applicationController);
 applicationController.complete = applicationController.complete.bind(applicationController);
 

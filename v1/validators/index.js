@@ -8,6 +8,7 @@ const passwordValidators = require("./passwordValidators");
 const profileValidators = require("./profileValidators");
 const campaignValidators = require("./campaignValidators");
 const applicationValidators = require("./applicationValidators");
+const paymentValidators = require("./paymentValidators");
 
 module.exports = {
   // OTP Authentication validators
@@ -20,4 +21,6 @@ module.exports = {
   ...campaignValidators,
   // Application Management validators
   ...applicationValidators,
+  // Payment Management validators
+  ...paymentValidators,
 };

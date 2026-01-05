@@ -32,12 +32,19 @@ app.use((err, req, res, next) => {
   res.status(500).send('Something broke!');
 });
 
-const PORT = process.env.PORT || 3000;
+// Server startup moved to root index.js
+// const PORT = process.env.PORT || 3000;
+// 
+// server.listen(PORT, () => {
+//   console.log(`Server running on port ${PORT}`);
+//   console.log(`Socket.io initialized`);
+//   console.log(`✅ v1 API routes mounted at /api/v1`);
+// });
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Socket.io initialized`);
-  console.log(`✅ v1 API routes mounted at /api/v1`);
-});
-
-module.exports = router;
+// Export app, server, io, and router for use by root index.js
+module.exports = {
+  app,
+  server,
+  io,
+  router
+};
