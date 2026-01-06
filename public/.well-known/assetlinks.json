@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.stoory",
+      "sha256_cert_fingerprints": [
+        "4A:84:47:3E:D3:2C:DF:D7:76:48:5D:B6:4D:19:30:02:E3:33:7D:6F:63:B1:2C:E6:3A:56:A4:C5:F7:9B:DE:9A"
+      ]
+    }
+  }
+]
+

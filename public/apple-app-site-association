@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "7WNNCU4HW5.com.stoory",
+        "paths": [
+          "/oauth/*"
+        ]
+      }
+    ]
+  }
+}
+
