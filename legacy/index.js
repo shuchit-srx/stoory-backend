@@ -864,35 +864,35 @@ const {
 app.post("/webhook/razorpay", SubscriptionController.handleWebhook);
 
 // API routes (legacy)
-app.use("/api/auth", authRoutes);
-app.use("/api/campaigns", campaignRoutes);
-app.use("/api/dashboard", dashboardRoutes);
+// app.use("/api/auth", authRoutes);
+// app.use("/api/campaigns", campaignRoutes);
+// app.use("/api/dashboard", dashboardRoutes);
 
-app.use("/api/requests", requestRoutes);
-app.use("/api/messages", messageRoutes);
-app.use("/api/conversations", conversationRoutes);
-app.use("/api/payments", paymentRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/subscriptions", subscriptionRoutes);
-app.use("/api/notifications", notificationRoutes);
-app.use("/api/fcm", fcmRoutes);
-app.use("/api/attachments", attachmentRoutes);
-app.use("/api/storage", directStorageRoutes);
-app.use("/api/admin/payments", adminPaymentRoutes);
-app.use("/api/admin/wallet", adminWalletRoutes);
-app.use("/api/wallet", enhancedWalletRoutes);
-app.use("/api/admin/settings", adminSettingsRoutes);
-app.use("/api/admin/commission-settings", commissionSettingsRoutes);
-app.use("/api/coupons", couponRoutes);
-app.use("/api/social-platforms", socialPlatformRoutes);
-app.use("/api/reports", reportRoutes);
-app.use("/api/influencers", influencerRoutes);
+// app.use("/api/requests", requestRoutes);
+// app.use("/api/messages", messageRoutes);
+// app.use("/api/conversations", conversationRoutes);
+// app.use("/api/payments", paymentRoutes);
+// app.use("/api/users", userRoutes);
+// app.use("/api/subscriptions", subscriptionRoutes);
+// app.use("/api/notifications", notificationRoutes);
+// app.use("/api/fcm", fcmRoutes);
+// app.use("/api/attachments", attachmentRoutes);
+// app.use("/api/storage", directStorageRoutes);
+// app.use("/api/admin/payments", adminPaymentRoutes);
+// app.use("/api/admin/wallet", adminWalletRoutes);
+// app.use("/api/wallet", enhancedWalletRoutes);
+// app.use("/api/admin/settings", adminSettingsRoutes);
+// app.use("/api/admin/commission-settings", commissionSettingsRoutes);
+// app.use("/api/coupons", couponRoutes);
+// app.use("/api/social-platforms", socialPlatformRoutes);
+// app.use("/api/reports", reportRoutes);
+// app.use("/api/influencers", influencerRoutes);
 
 // v1 API routes (new tables, new flow)
 try {
   const v1Router = require("../v1");
   // Mount before the /api/* 404 handler so it is reachable
-  app.use("/api/v1", v1Router);
+  app.use("/api/v1", v1Router.router);
   console.log("✅ Mounted v1 API router at /api/v1");
 
   // Initialize v1 chat socket handlers

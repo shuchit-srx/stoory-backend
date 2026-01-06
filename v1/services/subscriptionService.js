@@ -7,12 +7,14 @@ const { supabaseAdmin } = require("../db/config");
 class SubscriptionService {
   /**
    * Calculate end date based on billing cycle
+   * @param {string} billingCycle - MONTHLY or YEARLY
+   * @param {Date} startDate - Start date of subscription
+   * @returns {Date} End date
    */
   calculateEndDate(billingCycle, startDate) {
     const date = new Date(startDate);
-    const billingCycleUpper = billingCycle?.toUpperCase();
 
-    switch (billingCycleUpper) {
+    switch (billingCycle.toUpperCase()) {
       case "MONTHLY":
         date.setMonth(date.getMonth() + 1);
         break;
@@ -20,212 +22,61 @@ class SubscriptionService {
         date.setFullYear(date.getFullYear() + 1);
         break;
       default:
-        date.setMonth(date.getMonth() + 1); // Default to 1 month
+        throw new Error("Invalid billing cycle. Must be MONTHLY or YEARLY");
     }
 
-    return date.toISOString().split("T")[0]; // Return YYYY-MM-DD format
+    return date;
   }
 
   /**
-   * Create a new subscription for a brand user
-   * Creates subscription from an active plan
+   * Create a new subscription for a user
+   * @param {string} userId - User ID
+   * @param {string} planId - Plan ID
+   * @param {boolean} isAutoRenew - Whether subscription should auto-renew
+   * @returns {Promise<Object>} Result object with success status and data
    */
   async createSubscription(userId, planId, isAutoRenew = false) {
     try {
-      // Validate plan exists and is active
+      // Validate inputs
+      if (!userId || typeof userId !== "string") {
+        return {
+          success: false,
+          message: "user_id is required and must be a valid UUID",
+        };
+      }
+
+      if (!planId || typeof planId !== "string") {
+        return {
+          success: false,
+          message: "plan_id is required and must be a valid UUID",
+        };
+      }
+
+      // Check if plan exists and is active
       const { data: plan, error: planError } = await supabaseAdmin
         .from("v1_plans")
         .select("*")
         .eq("id", planId)
-        .eq("is_active", true)
         .single();
 
       if (planError || !plan) {
         return {
           success: false,
-          message: "Plan not found or not active",
+          message: "Plan not found",
         };
       }
 
-      // Calculate dates
-      const startDate = new Date().toISOString().split("T")[0]; // Today in YYYY-MM-DD format
-      const endDate = this.calculateEndDate(plan.billing_cycle, startDate);
-
-      // Create subscription
-      const subscriptionData = {
-        user_id: userId,
-        plan_id: planId,
-        status: "ACTIVE",
-        start_date: startDate,
-        end_date: endDate,
-        is_auto_renew: Boolean(isAutoRenew),
-      };
-
-      const { data, error } = await supabaseAdmin
-        .from("v1_subscriptions")
-        .insert(subscriptionData)
-        .select(`
-          *,
-          v1_plans(
-            *
-          )
-        `)
-        .single();
-
-      if (error) {
-        console.error("[v1/SubscriptionService/createSubscription] Database error:", error);
+      if (!plan.is_active) {
         return {
           success: false,
-          message: "Failed to create subscription",
-          error: error.message,
+          message: "Plan is not active",
         };
       }
 
-      // Transform the data to rename v1_plans to plan
-      const { v1_plans, ...subscriptionDataOut } = data;
-      const subscription = {
-        ...subscriptionDataOut,
-        plan: v1_plans || null,
-      };
-
-      return {
-        success: true,
-        subscription: subscription,
-        message: "Subscription created successfully",
-      };
-    } catch (err) {
-      console.error("[v1/SubscriptionService/createSubscription] Exception:", err);
-      return {
-        success: false,
-        message: "Failed to create subscription",
-        error: err.message,
-      };
-    }
-  }
-
-  /**
-   * Get all subscriptions (Admin only)
-   * Returns plans with users nested inside each plan, and total users count
-   */
-  async getAllSubscriptions() {
-    try {
-      // Get all plans
-      const { data: plans, error: plansError } = await supabaseAdmin
-        .from("v1_plans")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (plansError) {
-        console.error("[v1/SubscriptionService/getAllSubscriptions] Plans error:", plansError);
-        return {
-          success: false,
-          message: "Failed to fetch plans",
-          error: plansError.message,
-        };
-      }
-
-      // Get all subscriptions with user details
-      const { data: subscriptions, error: subscriptionsError } = await supabaseAdmin
-        .from("v1_subscriptions")
-        .select(`
-          id,
-          user_id,
-          plan_id,
-          status,
-          start_date,
-          end_date,
-          is_auto_renew,
-          created_at,
-          v1_users(
-            id,
-            phone_number,
-            role
-          )
-        `)
-        .order("created_at", { ascending: false });
-
-      if (subscriptionsError) {
-        console.error("[v1/SubscriptionService/getAllSubscriptions] Subscriptions error:", subscriptionsError);
-        return {
-          success: false,
-          message: "Failed to fetch subscriptions",
-          error: subscriptionsError.message,
-        };
-      }
-
-      // Group subscriptions by plan_id and build user list for each plan
-      const subscriptionsByPlan = {};
-      const uniqueUserIds = new Set();
-
-      (subscriptions || []).forEach((subscription) => {
-        const planId = subscription.plan_id;
-        if (!subscriptionsByPlan[planId]) {
-          subscriptionsByPlan[planId] = [];
-        }
-
-        // Transform subscription data
-        const { v1_users, ...subscriptionData } = subscription;
-        subscriptionsByPlan[planId].push({
-          ...subscriptionData,
-          user: v1_users || null,
-        });
-
-        // Track unique users for total count
-        if (v1_users && v1_users.id) {
-          uniqueUserIds.add(v1_users.id);
-        }
-      });
-
-      // Build plans array with users nested inside
-      const plansWithUsers = (plans || []).map((plan) => {
-        const planSubscriptions = subscriptionsByPlan[plan.id] || [];
-        // Extract users from subscriptions
-        const users = planSubscriptions.map((sub) => ({
-          id: sub.user?.id || null,
-          phone: sub.user?.phone_number || null,
-          role: sub.user?.role || null,
-          subscription: {
-            id: sub.id,
-            status: sub.status,
-            start_date: sub.start_date,
-            end_date: sub.end_date,
-            is_auto_renew: sub.is_auto_renew,
-            created_at: sub.created_at,
-          },
-        }));
-
-        return {
-          ...plan,
-          users: users,
-        };
-      });
-
-      return {
-        success: true,
-        total_users_count: uniqueUserIds.size,
-        plans: plansWithUsers,
-        message: "Subscriptions fetched successfully",
-      };
-    } catch (err) {
-      console.error("[v1/SubscriptionService/getAllSubscriptions] Exception:", err);
-      return {
-        success: false,
-        message: "Failed to fetch subscriptions",
-        error: err.message,
-      };
-    }
-  }
-
-  /**
-   * Get current subscription for any brand (Admin only)
-   * Returns the active subscription for the specified user
-   */
-  async getCurrentSubscription(userId) {
-    try {
-      // First verify the user exists and is a BRAND
+      // Check if user exists
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
-        .select("id, role")
+        .select("id")
         .eq("id", userId)
         .single();
 
@@ -236,97 +87,144 @@ class SubscriptionService {
         };
       }
 
-      if (user.role !== "BRAND") {
+      // Check if user already has an active subscription
+      const { data: existingSubscriptions, error: existingError } =
+        await supabaseAdmin
+          .from("v1_subscriptions")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("status", "ACTIVE");
+
+      if (existingError) {
+        console.error(
+          "[v1/SubscriptionService/createSubscription] Error checking existing subscription:",
+          existingError
+        );
         return {
           success: false,
-          message: "User is not a BRAND",
+          message: "Failed to check existing subscriptions",
+          error: existingError.message,
         };
       }
 
-      const currentDate = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
+      if (existingSubscriptions && existingSubscriptions.length > 0) {
+        return {
+          success: false,
+          message: "User already has an active subscription",
+        };
+      }
 
-      const { data, error } = await supabaseAdmin
+      // Calculate subscription dates
+      const startDate = new Date();
+      const endDate = this.calculateEndDate(plan.billing_cycle, startDate);
+
+      // Create subscription
+      const subscriptionData = {
+        user_id: userId,
+        plan_id: planId,
+        status: "ACTIVE",
+        start_date: startDate.toISOString().split("T")[0], // Format as YYYY-MM-DD
+        end_date: endDate.toISOString().split("T")[0], // Format as YYYY-MM-DD
+        is_auto_renew: Boolean(isAutoRenew),
+      };
+
+      const { data: subscription, error: insertError } = await supabaseAdmin
         .from("v1_subscriptions")
-        .select(`
-          *,
-          v1_plans(
-            *
-          )
-        `)
-        .eq("user_id", userId)
-        .eq("status", "ACTIVE")
-        .lte("start_date", currentDate)
-        .gte("end_date", currentDate)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .insert(subscriptionData)
+        .select()
+        .single();
 
-      if (error) {
-        console.error("[v1/SubscriptionService/getCurrentSubscription] Database error:", error);
+      if (insertError) {
+        console.error(
+          "[v1/SubscriptionService/createSubscription] Database error:",
+          insertError
+        );
         return {
           success: false,
-          message: "Failed to fetch subscription",
-          error: error.message,
+          message: "Failed to create subscription",
+          error: insertError.message,
         };
       }
 
-      // Transform the data to rename v1_plans to plan
-      let subscription = null;
-      if (data) {
-        const { v1_plans, ...subscriptionData } = data;
-        subscription = {
-          ...subscriptionData,
-          plan: v1_plans || null,
+      // Fetch subscription with plan details
+      const { data: subscriptionWithPlan, error: fetchError } =
+        await supabaseAdmin
+          .from("v1_subscriptions")
+          .select(
+            `
+            *,
+            v1_plans (
+              id,
+              name,
+              price,
+              billing_cycle,
+              features,
+              is_active
+            )
+          `
+          )
+          .eq("id", subscription.id)
+          .single();
+
+      if (fetchError) {
+        console.error(
+          "[v1/SubscriptionService/createSubscription] Error fetching subscription with plan:",
+          fetchError
+        );
+        // Return subscription without plan details if fetch fails
+        return {
+          success: true,
+          subscription: subscription,
+          message: "Subscription created successfully",
         };
       }
 
       return {
         success: true,
-        subscription: subscription,
-        message: subscription ? "Subscription fetched successfully" : "No active subscription found",
+        subscription: subscriptionWithPlan,
+        message: "Subscription created successfully",
       };
     } catch (err) {
-      console.error("[v1/SubscriptionService/getCurrentSubscription] Exception:", err);
+      console.error(
+        "[v1/SubscriptionService/createSubscription] Exception:",
+        err
+      );
       return {
         success: false,
-        message: "Failed to fetch subscription",
+        message: "Failed to create subscription",
         error: err.message,
       };
     }
   }
 
   /**
-   * Cancel a subscription
-   * For brands: cancels their own subscription
-   * For admin: can cancel any brand's subscription
+   * Get user's current subscription with plan details
+   * @param {string} userId - User ID
+   * @returns {Promise<Object>} Result object with success status and subscription data
    */
-  async cancelSubscription(userId, subscriptionId = null) {
+  async getUserSubscription(userId) {
     try {
-      // Build query to find active subscription
-      let query = supabaseAdmin
-        .from("v1_subscriptions")
-        .select(`
-          *,
-          v1_plans(
-            *
-          )
-        `)
-        .eq("user_id", userId)
-        .eq("status", "ACTIVE");
-
-      // If subscriptionId is provided, filter by it (for admin use)
-      if (subscriptionId) {
-        query = query.eq("id", subscriptionId);
+      // Validate input
+      if (!userId || typeof userId !== "string") {
+        return {
+          success: false,
+          message: "user_id is required and must be a valid UUID",
+        };
       }
 
-      // Get the subscription first
-      const { data: subscription, error: fetchError } = await query
+      // Get the most recent subscription
+      const { data: subscriptions, error: fetchError } = await supabaseAdmin
+        .from("v1_subscriptions")
+        .select("*")
+        .eq("user_id", userId)
         .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
 
       if (fetchError) {
-        console.error("[v1/SubscriptionService/cancelSubscription] Fetch error:", fetchError);
+        console.error(
+          "[v1/SubscriptionService/getUserSubscription] Database error:",
+          fetchError
+        );
         return {
           success: false,
           message: "Failed to fetch subscription",
@@ -334,52 +232,48 @@ class SubscriptionService {
         };
       }
 
-      if (!subscription) {
+      // If no subscription found
+      if (!subscriptions || subscriptions.length === 0) {
         return {
-          success: false,
-          message: "No active subscription found",
+          success: true,
+          subscription: null,
+          message: "No subscription found",
         };
       }
 
-      // Update subscription status to EXPIRED (soft delete - no hard delete)
-      const { data: updated, error: updateError } = await supabaseAdmin
-        .from("v1_subscriptions")
-        .update({ status: "EXPIRED" })
-        .eq("id", subscription.id)
-        .select(`
-          *,
-          v1_plans(
-            *
-          )
-        `)
-        .single();
+      const subscription = subscriptions[0];
 
-      if (updateError) {
-        console.error("[v1/SubscriptionService/cancelSubscription] Update error:", updateError);
-        return {
-          success: false,
-          message: "Failed to cancel subscription",
-          error: updateError.message,
-        };
+      // Calculate days remaining (if active)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const endDate = new Date(subscription.end_date);
+      endDate.setHours(0, 0, 0, 0);
+
+      let daysRemaining = null;
+      if (subscription.status === "ACTIVE") {
+        const diffTime = endDate - today;
+        daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       }
 
-      // Transform the data to rename v1_plans to plan
-      const { v1_plans, ...subscriptionData } = updated;
-      const cancelledSubscription = {
-        ...subscriptionData,
-        plan: v1_plans || null,
-      };
+      // Remove user_id and return only needed fields
+      const { user_id, ...subscriptionData } = subscription;
 
       return {
         success: true,
-        subscription: cancelledSubscription,
-        message: "Subscription cancelled successfully",
+        subscription: {
+          ...subscriptionData,
+          days_remaining: daysRemaining,
+        },
+        message: "Subscription fetched successfully",
       };
     } catch (err) {
-      console.error("[v1/SubscriptionService/cancelSubscription] Exception:", err);
+      console.error(
+        "[v1/SubscriptionService/getUserSubscription] Exception:",
+        err
+      );
       return {
         success: false,
-        message: "Failed to cancel subscription",
+        message: "Failed to fetch subscription",
         error: err.message,
       };
     }

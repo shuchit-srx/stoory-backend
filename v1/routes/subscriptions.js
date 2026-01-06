@@ -2,50 +2,28 @@ const express = require("express");
 const router = express.Router();
 const SubscriptionController = require("../controllers/subscriptionController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { validateCreateSubscription } = require("../validators/subscriptionValidators");
 
 /**
  * Subscription Routes
  * All routes require authentication
  */
 
-// Create a new subscription for authenticated brand user (Brand only)
+// Create a new subscription (BRAND_OWNER only)
 router.post(
-  "/",
+  "/create",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole("BRAND"),
+  authMiddleware.requireRole("BRAND_OWNER"),
+  validateCreateSubscription,
   SubscriptionController.createSubscription
 );
 
-// Get all subscriptions (Admin only)
+// Get subscription status and details (BRAND_OWNER only)
 router.get(
-  "/all",
+  "/status",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole("ADMIN"),
-  SubscriptionController.getAllSubscriptions
-);
-
-// Get current subscription for any brand (Admin only)
-router.get(
-  "/current/:userId",
-  authMiddleware.authenticateToken,
-  authMiddleware.requireRole("ADMIN"),
-  SubscriptionController.getCurrentSubscription
-);
-
-// Cancel subscription for authenticated brand user (Brand only)
-router.delete(
-  "/",
-  authMiddleware.authenticateToken,
-  authMiddleware.requireRole("BRAND"),
-  SubscriptionController.cancelSubscription
-);
-
-// Cancel subscription for any brand (Admin only)
-router.delete(
-  "/:userId",
-  authMiddleware.authenticateToken,
-  authMiddleware.requireRole("ADMIN"),
-  SubscriptionController.cancelSubscriptionForBrand
+  authMiddleware.requireRole("BRAND_OWNER"),
+  SubscriptionController.getSubscriptionStatus
 );
 
 module.exports = router;

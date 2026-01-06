@@ -51,7 +51,7 @@ class CampaignController {
       const userRole = req.user.role;
 
       // Only brand owners can create campaigns
-      if (userRole !== "BRAND") {
+      if (userRole !== "BRAND_OWNER") {
         return res.status(403).json({
           success: false,
           message: "Only brand owners can create campaigns",
@@ -208,7 +208,7 @@ class CampaignController {
       const userRole = req.user.role;
 
       // Only brand owners can see their own campaigns
-      if (userRole !== "BRAND") {
+      if (userRole !== "BRAND_OWNER") {
         return res.status(403).json({
           success: false,
           message: "Only brand owners can view their campaigns",
@@ -336,7 +336,7 @@ class CampaignController {
       const campaignId = req.params.id;
 
       // Only brand owners can update campaigns
-      if (userRole !== "BRAND") {
+      if (userRole !== "BRAND_OWNER") {
         return res.status(403).json({
           success: false,
           message: "Only brand owners can update campaigns",
@@ -440,7 +440,7 @@ class CampaignController {
       const campaignId = req.params.id;
 
       // Only brand owners can delete campaigns
-      if (userRole !== "BRAND") {
+      if (userRole !== "BRAND_OWNER") {
         return res.status(403).json({
           success: false,
           message: "Only brand owners can delete campaigns",

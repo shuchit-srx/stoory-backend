@@ -3,6 +3,7 @@ module.exports = {
     authController: require('./authController'),
     campaignController: require('./campaignController'),
     applicationController: require('./applicationController'),
-    userController: require('./userController')
+    userController: require('./userController'),
+    profileController: require('./profileController')
   };  
 

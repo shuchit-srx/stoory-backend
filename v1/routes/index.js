@@ -6,6 +6,10 @@ const router = express.Router();
 const authRoutes = require("./auth");
 router.use("/auth", authRoutes); // → /api/v1/auth/*
 
+// Mount v1 profile routes
+const profileRoutes = require("./profile");
+router.use("/profile", profileRoutes); // → /api/v1/profile/*
+
 // Mount v1 campaign routes
 const campaignRoutes = require("./campaigns");
 router.use("/campaigns", campaignRoutes); // → /api/v1/campaigns/*
@@ -25,12 +29,12 @@ router.use('/users', userRoutes); // → /api/v1/users/*
 const planRoutes = require('./plans');
 router.use('/plans', planRoutes); // → /api/v1/plans/*
 
-// Mount v1 subscription routes
-const subscriptionRoutes = require('./subscriptions');
-router.use('/subscriptions', subscriptionRoutes); // → /api/v1/subscriptions/*
-
 // Mount v1 payment routes
 const paymentRoutes = require('./payments');
 router.use('/payments', paymentRoutes); // → /api/v1/payments/*
+
+// Mount v1 subscription routes
+const subscriptionRoutes = require('./subscriptions');
+router.use('/subscriptions', subscriptionRoutes); // → /api/v1/subscriptions/*
 
 module.exports = router;

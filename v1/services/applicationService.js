@@ -106,7 +106,7 @@ class ApplicationService {
       }
 
       // Brand owner can cancel applications to their campaigns
-      if (userRole === 'BRAND' && brandId && data.v1_campaigns.brand_id === brandId) {
+      if (userRole === 'BRAND_OWNER' && brandId && data.v1_campaigns.brand_id === brandId) {
         return { success: true, application: { ...data, brand_id: data.v1_campaigns.brand_id } };
       }
 

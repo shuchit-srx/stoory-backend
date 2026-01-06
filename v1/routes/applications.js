@@ -20,7 +20,7 @@ router.post(
 router.post(
   '/:id/accept',
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole('BRAND'),
+  authMiddleware.requireRole('BRAND_OWNER'),
   validateAccept,
   applicationController.accept
 );
@@ -28,7 +28,7 @@ router.post(
 router.post(
   '/bulk-accept',
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole('BRAND'),
+  authMiddleware.requireRole('BRAND_OWNER'),
   validateBulkAccept,
   applicationController.bulkAccept
 );

@@ -5,4 +5,5 @@ module.exports = {
   AuthService: require("./authService"),
   ChatService: require("./chatService"),
   UserService: require("./userService"),
+  ProfileService: require("./profileService"),
 };

@@ -1,28 +1,44 @@
 const { body } = require("express-validator");
 
-/**
- * Profile Management Validators
- * For profile completion endpoints
- */
-
 const validateCompleteProfile = [
-  // Common fields
+  // Common fields - v1_users table
+  body("name")
+    .optional()
+    .isString()
+    .isLength({ min: 1, max: 200 })
+    .withMessage("Name must be between 1 and 200 characters"),
+  body("email")
+    .optional()
+    .isEmail()
+    .withMessage("Please provide a valid email address"),
+  body("phone_number")
+    .optional()
+    .isString()
+    .withMessage("Phone number must be a string"),
+  
+  // Common fields - profile tables
   body("pan_number")
     .optional()
     .isString()
     .isLength({ min: 10, max: 10 })
     .withMessage("PAN number must be 10 characters"),
-  body("upi_id")
-    .optional()
-    .isString()
-    .withMessage("UPI ID must be a string"),
   
-  // Influencer-specific fields
+
+  // Influencer-specific fields - Social Platforms
   body("social_platforms")
     .optional()
     .isArray()
     .withMessage("Social platforms must be an array"),
+  // Accept multiple field name variations for platform
   body("social_platforms.*.platform_name")
+    .optional()
+    .isString()
+    .withMessage("Platform name must be a string"),
+  body("social_platforms.*.platform")
+    .optional()
+    .isString()
+    .withMessage("Platform must be a string"),
+  body("social_platforms.*.platformName")
     .optional()
     .isString()
     .withMessage("Platform name must be a string"),
@@ -30,7 +46,16 @@ const validateCompleteProfile = [
     .optional()
     .isString()
     .withMessage("Username must be a string"),
+  // Accept multiple field name variations for profile URL
   body("social_platforms.*.profile_url")
+    .optional()
+    .isURL()
+    .withMessage("Profile URL must be a valid URL"),
+  body("social_platforms.*.profile_link")
+    .optional()
+    .isURL()
+    .withMessage("Profile link must be a valid URL"),
+  body("social_platforms.*.profileUrl")
     .optional()
     .isURL()
     .withMessage("Profile URL must be a valid URL"),
@@ -45,9 +70,17 @@ const validateCompleteProfile = [
   body("social_platforms.*.data_source")
     .optional()
     .isString()
-    .isIn(["MANUAL", "GRAPH_API"])
-    .withMessage("Data source must be MANUAL or GRAPH_API"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["MANUAL", "GRAPH_API"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Data source must be MANUAL or GRAPH_API");
+      }
+      return true;
+    }),
   
+
   // Languages - array of strings
   body("languages")
     .optional()
@@ -58,6 +91,7 @@ const validateCompleteProfile = [
     .isString()
     .withMessage("Each language must be a string"),
   
+
   // Categories - array of strings
   body("categories")
     .optional()
@@ -68,6 +102,7 @@ const validateCompleteProfile = [
     .isString()
     .withMessage("Each category must be a string"),
   
+
   // Common profile fields (used by both influencer and brand)
   body("bio")
     .optional()
@@ -87,15 +122,29 @@ const validateCompleteProfile = [
   body("gender")
     .optional()
     .isString()
-    .isIn(["MALE", "FEMALE", "OTHER"])
-    .withMessage("Gender must be MALE, FEMALE, or OTHER"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["MALE", "FEMALE", "OTHER"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Gender must be MALE, FEMALE, or OTHER");
+      }
+      return true;
+    }),
   
   // Influencer-specific fields
   body("tier")
     .optional()
     .isString()
-    .isIn(["NANO", "MICRO", "MID", "MACRO"])
-    .withMessage("Tier must be NANO, MICRO, MID, or MACRO"),
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Tier must be NANO, MICRO, MID, or MACRO");
+      }
+      return true;
+    }),
   body("min_value")
     .optional()
     .isNumeric()
@@ -105,6 +154,7 @@ const validateCompleteProfile = [
     .isNumeric()
     .withMessage("Max value must be a number"),
   
+    
   // Brand-specific fields
   body("brand_name")
     .optional()
