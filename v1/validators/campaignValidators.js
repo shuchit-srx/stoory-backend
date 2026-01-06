@@ -14,31 +14,32 @@ const validateCreateCampaign = [
     .trim(),
   body("type")
     .optional()
-    .isIn(["NORMAL", "BULK", "normal", "bulk"])
-    .withMessage("Type must be NORMAL or BULK"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NORMAL", "BULK"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Type must be NORMAL or BULK");
+      }
+      return true;
+    }),
   body("status")
     .optional()
-    .isIn([
-      "DRAFT",
-      "LIVE",
-      "LOCKED",
-      "ACTIVE",
-      "COMPLETED",
-      "EXPIRED",
-      "CANCELLED",
-      "draft",
-      "live",
-      "locked",
-      "active",
-      "completed",
-      "expired",
-      "cancelled",
-    ])
-    .withMessage("Invalid status"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+      }
+      return true;
+    }),
   body("min_influencers")
     .optional()
-    .isInt({ min: 1 })
-    .withMessage("min_influencers must be a positive integer"),
+    .isInt({ min: 0 })
+    .withMessage("min_influencers must be a non-negative integer"),
   body("max_influencers")
     .optional()
     .isInt({ min: 1 })
@@ -48,7 +49,8 @@ const validateCreateCampaign = [
     .isBoolean()
     .withMessage("requires_script must be a boolean"),
   body("start_deadline")
-    .optional()
+    .notEmpty()
+    .withMessage("start_deadline is required")
     .isISO8601()
     .withMessage("start_deadline must be a valid ISO 8601 date")
     .toDate(),
@@ -56,6 +58,59 @@ const validateCreateCampaign = [
     .optional()
     .isFloat({ min: 0 })
     .withMessage("budget must be a non-negative number"),
+  // New fields
+  body("description")
+    .optional()
+    .isString()
+    .isLength({ max: 5000 })
+    .withMessage("Description must be up to 5000 characters")
+    .trim(),
+  body("platform")
+    .optional()
+    .isArray()
+    .withMessage("platform must be an array"),
+  body("platform.*")
+    .optional()
+    .isString()
+    .withMessage("Each platform must be a string"),
+  body("content_type")
+    .optional()
+    .isArray()
+    .withMessage("content_type must be an array"),
+  body("content_type.*")
+    .optional()
+    .isString()
+    .withMessage("Each content_type must be a string"),
+  body("influencer_tier")
+    .optional()
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("influencer_tier must be NANO, MICRO, MID, or MACRO");
+      }
+      return true;
+    }),
+  body("categories")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("categories must be up to 500 characters")
+    .trim(),
+  body("language")
+    .optional()
+    .isString()
+    .isLength({ max: 50 })
+    .withMessage("language must be up to 50 characters")
+    .trim(),
+  body("brand_guideline")
+    .optional()
+    .isString()
+    .isLength({ max: 10000 })
+    .withMessage("brand_guideline must be up to 10000 characters")
+    .trim(),
   // Custom validation: min_influencers <= max_influencers
   body().custom((value) => {
     if (
@@ -80,31 +135,32 @@ const validateUpdateCampaign = [
     .trim(),
   body("type")
     .optional()
-    .isIn(["NORMAL", "BULK", "normal", "bulk"])
-    .withMessage("Type must be NORMAL or BULK"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NORMAL", "BULK"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Type must be NORMAL or BULK");
+      }
+      return true;
+    }),
   body("status")
     .optional()
-    .isIn([
-      "DRAFT",
-      "LIVE",
-      "LOCKED",
-      "ACTIVE",
-      "COMPLETED",
-      "EXPIRED",
-      "CANCELLED",
-      "draft",
-      "live",
-      "locked",
-      "active",
-      "completed",
-      "expired",
-      "cancelled",
-    ])
-    .withMessage("Invalid status"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+      }
+      return true;
+    }),
   body("min_influencers")
     .optional()
-    .isInt({ min: 1 })
-    .withMessage("min_influencers must be a positive integer"),
+    .isInt({ min: 0 })
+    .withMessage("min_influencers must be a non-negative integer"),
   body("max_influencers")
     .optional()
     .isInt({ min: 1 })
@@ -122,6 +178,59 @@ const validateUpdateCampaign = [
     .optional()
     .isFloat({ min: 0 })
     .withMessage("budget must be a non-negative number"),
+  // New fields
+  body("description")
+    .optional()
+    .isString()
+    .isLength({ max: 5000 })
+    .withMessage("Description must be up to 5000 characters")
+    .trim(),
+  body("platform")
+    .optional()
+    .isArray()
+    .withMessage("platform must be an array"),
+  body("platform.*")
+    .optional()
+    .isString()
+    .withMessage("Each platform must be a string"),
+  body("content_type")
+    .optional()
+    .isArray()
+    .withMessage("content_type must be an array"),
+  body("content_type.*")
+    .optional()
+    .isString()
+    .withMessage("Each content_type must be a string"),
+  body("influencer_tier")
+    .optional()
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("influencer_tier must be NANO, MICRO, MID, or MACRO");
+      }
+      return true;
+    }),
+  body("categories")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("categories must be up to 500 characters")
+    .trim(),
+  body("language")
+    .optional()
+    .isString()
+    .isLength({ max: 50 })
+    .withMessage("language must be up to 50 characters")
+    .trim(),
+  body("brand_guideline")
+    .optional()
+    .isString()
+    .isLength({ max: 10000 })
+    .withMessage("brand_guideline must be up to 10000 characters")
+    .trim(),
   // Custom validation: min_influencers <= max_influencers
   body().custom((value) => {
     if (
@@ -141,27 +250,28 @@ const validateUpdateCampaign = [
 const validateCampaignFilters = [
   query("status")
     .optional()
-    .isIn([
-      "DRAFT",
-      "LIVE",
-      "LOCKED",
-      "ACTIVE",
-      "COMPLETED",
-      "EXPIRED",
-      "CANCELLED",
-      "draft",
-      "live",
-      "locked",
-      "active",
-      "completed",
-      "expired",
-      "cancelled",
-    ])
-    .withMessage("Invalid status filter"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Invalid status filter. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+      }
+      return true;
+    }),
   query("type")
     .optional()
-    .isIn(["NORMAL", "BULK", "normal", "bulk"])
-    .withMessage("Invalid type filter"),
+    .isString()
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validValues = ["NORMAL", "BULK"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("Invalid type filter. Must be NORMAL or BULK");
+      }
+      return true;
+    }),
   query("brand_id")
     .optional()
     .isUUID()
@@ -195,4 +305,3 @@ module.exports = {
   validateUpdateCampaign,
   validateCampaignFilters,
 };
-

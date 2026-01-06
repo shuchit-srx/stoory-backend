@@ -54,6 +54,34 @@ SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 JWT_SECRET=your_jwt_secret
 SYSTEM_USER_ID=00000000-0000-0000-0000-000000000000
+
+# Email Configuration (for brand owner verification)
+# Default: ethereal (test account - no setup needed!)
+# Options: ethereal, smtp, gmail, sendgrid, ses
+EMAIL_PROVIDER=ethereal  # Use 'ethereal' for testing (default, no config needed)
+EMAIL_FROM=noreply@stoory.com
+EMAIL_FROM_NAME=Stoory
+FRONTEND_URL=http://localhost:3000  # Base URL for verification links
+
+# For SMTP (generic):
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your_email@gmail.com
+SMTP_PASSWORD=your_app_password
+
+# For Gmail (alternative to SMTP):
+EMAIL_USER=your_email@gmail.com
+EMAIL_PASSWORD=your_app_password
+
+# For SendGrid:
+SENDGRID_API_KEY=your_sendgrid_api_key
+SENDGRID_FROM_EMAIL=noreply@stoory.com
+
+# For AWS SES:
+AWS_REGION=us-east-1
+SES_ACCESS_KEY_ID=your_access_key
+SES_SECRET_ACCESS_KEY=your_secret_key
 ```
 
 ### **2. Install Dependencies**

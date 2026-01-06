@@ -1,8 +1,9 @@
-const { supabaseAdmin } = require("../../supabase/client");
+const { supabaseAdmin } = require("../db/config");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const whatsappService = require("../../utils/whatsapp");
+const whatsappService = require("../utils/whatsapp");
+const emailService = require("../utils/emailService");
 
 class AuthService {
   constructor() {
@@ -34,9 +35,9 @@ class AuthService {
 
       if (error) {
         console.error("[v1/storeOTP] error:", error);
-        throw error;
+        return { success: false, message: "Failed to store OTP" };
       }
-
+      
       return { success: true };
     } catch (err) {
       console.error("[v1/storeOTP] error:", err);
@@ -98,9 +99,8 @@ class AuthService {
 
     const role = String(userDataRole).toLowerCase().trim();
     if (role === "influencer") return "INFLUENCER";
-    if (role === "brand_owner" || role === "brand") return "BRAND";
+    if (role === "brand_owner" || role === "brand" || role === "owner") return "BRAND_OWNER";
     if (role === "admin") return "ADMIN";
-    if (role === "agent") return "AGENT";
     return "INFLUENCER"; // default
   }
 
@@ -249,8 +249,9 @@ class AuthService {
         user = created;
 
         // 4) Create role-specific profile with bio and placeholder image
+        const ProfileService = require("./profileService");
         if (role === "INFLUENCER") {
-          const profileResult = await this.createInfluencerProfile(
+          const profileResult = await ProfileService.createInfluencerProfile(
             user,
             userData
           );
@@ -261,8 +262,8 @@ class AuthService {
             );
             // Continue anyway - user is created, profile can be added later
           }
-        } else if (role === "BRAND") {
-          const profileResult = await this.createBrandProfile(user, userData);
+        } else if (role === "BRAND_OWNER") {
+          const profileResult = await ProfileService.createBrandProfile(user, userData);
           if (!profileResult.success) {
             console.error(
               "[v1/verifyOTP] Failed to create brand profile:",
@@ -294,164 +295,6 @@ class AuthService {
     }
   }
 
-  /**
-   * Normalize gender value to match database constraint (uppercase)
-   */
-  normalizeGender(gender) {
-    if (!gender) return null;
-
-    const normalized = String(gender).toUpperCase().trim();
-    const validGenders = ["MALE", "FEMALE", "OTHER"];
-
-    if (validGenders.includes(normalized)) {
-      return normalized;
-    }
-
-    // If lowercase provided, convert to uppercase
-    const lower = normalized.toLowerCase();
-    if (lower === "male") return "MALE";
-    if (lower === "female") return "FEMALE";
-    if (lower === "other") return "OTHER";
-
-    return null; // Invalid gender, return null
-  }
-
-  async createInfluencerProfile(user, userData) {
-    try {
-      // Extract primary language from userData
-      const primaryLanguage =
-        userData?.primary_language ||
-        (Array.isArray(userData?.languages) && userData.languages[0]) ||
-        null;
-
-      // Use placeholder image URL if no image provided
-      // This will be replaced during image upload
-      const placeholderImageUrl =
-        "https://via.placeholder.com/400x400?text=Profile+Image";
-
-      const profile = {
-        user_id: user.id,
-        profile_photo_url: userData?.profile_image_url || placeholderImageUrl, // Required field - use placeholder if not provided
-        is_profile_verified: false,
-        bio: userData?.bio || "", // Required field - use empty string if not provided
-        city: userData?.address_city || null,
-        country: userData?.address_country || null,
-        primary_language: primaryLanguage,
-        gender: this.normalizeGender(userData?.gender),
-        tier: null, // Will be calculated later
-        pan_number: userData?.pan_number || null,
-        pan_verified: false,
-        profile_completion_pct: 0,
-        is_deleted: false,
-      };
-
-      console.log("[v1/createInfluencerProfile] Inserting profile:", {
-        user_id: profile.user_id,
-        has_photo: !!profile.profile_photo_url,
-        has_bio: !!profile.bio,
-        has_gender: !!profile.gender,
-      });
-
-      const { data, error } = await supabaseAdmin
-        .from("v1_influencer_profiles")
-        .insert(profile)
-        .select();
-
-      if (error) {
-        console.error("[v1/createInfluencerProfile] Database error:", error);
-        console.error(
-          "[v1/createInfluencerProfile] Error details:",
-          JSON.stringify(error, null, 2)
-        );
-        return { success: false, error: error.message, details: error };
-      }
-
-      console.log(
-        "[v1/createInfluencerProfile] Profile created successfully:",
-        data?.[0]?.id
-      );
-      return { success: true, profile: data?.[0] };
-    } catch (err) {
-      console.error("[v1/createInfluencerProfile] Exception:", err);
-      return { success: false, error: err.message };
-    }
-  }
-
-  async createBrandProfile(user, userData) {
-    try {
-      // Use placeholder logo URL if no image provided
-      const placeholderLogoUrl =
-        "https://via.placeholder.com/400x400?text=Brand+Logo";
-
-      // Ensure brand_name is always a string (required field)
-      // Empty string is allowed - will be updated in complete profile endpoint
-      const brandName = userData?.brand_name || userData?.business_name || "";
-
-      const profile = {
-        user_id: user.id,
-        brand_name: brandName, // Required field - empty string allowed initially
-        brand_logo_url:
-          userData?.brand_logo_url ||
-          userData?.profile_image_url ||
-          placeholderLogoUrl, // Required field - use placeholder if not provided
-        bio: userData?.bio || userData?.brand_description || null,
-        gender: this.normalizeGender(userData?.gender),
-        pan_number: userData?.pan_number || null,
-        pan_verified: false,
-        profile_completion_pct: 0,
-        is_deleted: false,
-      };
-
-      console.log(
-        "[v1/createBrandProfile] Inserting profile into v1_brand_profiles:",
-        {
-          user_id: profile.user_id,
-          brand_name: profile.brand_name,
-          brand_logo_url: profile.brand_logo_url,
-          bio: profile.bio,
-          pan_number: profile.pan_number,
-        }
-      );
-
-      const { data, error } = await supabaseAdmin
-        .from("v1_brand_profiles")
-        .insert(profile)
-        .select("*")
-        .single();
-
-      if (error) {
-        console.error("[v1/createBrandProfile] Database error:", error);
-        console.error(
-          "[v1/createBrandProfile] Error details:",
-          JSON.stringify(error, null, 2)
-        );
-        console.error(
-          "[v1/createBrandProfile] Profile data attempted:",
-          JSON.stringify(profile, null, 2)
-        );
-        return { success: false, error: error.message, details: error };
-      }
-
-      if (!data) {
-        console.error("[v1/createBrandProfile] No data returned from insert");
-        return { success: false, error: "Profile creation returned no data" };
-      }
-
-      console.log(
-        "[v1/createBrandProfile] Profile created successfully in v1_brand_profiles:",
-        {
-          id: data.id,
-          user_id: data.user_id,
-          brand_name: data.brand_name,
-        }
-      );
-      return { success: true, profile: data };
-    } catch (err) {
-      console.error("[v1/createBrandProfile] Exception:", err);
-      console.error("[v1/createBrandProfile] Stack:", err.stack);
-      return { success: false, error: err.message };
-    }
-  }
 
   async updateBasicUserFields(user, userData) {
     if (!userData) return;
@@ -608,7 +451,7 @@ class AuthService {
         .from("v1_users")
         .select("*")
         .eq("email", email)
-        .eq("role", "BRAND")
+        .eq("role", "BRAND_OWNER")
         .eq("is_deleted", false)
         .maybeSingle();
 
@@ -644,6 +487,8 @@ class AuthService {
    * Register brand owner with email and password
    */
   async registerBrandOwner(email, password, name) {
+    let createdUserId = null; // Track created user ID for cleanup
+    
     try {
       // 1) Validate email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -692,7 +537,7 @@ class AuthService {
           id,
           email,
           password_hash: passwordHash,
-          role: "BRAND",
+          role: "BRAND_OWNER",
           name: name || null,
           email_verified: false,
           password_reset_token: emailVerificationToken, // Temporarily store here
@@ -710,9 +555,13 @@ class AuthService {
         };
       }
 
+      // Track the created user ID for potential cleanup
+      createdUserId = created.id;
+
       // 7) Create brand profile in v1_brand_profiles table
       // brand_name will be empty string (required field) - will be updated in complete profile
-      const profileResult = await this.createBrandProfile(created, {
+      const ProfileService = require("./profileService");
+      const profileResult = await ProfileService.createBrandProfile(created, {
         brand_name: "", // Empty string - required field, will be set in complete profile
       });
 
@@ -723,7 +572,35 @@ class AuthService {
           profileResult.details
         );
         // If profile creation fails, rollback user creation for data consistency
-        await supabaseAdmin.from("v1_users").delete().eq("id", created.id);
+        if (createdUserId) {
+          const { error: deleteError, count } = await supabaseAdmin
+            .from("v1_users")
+            .delete()
+            .eq("id", createdUserId);
+          
+          if (deleteError) {
+            console.error(
+              "[v1/registerBrandOwner] Failed to rollback user creation:",
+              deleteError
+            );
+            // Log critical error - user exists without profile
+            console.error(
+              "[v1/registerBrandOwner] CRITICAL: User created but profile creation failed and rollback failed. User ID:",
+              createdUserId
+            );
+          } else if (count === 0) {
+            console.warn(
+              "[v1/registerBrandOwner] User rollback attempted but no rows deleted. User ID:",
+              createdUserId
+            );
+          } else {
+            console.log(
+              "[v1/registerBrandOwner] Successfully rolled back user creation. User ID:",
+              createdUserId
+            );
+          }
+        }
+        
         return {
           success: false,
           message: `Failed to create brand profile: ${
@@ -733,15 +610,77 @@ class AuthService {
       }
 
       console.log(
-        "[v1/registerBrandOwner] Brand profile created successfully:",
-        profileResult.profile?.id
+        "[v1/registerBrandOwner] Brand profile created successfully. User ID:",
+        created.id,
+        "Profile user_id:",
+        profileResult.profile?.user_id
       );
 
-      // TODO: Send email verification email with token
-      // For now, return token (in production, send via email)
+      // Verify the profile was actually created and is queryable
+      const { data: verifyProfile, error: verifyError } = await supabaseAdmin
+        .from("v1_brand_profiles")
+        .select("user_id, is_deleted")
+        .eq("user_id", created.id)
+        .eq("is_deleted", false)
+        .maybeSingle();
+
+      if (verifyError) {
+        console.error(
+          "[v1/registerBrandOwner] Error verifying profile creation:",
+          verifyError
+        );
+      } else if (!verifyProfile) {
+        console.error(
+          "[v1/registerBrandOwner] CRITICAL: Profile was created but cannot be found! User ID:",
+          created.id,
+          "Profile data:",
+          profileResult.profile
+        );
+      } else {
+        console.log(
+          "[v1/registerBrandOwner] Profile verification successful. User ID:",
+          verifyProfile.user_id,
+          "is_deleted:",
+          verifyProfile.is_deleted
+        );
+      }
+
+      // Send email verification email with token
+      const emailResult = await emailService.sendVerificationEmail(
+        created.email,
+        emailVerificationToken,
+        created.name
+      );
+
+      if (!emailResult.success) {
+        console.warn(
+          "[v1/registerBrandOwner] Failed to send verification email:",
+          emailResult.message
+        );
+        // Still return success - user is created, they can request resend
+        // In development, also return token for testing
+        return {
+          success: true,
+          user: {
+            id: created.id,
+            email: created.email,
+            role: created.role,
+            email_verified: created.email_verified,
+          },
+          verification_token:
+            process.env.NODE_ENV === "development"
+              ? emailVerificationToken
+              : undefined,
+          message:
+            "Brand owner registered successfully. Please verify your email.",
+          email_sent: false,
+          email_error: emailResult.message,
+        };
+      }
+
       console.log(
-        "[v1/registerBrandOwner] Email verification token:",
-        emailVerificationToken
+        "[v1/registerBrandOwner] Verification email sent successfully. Message ID:",
+        emailResult.messageId
       );
 
       return {
@@ -752,17 +691,66 @@ class AuthService {
           role: created.role,
           email_verified: created.email_verified,
         },
-        // Remove this in production - token should be sent via email only
+        // Only return token in development for testing
         verification_token:
           process.env.NODE_ENV === "development"
             ? emailVerificationToken
             : undefined,
         message:
-          "Brand owner registered successfully. Please verify your email.",
+          "Brand owner registered successfully. Please check your email to verify your account.",
+        email_sent: true,
       };
     } catch (err) {
       console.error("[v1/registerBrandOwner] Exception:", err);
-      return { success: false, message: "Registration failed" };
+      
+      // If user was created but exception occurred, try to clean up
+      if (createdUserId) {
+        try {
+          console.log(
+            "[v1/registerBrandOwner] Attempting to cleanup user after exception. User ID:",
+            createdUserId
+          );
+          const { error: deleteError, count } = await supabaseAdmin
+            .from("v1_users")
+            .delete()
+            .eq("id", createdUserId);
+          
+          if (deleteError) {
+            console.error(
+              "[v1/registerBrandOwner] Failed to cleanup user after exception:",
+              deleteError
+            );
+            console.error(
+              "[v1/registerBrandOwner] CRITICAL: User exists but registration failed. User ID:",
+              createdUserId
+            );
+          } else if (count === 0) {
+            console.warn(
+              "[v1/registerBrandOwner] Cleanup attempted but no rows deleted. User ID:",
+              createdUserId
+            );
+          } else {
+            console.log(
+              "[v1/registerBrandOwner] Successfully cleaned up user after exception. User ID:",
+              createdUserId
+            );
+          }
+        } catch (cleanupErr) {
+          console.error(
+            "[v1/registerBrandOwner] Exception during cleanup:",
+            cleanupErr
+          );
+          console.error(
+            "[v1/registerBrandOwner] CRITICAL: User exists but cleanup failed. User ID:",
+            createdUserId
+          );
+        }
+      }
+      
+      return { 
+        success: false, 
+        message: `Registration failed: ${err.message || "Unknown error"}` 
+      };
     }
   }
 
@@ -846,7 +834,7 @@ class AuthService {
         .from("v1_users")
         .select("*")
         .eq("password_reset_token", token)
-        .eq("role", "BRAND")
+        .eq("role", "BRAND_OWNER")
         .eq("is_deleted", false)
         .gt("password_reset_token_expires_at", new Date().toISOString())
         .maybeSingle();
@@ -944,21 +932,45 @@ class AuthService {
         };
       }
 
-      // TODO: Send email with verification link
-      // For now, return token (in production, send via email)
+      // Send email with verification link
+      const emailResult = await emailService.sendVerificationEmail(
+        user.email,
+        verificationToken,
+        user.name
+      );
+
+      if (!emailResult.success) {
+        console.error(
+          "[v1/resendEmailVerification] Failed to send verification email:",
+          emailResult.message
+        );
+        // In development, still return token for testing
+        return {
+          success: true,
+          message: "Verification link sent to email",
+          verification_token:
+            process.env.NODE_ENV === "development"
+              ? verificationToken
+              : undefined,
+          email_sent: false,
+          email_error: emailResult.message,
+        };
+      }
+
       console.log(
-        "[v1/resendEmailVerification] Verification token:",
-        verificationToken
+        "[v1/resendEmailVerification] Verification email sent successfully. Message ID:",
+        emailResult.messageId
       );
 
       return {
         success: true,
         message: "Verification link sent to email",
-        // Remove this in production - token should be sent via email only
+        // Only return token in development for testing
         verification_token:
           process.env.NODE_ENV === "development"
             ? verificationToken
             : undefined,
+        email_sent: true,
       };
     } catch (err) {
       console.error("[v1/resendEmailVerification] Exception:", err);
@@ -1005,16 +1017,41 @@ class AuthService {
         return { success: false, message: "Failed to generate reset token" };
       }
 
-      // TODO: Send email with reset link
-      // For now, return token (in production, send via email)
-      console.log("[v1/forgotPassword] Reset token:", resetToken);
+      // Send email with reset link
+      const emailResult = await emailService.sendPasswordResetEmail(
+        user.email,
+        resetToken,
+        user.name
+      );
+
+      if (!emailResult.success) {
+        console.error(
+          "[v1/forgotPassword] Failed to send password reset email:",
+          emailResult.message
+        );
+        // In development, still return token for testing
+        return {
+          success: true,
+          message: "Password reset link sent to email",
+          reset_token:
+            process.env.NODE_ENV === "development" ? resetToken : undefined,
+          email_sent: false,
+          email_error: emailResult.message,
+        };
+      }
+
+      console.log(
+        "[v1/forgotPassword] Password reset email sent successfully. Message ID:",
+        emailResult.messageId
+      );
 
       return {
         success: true,
         message: "Password reset link sent to email",
-        // Remove this in production - token should be sent via email only
+        // Only return token in development for testing
         reset_token:
           process.env.NODE_ENV === "development" ? resetToken : undefined,
+        email_sent: true,
       };
     } catch (err) {
       console.error("[v1/forgotPassword] Exception:", err);
@@ -1042,7 +1079,7 @@ class AuthService {
         .from("v1_users")
         .select("*")
         .eq("password_reset_token", token)
-        .eq("role", "BRAND")
+        .eq("role", "BRAND_OWNER")
         .eq("is_deleted", false)
         .gt("password_reset_token_expires_at", new Date().toISOString())
         .maybeSingle();
@@ -1083,804 +1120,7 @@ class AuthService {
     }
   }
 
-  // ---------- Profile Image Upload ----------
 
-  async uploadProfileImage(userId, fileBuffer, fileName) {
-    try {
-      const {
-        uploadImageToStorage,
-        deleteImageFromStorage,
-      } = require("../../utils/imageUpload");
-
-      // 1) Get user to check role
-      const { data: user, error: userError } = await supabaseAdmin
-        .from("v1_users")
-        .select("id, role")
-        .eq("id", userId)
-        .eq("is_deleted", false)
-        .single();
-
-      if (userError || !user) {
-        console.error("[v1/uploadProfileImage] User not found:", userError);
-        return { success: false, message: "User not found" };
-      }
-
-      // 2) Upload new profile image first
-      const { url, error: uploadError } = await uploadImageToStorage(
-        fileBuffer,
-        fileName,
-        "profiles"
-      );
-
-      if (uploadError || !url) {
-        console.error("[v1/uploadProfileImage] Upload error:", uploadError);
-        return {
-          success: false,
-          message: uploadError || "Failed to upload image",
-        };
-      }
-
-      // 3) Check if profile exists
-      const { data: currentProfile, error: fetchError } = await supabaseAdmin
-        .from("v1_influencer_profiles")
-        .select("profile_photo_url")
-        .eq("user_id", userId)
-        .eq("is_deleted", false)
-        .maybeSingle();
-
-      if (fetchError && fetchError.code !== "PGRST116") {
-        console.error(
-          "[v1/uploadProfileImage] Error fetching profile:",
-          fetchError
-        );
-        return { success: false, message: "Failed to fetch profile" };
-      }
-
-      // 4) Delete old profile image if it exists
-      if (currentProfile?.profile_photo_url) {
-        await deleteImageFromStorage(currentProfile.profile_photo_url);
-      }
-
-      // 5) Create or update profile
-      let updatedProfile;
-
-      if (!currentProfile) {
-        // Profile doesn't exist - create it with the image URL
-        // This should rarely happen now since profile is created during verify-otp
-        console.log(
-          "[v1/uploadProfileImage] Profile not found, creating new profile"
-        );
-
-        if (user.role === "INFLUENCER") {
-          const profileData = {
-            user_id: userId,
-            profile_photo_url: url, // Required field - filled with uploaded image
-            is_profile_verified: false,
-            bio: "", // Required field - use empty string instead of null
-            city: null,
-            country: null,
-            primary_language: null,
-            gender: null,
-            tier: null,
-            pan_number: null,
-            pan_verified: false,
-            profile_completion_pct: 0,
-            is_deleted: false,
-          };
-
-          const { data: createdProfile, error: createError } =
-            await supabaseAdmin
-              .from("v1_influencer_profiles")
-              .insert(profileData)
-              .select()
-              .single();
-
-          if (createError) {
-            console.error(
-              "[v1/uploadProfileImage] Profile creation error:",
-              createError
-            );
-            // Try to delete uploaded image if profile creation fails
-            await deleteImageFromStorage(url);
-            return {
-              success: false,
-              message: "Failed to create profile",
-              error: createError.message,
-            };
-          }
-
-          updatedProfile = createdProfile;
-        } else {
-          // For BRAND or other roles, handle differently if needed
-          return {
-            success: false,
-            message: "Profile image upload only supported for influencers",
-          };
-        }
-      } else {
-        // Profile exists - update it with new image URL
-        // Delete old image if it's not the placeholder
-        const placeholderUrl =
-          "https://via.placeholder.com/400x400?text=Profile+Image";
-        if (
-          currentProfile.profile_photo_url &&
-          currentProfile.profile_photo_url !== placeholderUrl
-        ) {
-          await deleteImageFromStorage(currentProfile.profile_photo_url);
-        }
-
-        const { data: updated, error: updateError } = await supabaseAdmin
-          .from("v1_influencer_profiles")
-          .update({ profile_photo_url: url })
-          .eq("user_id", userId)
-          .eq("is_deleted", false)
-          .select()
-          .single();
-
-        if (updateError) {
-          console.error("[v1/uploadProfileImage] Update error:", updateError);
-          // Try to delete uploaded image if update fails
-          await deleteImageFromStorage(url);
-          return {
-            success: false,
-            message: "Failed to update profile image",
-            error: updateError.message,
-          };
-        }
-
-        updatedProfile = updated;
-      }
-
-      return {
-        success: true,
-        profile: updatedProfile,
-        profile_image_url: url,
-        message: "Profile image uploaded successfully",
-      };
-    } catch (err) {
-      console.error("[v1/uploadProfileImage] Exception:", err);
-      return {
-        success: false,
-        message: err.message || "Internal server error",
-      };
-    }
-  }
-
-  // ---------- Complete Profile (PAN, Social Platforms, Languages, Categories) ----------
-
-  /**
-   * Normalize platform name to match database enum (INSTAGRAM | FACEBOOK | YOUTUBE)
-   */
-  normalizePlatform(platformName) {
-    if (!platformName) return null;
-
-    const normalized = String(platformName).toUpperCase().trim();
-    const validPlatforms = ["INSTAGRAM", "FACEBOOK", "YOUTUBE"];
-
-    if (validPlatforms.includes(normalized)) {
-      return normalized;
-    }
-
-    // Handle common variations
-    const lower = normalized.toLowerCase();
-    if (lower === "instagram" || lower === "ig") return "INSTAGRAM";
-    if (lower === "facebook" || lower === "fb") return "FACEBOOK";
-    if (lower === "youtube" || lower === "yt") return "YOUTUBE";
-
-    return null; // Invalid platform
-  }
-
-  /**
-   * Upsert social platforms for v1 influencer
-   */
-  async upsertSocialPlatforms(userId, platforms) {
-    try {
-      if (!Array.isArray(platforms) || platforms.length === 0) {
-        return { success: true, count: 0 };
-      }
-
-      let successCount = 0;
-      const errors = [];
-
-      for (const platform of platforms) {
-        try {
-          const platformName = this.normalizePlatform(
-            platform.platform_name || platform.platform
-          );
-          const username = platform.username || null;
-          const profileUrl =
-            platform.profile_url || platform.profile_link || null;
-          const followerCount =
-            platform.follower_count !== undefined
-              ? parseInt(platform.follower_count)
-              : null;
-          const engagementRate =
-            platform.engagement_rate !== undefined
-              ? parseFloat(platform.engagement_rate)
-              : null;
-
-          if (!platformName || !username) {
-            console.warn(
-              "[v1/upsertSocialPlatforms] Skipping invalid platform:",
-              platform
-            );
-            continue;
-          }
-
-          // Check if platform already exists for this user
-          const { data: existing, error: checkError } = await supabaseAdmin
-            .from("v1_influencer_social_accounts")
-            .select("id")
-            .eq("user_id", userId)
-            .eq("platform", platformName)
-            .eq("is_deleted", false)
-            .maybeSingle();
-
-          // Determine data_source: use from payload if provided, otherwise default to MANUAL
-          // GRAPH_API should be used when connected via Facebook/Instagram Graph API
-          const dataSource = platform.data_source || "MANUAL";
-          const normalizedDataSource =
-            dataSource.toUpperCase() === "GRAPH_API" ? "GRAPH_API" : "MANUAL";
-
-          const platformData = {
-            user_id: userId,
-            platform: platformName,
-            username: username,
-            profile_url: profileUrl,
-            follower_count: Number.isNaN(followerCount) ? null : followerCount,
-            engagement_rate: Number.isNaN(engagementRate)
-              ? null
-              : engagementRate,
-            data_source: normalizedDataSource,
-            is_deleted: false,
-          };
-
-          if (existing && !checkError) {
-            // Update existing
-            const { error: updateError } = await supabaseAdmin
-              .from("v1_influencer_social_accounts")
-              .update(platformData)
-              .eq("id", existing.id);
-
-            if (updateError) {
-              console.error(
-                `[v1/upsertSocialPlatforms] Update error for ${platformName}:`,
-                updateError
-              );
-              errors.push({
-                platform: platformName,
-                error: updateError.message,
-              });
-            } else {
-              successCount++;
-            }
-          } else {
-            // Insert new
-            const { error: insertError } = await supabaseAdmin
-              .from("v1_influencer_social_accounts")
-              .insert(platformData);
-
-            if (insertError) {
-              console.error(
-                `[v1/upsertSocialPlatforms] Insert error for ${platformName}:`,
-                insertError
-              );
-              errors.push({
-                platform: platformName,
-                error: insertError.message,
-              });
-            } else {
-              successCount++;
-            }
-          }
-        } catch (err) {
-          console.error(
-            "[v1/upsertSocialPlatforms] Exception for platform:",
-            err
-          );
-          errors.push({
-            platform: platform?.platform_name || "unknown",
-            error: err.message,
-          });
-        }
-      }
-
-      return {
-        success: errors.length === 0,
-        count: successCount,
-        errors: errors.length > 0 ? errors : undefined,
-      };
-    } catch (err) {
-      console.error("[v1/upsertSocialPlatforms] Exception:", err);
-      return { success: false, count: 0, error: err.message };
-    }
-  }
-
-  /**
-   * Upsert categories for v1 influencer
-   */
-  async upsertCategories(userId, categories) {
-    try {
-      if (!Array.isArray(categories) || categories.length === 0) {
-        return { success: true, count: 0 };
-      }
-
-      // Delete existing categories for this user
-      const { error: deleteError } = await supabaseAdmin
-        .from("v1_influencer_categories")
-        .delete()
-        .eq("user_id", userId);
-
-      if (deleteError) {
-        console.error("[v1/upsertCategories] Delete error:", deleteError);
-        // Continue anyway - might be first time
-      }
-
-      // Insert new categories
-      const categoryData = categories
-        .filter((cat) => cat && String(cat).trim().length > 0)
-        .map((cat) => ({
-          user_id: userId,
-          category: String(cat).trim(),
-        }));
-
-      if (categoryData.length === 0) {
-        return { success: true, count: 0 };
-      }
-
-      const { data, error: insertError } = await supabaseAdmin
-        .from("v1_influencer_categories")
-        .insert(categoryData)
-        .select();
-
-      if (insertError) {
-        console.error("[v1/upsertCategories] Insert error:", insertError);
-        return { success: false, count: 0, error: insertError.message };
-      }
-
-      return { success: true, count: data?.length || 0, categories: data };
-    } catch (err) {
-      console.error("[v1/upsertCategories] Exception:", err);
-      return { success: false, count: 0, error: err.message };
-    }
-  }
-
-  /**
-   * Complete profile - handles both INFLUENCER and BRAND roles
-   */
-  async completeProfile(userId, userRole, profileData) {
-    try {
-      if (userRole === "INFLUENCER") {
-        return await this.completeInfluencerProfile(userId, profileData);
-      } else if (userRole === "BRAND") {
-        return await this.completeBrandProfile(userId, profileData);
-      } else {
-        return {
-          success: false,
-          message: "Profile completion not supported for this role",
-        };
-      }
-    } catch (err) {
-      console.error("[v1/completeProfile] Exception:", err);
-      return {
-        success: false,
-        message: err.message || "Internal server error",
-      };
-    }
-  }
-
-  /**
-   * Complete influencer profile with PAN, social platforms, languages, categories
-   */
-  async completeInfluencerProfile(userId, profileData) {
-    try {
-      // 1) Update v1_influencer_profiles
-      const profileUpdate = {};
-      if (profileData.pan_number !== undefined) {
-        profileUpdate.pan_number = profileData.pan_number || null;
-      }
-      if (profileData.primary_language !== undefined) {
-        profileUpdate.primary_language = profileData.primary_language || null;
-      }
-
-      let updatedProfile = null;
-      if (Object.keys(profileUpdate).length > 0) {
-        const { data, error: updateError } = await supabaseAdmin
-          .from("v1_influencer_profiles")
-          .update(profileUpdate)
-          .eq("user_id", userId)
-          .eq("is_deleted", false)
-          .select()
-          .single();
-
-        if (updateError) {
-          console.error(
-            "[v1/completeInfluencerProfile] Profile update error:",
-            updateError
-          );
-          return { success: false, message: "Failed to update profile" };
-        }
-
-        updatedProfile = data;
-      } else {
-        // Fetch existing profile if no updates
-        const { data, error: fetchError } = await supabaseAdmin
-          .from("v1_influencer_profiles")
-          .select("*")
-          .eq("user_id", userId)
-          .eq("is_deleted", false)
-          .single();
-
-        if (fetchError) {
-          console.error(
-            "[v1/completeInfluencerProfile] Profile fetch error:",
-            fetchError
-          );
-          return { success: false, message: "Profile not found" };
-        }
-
-        updatedProfile = data;
-      }
-
-      // 2) Upsert social platforms
-      let socialPlatformsResult = { success: true, count: 0 };
-      if (
-        profileData.social_platforms &&
-        Array.isArray(profileData.social_platforms)
-      ) {
-        socialPlatformsResult = await this.upsertSocialPlatforms(
-          userId,
-          profileData.social_platforms
-        );
-        if (!socialPlatformsResult.success) {
-          console.warn(
-            "[v1/completeInfluencerProfile] Some social platforms failed:",
-            socialPlatformsResult.errors
-          );
-          // Continue - don't fail entire request
-        }
-      }
-
-      // 3) Upsert categories
-      let categoriesResult = { success: true, count: 0 };
-      if (profileData.categories && Array.isArray(profileData.categories)) {
-        categoriesResult = await this.upsertCategories(
-          userId,
-          profileData.categories
-        );
-        if (!categoriesResult.success) {
-          console.error(
-            "[v1/completeInfluencerProfile] Categories update failed:",
-            categoriesResult.error
-          );
-          return {
-            success: false,
-            message: `Failed to update categories: ${categoriesResult.error}`,
-          };
-        }
-      }
-
-      // 4) Calculate profile completion percentage
-      const completionPct = this.calculateProfileCompletion(updatedProfile, {
-        hasSocialPlatforms: socialPlatformsResult.count > 0,
-        hasCategories: categoriesResult.count > 0,
-      });
-
-      // Update completion percentage
-      if (completionPct !== updatedProfile.profile_completion_pct) {
-        await supabaseAdmin
-          .from("v1_influencer_profiles")
-          .update({ profile_completion_pct: completionPct })
-          .eq("user_id", userId);
-        updatedProfile.profile_completion_pct = completionPct;
-      }
-
-      return {
-        success: true,
-        profile: updatedProfile,
-        social_platforms_count: socialPlatformsResult.count,
-        categories_count: categoriesResult.count,
-        profile_completion_pct: completionPct,
-        message: "Profile completed successfully",
-      };
-    } catch (err) {
-      console.error("[v1/completeInfluencerProfile] Exception:", err);
-      return {
-        success: false,
-        message: err.message || "Internal server error",
-      };
-    }
-  }
-
-  /**
-   * Complete brand profile with PAN, brand_name, bio, brand_logo
-   */
-  async completeBrandProfile(userId, profileData) {
-    try {
-      const {
-        uploadImageToStorage,
-        deleteImageFromStorage,
-      } = require("../../utils/imageUpload");
-
-      // 1) Handle brand logo upload if provided
-      let brandLogoUrl = null;
-      if (profileData.brand_logo_file) {
-        const { url, error: uploadError } = await uploadImageToStorage(
-          profileData.brand_logo_file.buffer,
-          profileData.brand_logo_file.originalname,
-          "brands" // Upload to brands folder
-        );
-
-        if (uploadError || !url) {
-          console.error(
-            "[v1/completeBrandProfile] Logo upload error:",
-            uploadError
-          );
-          return {
-            success: false,
-            message: uploadError || "Failed to upload brand logo",
-          };
-        }
-
-        brandLogoUrl = url;
-
-        // Delete old logo if exists
-        const { data: currentProfile } = await supabaseAdmin
-          .from("v1_brand_profiles")
-          .select("brand_logo_url")
-          .eq("user_id", userId)
-          .eq("is_deleted", false)
-          .maybeSingle();
-
-        if (currentProfile?.brand_logo_url) {
-          await deleteImageFromStorage(currentProfile.brand_logo_url);
-        }
-      }
-
-      // 2) Update v1_brand_profiles
-      const profileUpdate = {};
-
-      // Debug logging (exclude file buffer to avoid terminal spam)
-      const loggableProfileData = { ...profileData };
-      if (loggableProfileData.brand_logo_file) {
-        loggableProfileData.brand_logo_file = {
-          originalname: profileData.brand_logo_file.originalname,
-          size: profileData.brand_logo_file.size,
-          mimetype: profileData.brand_logo_file.mimetype,
-          // Don't log buffer data
-        };
-      }
-
-      console.log(
-        "[v1/completeBrandProfile] Received profileData:",
-        JSON.stringify(loggableProfileData, null, 2)
-      );
-
-      // Update pan_number if provided
-      if (profileData.pan_number !== undefined) {
-        // Explicitly check for null/undefined, preserve empty strings
-        if (
-          profileData.pan_number === null ||
-          profileData.pan_number === undefined
-        ) {
-          profileUpdate.pan_number = null;
-        } else {
-          const trimmed = String(profileData.pan_number).trim();
-          profileUpdate.pan_number = trimmed || null;
-        }
-        console.log(
-          "[v1/completeBrandProfile] Setting pan_number:",
-          profileUpdate.pan_number
-        );
-      }
-
-      // Update brand_name if provided
-      if (profileData.brand_name !== undefined) {
-        // Explicitly check for null/undefined, preserve empty strings
-        if (
-          profileData.brand_name === null ||
-          profileData.brand_name === undefined
-        ) {
-          profileUpdate.brand_name = null;
-        } else {
-          const trimmed = String(profileData.brand_name).trim();
-          profileUpdate.brand_name = trimmed || null;
-        }
-        console.log(
-          "[v1/completeBrandProfile] Setting brand_name:",
-          profileUpdate.brand_name
-        );
-      }
-
-      // Update bio if provided
-      if (profileData.bio !== undefined) {
-        // Explicitly check for null/undefined, preserve empty strings
-        if (profileData.bio === null || profileData.bio === undefined) {
-          profileUpdate.bio = null;
-        } else {
-          const trimmed = String(profileData.bio).trim();
-          profileUpdate.bio = trimmed || null;
-        }
-        console.log(
-          "[v1/completeBrandProfile] Setting bio:",
-          profileUpdate.bio
-        );
-      }
-
-      if (brandLogoUrl) {
-        profileUpdate.brand_logo_url = brandLogoUrl;
-      }
-
-      console.log(
-        "[v1/completeBrandProfile] Final profileUpdate:",
-        JSON.stringify(profileUpdate, null, 2)
-      );
-
-      // Check if profile exists
-      const { data: existingProfile, error: fetchError } = await supabaseAdmin
-        .from("v1_brand_profiles")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("is_deleted", false)
-        .maybeSingle();
-
-      let updatedProfile = null;
-
-      if (!existingProfile) {
-        // Profile doesn't exist - create it
-        console.log(
-          "[v1/completeBrandProfile] Profile not found, creating new profile"
-        );
-
-        const placeholderLogoUrl =
-          "https://via.placeholder.com/400x400?text=Brand+Logo";
-
-        const newProfile = {
-          user_id: userId,
-          brand_name: profileData.brand_name || "", // Required field
-          brand_logo_url: brandLogoUrl || placeholderLogoUrl, // Required field
-          bio: profileData.bio || null,
-          gender: null,
-          pan_number: profileData.pan_number || null,
-          pan_verified: false,
-          profile_completion_pct: 0,
-          is_deleted: false,
-        };
-
-        const { data: createdProfile, error: createError } = await supabaseAdmin
-          .from("v1_brand_profiles")
-          .insert(newProfile)
-          .select()
-          .single();
-
-        if (createError) {
-          console.error(
-            "[v1/completeBrandProfile] Profile creation error:",
-            createError
-          );
-          // If logo was uploaded but profile creation failed, try to delete uploaded logo
-          if (brandLogoUrl) {
-            await deleteImageFromStorage(brandLogoUrl);
-          }
-          return {
-            success: false,
-            message: "Failed to create profile",
-            error: createError.message,
-          };
-        }
-
-        updatedProfile = createdProfile;
-      } else {
-        // Profile exists - update it
-        if (Object.keys(profileUpdate).length > 0) {
-          const { data, error: updateError } = await supabaseAdmin
-            .from("v1_brand_profiles")
-            .update(profileUpdate)
-            .eq("user_id", userId)
-            .eq("is_deleted", false)
-            .select()
-            .single();
-
-          if (updateError) {
-            console.error(
-              "[v1/completeBrandProfile] Profile update error:",
-              updateError
-            );
-            // If logo was uploaded but update failed, try to delete uploaded logo
-            if (brandLogoUrl) {
-              await deleteImageFromStorage(brandLogoUrl);
-            }
-            return { success: false, message: "Failed to update profile" };
-          }
-
-          updatedProfile = data;
-        } else {
-          // No updates to make, use existing profile
-          updatedProfile = existingProfile;
-        }
-      }
-
-      // 3) Calculate profile completion percentage for brand
-      const completionPct =
-        this.calculateBrandProfileCompletion(updatedProfile);
-
-      // Update completion percentage
-      if (completionPct !== updatedProfile.profile_completion_pct) {
-        await supabaseAdmin
-          .from("v1_brand_profiles")
-          .update({ profile_completion_pct: completionPct })
-          .eq("user_id", userId);
-        updatedProfile.profile_completion_pct = completionPct;
-      }
-
-      return {
-        success: true,
-        profile: updatedProfile,
-        profile_completion_pct: completionPct,
-        brand_logo_url: brandLogoUrl || updatedProfile.brand_logo_url,
-        message: "Profile completed successfully",
-      };
-    } catch (err) {
-      console.error("[v1/completeBrandProfile] Exception:", err);
-      return {
-        success: false,
-        message: err.message || "Internal server error",
-      };
-    }
-  }
-
-  /**
-   * Calculate brand profile completion percentage
-   */
-  calculateBrandProfileCompletion(profile) {
-    let completed = 0;
-    let total = 0;
-
-    // Required/important fields
-    total++;
-    if (profile.brand_logo_url) completed++;
-
-    total++;
-    if (profile.brand_name) completed++;
-
-    total++;
-    if (profile.bio) completed++;
-
-    total++;
-    if (profile.pan_number) completed++;
-
-    return Math.round((completed / total) * 100);
-  }
-
-  /**
-   * Calculate influencer profile completion percentage
-   */
-  calculateProfileCompletion(profile, extras = {}) {
-    let completed = 0;
-    let total = 0;
-
-    // Required fields
-    total++;
-    if (profile.profile_photo_url) completed++;
-
-    total++;
-    if (profile.bio) completed++;
-
-    // Optional but important
-    total++;
-    if (profile.pan_number) completed++;
-
-    total++;
-    if (profile.primary_language) completed++;
-
-    total++;
-    if (extras.hasSocialPlatforms) completed++;
-
-    total++;
-    if (extras.hasCategories) completed++;
-
-    return Math.round((completed / total) * 100);
-  }
 }
 
 module.exports = new AuthService();

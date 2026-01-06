@@ -879,9 +879,9 @@ const {
 app.post("/webhook/razorpay", SubscriptionController.handleWebhook);
 
 // API routes (legacy)
-app.use("/api/auth", authRoutes);
-app.use("/api/campaigns", campaignRoutes);
-app.use("/api/dashboard", dashboardRoutes);
+// app.use("/api/auth", authRoutes);
+// app.use("/api/campaigns", campaignRoutes);
+// app.use("/api/dashboard", dashboardRoutes);
 
 app.use("/api/requests", requestRoutes);
 app.use("/api/messages", messageRoutes);
@@ -908,8 +908,17 @@ app.use("/api/oauth", oauthRoutes);
 try {
   const v1Router = require("../v1");
   // Mount before the /api/* 404 handler so it is reachable
-  app.use("/api/v1", v1Router);
+  app.use("/api/v1", v1Router.router);
   console.log("✅ Mounted v1 API router at /api/v1");
+
+  // Initialize v1 chat socket handlers
+  try {
+    const initV1ChatSocket = require("../v1/socket");
+    initV1ChatSocket(server);
+    console.log("✅ Initialized v1 chat socket handlers");
+  } catch (socketErr) {
+    console.warn("⚠️ v1 chat socket not available:", socketErr.message);
+  }
 } catch (err) {
   console.warn("⚠️ v1 router not available yet:", err.message);
 }
