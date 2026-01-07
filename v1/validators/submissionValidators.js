@@ -11,11 +11,6 @@ const validateSubmitScript = [
     .withMessage('applicationId is required')
     .isUUID()
     .withMessage('applicationId must be a valid UUID'),
-  body('version')
-    .notEmpty()
-    .withMessage('version is required')
-    .isInt({ min: 1 })
-    .withMessage('version must be a positive integer'),
   body('fileUrl')
     .optional()
     .isURL()

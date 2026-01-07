@@ -131,7 +131,7 @@ class SubmissionService {
   /**
    * Submit script (Influencer)
    */
-  async submitScript({ applicationId, influencerId, fileUrl, version }) {
+  async submitScript({ applicationId, influencerId, fileUrl }) {
     try {
       // Check ownership and application status
       const ownershipCheck = await this.checkInfluencerOwnership(applicationId, influencerId);
@@ -160,17 +160,30 @@ class SubmissionService {
         return { success: false, message: 'Campaign not found' };
       }
 
-      // Validate version
-      if (!version || version < 1) {
-        return { success: false, message: 'Version must be a positive integer' };
+      // Calculate next version automatically by finding the highest existing version
+      const { data: existingScripts, error: versionError } = await supabaseAdmin
+        .from('v1_scripts')
+        .select('version')
+        .eq('application_id', applicationId)
+        .order('version', { ascending: false })
+        .limit(1);
+
+      if (versionError) {
+        console.error('[SubmissionService/submitScript] Version check error:', versionError);
+        return { success: false, message: 'Database error while calculating version' };
       }
 
-      // Check if script with same version already exists
+      // Determine next version: if scripts exist, increment highest version; otherwise start at 1
+      const nextVersion = existingScripts && existingScripts.length > 0 
+        ? existingScripts[0].version + 1 
+        : 1;
+
+      // Safety check: verify the calculated version doesn't already exist
       const { data: existingScript, error: existingError } = await supabaseAdmin
         .from('v1_scripts')
         .select('id')
         .eq('application_id', applicationId)
-        .eq('version', version)
+        .eq('version', nextVersion)
         .maybeSingle();
 
       if (existingError) {
@@ -179,15 +192,15 @@ class SubmissionService {
       }
 
       if (existingScript) {
-        return { success: false, message: `Script version ${version} already exists for this application` };
+        return { success: false, message: `Script version ${nextVersion} already exists for this application` };
       }
 
-      // Create script submission
+      // Create script submission with calculated version
       const { data: script, error: insertError } = await supabaseAdmin
         .from('v1_scripts')
         .insert({
           application_id: applicationId,
-          version: version,
+          version: nextVersion,
           file_url: fileUrl,
           status: 'PENDING'
         })
@@ -562,44 +575,129 @@ class SubmissionService {
    */
   async getScripts(applicationId, userId, userRole) {
     try {
-      // Verify user has access to this application
-      let query = supabaseAdmin
-        .from('v1_scripts')
+      // First, get the application with campaign info to check access
+      const { data: application, error: appError } = await supabaseAdmin
+        .from('v1_applications')
         .select(`
           *,
-          v1_applications!inner(
-            id,
-            influencer_id,
-            v1_campaigns!inner(brand_id)
+          v1_campaigns!inner(
+            *,
+            brand_id
           )
         `)
+        .eq('id', applicationId)
+        .maybeSingle();
+
+      if (appError || !application) {
+        return { success: false, message: 'Application not found' };
+      }
+
+      const campaign = application.v1_campaigns;
+
+      // Check access
+      if (userRole === 'INFLUENCER' && application.influencer_id !== userId) {
+        return { success: false, message: 'Unauthorized' };
+      }
+
+      if (userRole === 'BRAND_OWNER' && campaign.brand_id !== userId) {
+        return { success: false, message: 'Unauthorized' };
+      }
+
+      // Get scripts
+      const { data: scripts, error: scriptsError } = await supabaseAdmin
+        .from('v1_scripts')
+        .select('*')
         .eq('application_id', applicationId)
         .order('version', { ascending: false });
 
-      const { data: scripts, error } = await query;
-
-      if (error) {
-        console.error('[SubmissionService/getScripts] Error:', error);
+      if (scriptsError) {
+        console.error('[SubmissionService/getScripts] Error:', scriptsError);
         return { success: false, message: 'Database error' };
       }
 
-      // Check access
-      if (scripts && scripts.length > 0) {
-        const application = scripts[0].v1_applications;
-        const campaign = application.v1_campaigns;
+      // Get campaign details
+      const { data: campaignDetails, error: campaignError } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('*')
+        .eq('id', campaign.id)
+        .maybeSingle();
 
-        if (userRole === 'INFLUENCER' && application.influencer_id !== userId) {
-          return { success: false, message: 'Unauthorized' };
-        }
+      if (campaignError) {
+        console.error('[SubmissionService/getScripts] Campaign error:', campaignError);
+      }
 
-        if (userRole === 'BRAND_OWNER' && campaign.brand_id !== userId) {
-          return { success: false, message: 'Unauthorized' };
+      // Get brand profile details
+      let brandProfile = null;
+      if (campaignDetails && campaignDetails.brand_id) {
+        const { data: brandProfileData, error: brandError } = await supabaseAdmin
+          .from('v1_brand_profiles')
+          .select('*')
+          .eq('user_id', campaignDetails.brand_id)
+          .eq('is_deleted', false)
+          .maybeSingle();
+
+        if (brandError) {
+          console.error('[SubmissionService/getScripts] Brand profile error:', brandError);
+        } else {
+          brandProfile = brandProfileData;
         }
       }
 
+      // Get influencer profile and user details
+      let influencerProfile = null;
+      let influencerUser = null;
+      if (application.influencer_id) {
+        const { data: influencerProfileData, error: influencerError } = await supabaseAdmin
+          .from('v1_influencer_profiles')
+          .select('*')
+          .eq('user_id', application.influencer_id)
+          .eq('is_deleted', false)
+          .maybeSingle();
+
+        if (influencerError) {
+          console.error('[SubmissionService/getScripts] Influencer profile error:', influencerError);
+        } else {
+          influencerProfile = influencerProfileData;
+        }
+
+        // Get influencer user details
+        const { data: userData, error: userError } = await supabaseAdmin
+          .from('v1_users')
+          .select('id, name, email, role, profile_picture_url')
+          .eq('id', application.influencer_id)
+          .eq('is_deleted', false)
+          .maybeSingle();
+
+        if (userError) {
+          console.error('[SubmissionService/getScripts] User error:', userError);
+        } else {
+          influencerUser = userData;
+        }
+      }
+
+      // Combine influencer profile with user data
+      const influencerDetails = influencerProfile ? {
+        ...influencerProfile,
+        user: influencerUser
+      } : null;
+
+      // Remove v1_campaigns from application and attach details to each script
+      const { v1_campaigns, ...applicationWithoutCampaign } = application;
+      const scriptsWithDetails = (scripts || []).map(script => ({
+        ...script,
+        application: {
+          ...applicationWithoutCampaign,
+          campaign: campaignDetails ? {
+            ...campaignDetails,
+            brand_profile: brandProfile
+          } : null,
+          influencer_profile: influencerDetails
+        }
+      }));
+
       return {
         success: true,
-        scripts: scripts || []
+        scripts: scriptsWithDetails
       };
     } catch (err) {
       console.error('[SubmissionService/getScripts] Exception:', err);
@@ -612,44 +710,129 @@ class SubmissionService {
    */
   async getWorkSubmissions(applicationId, userId, userRole) {
     try {
-      // Verify user has access to this application
-      let query = supabaseAdmin
-        .from('v1_work_submissions')
+      // First, get the application with campaign info to check access
+      const { data: application, error: appError } = await supabaseAdmin
+        .from('v1_applications')
         .select(`
           *,
-          v1_applications!inner(
-            id,
-            influencer_id,
-            v1_campaigns!inner(brand_id)
+          v1_campaigns!inner(
+            *,
+            brand_id
           )
         `)
+        .eq('id', applicationId)
+        .maybeSingle();
+
+      if (appError || !application) {
+        return { success: false, message: 'Application not found' };
+      }
+
+      const campaign = application.v1_campaigns;
+
+      // Check access
+      if (userRole === 'INFLUENCER' && application.influencer_id !== userId) {
+        return { success: false, message: 'Unauthorized' };
+      }
+
+      if (userRole === 'BRAND_OWNER' && campaign.brand_id !== userId) {
+        return { success: false, message: 'Unauthorized' };
+      }
+
+      // Get work submissions
+      const { data: workSubmissions, error: workError } = await supabaseAdmin
+        .from('v1_work_submissions')
+        .select('*')
         .eq('application_id', applicationId)
         .order('created_at', { ascending: false });
 
-      const { data: workSubmissions, error } = await query;
-
-      if (error) {
-        console.error('[SubmissionService/getWorkSubmissions] Error:', error);
+      if (workError) {
+        console.error('[SubmissionService/getWorkSubmissions] Error:', workError);
         return { success: false, message: 'Database error' };
       }
 
-      // Check access
-      if (workSubmissions && workSubmissions.length > 0) {
-        const application = workSubmissions[0].v1_applications;
-        const campaign = application.v1_campaigns;
+      // Get campaign details
+      const { data: campaignDetails, error: campaignError } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('*')
+        .eq('id', campaign.id)
+        .maybeSingle();
 
-        if (userRole === 'INFLUENCER' && application.influencer_id !== userId) {
-          return { success: false, message: 'Unauthorized' };
-        }
+      if (campaignError) {
+        console.error('[SubmissionService/getWorkSubmissions] Campaign error:', campaignError);
+      }
 
-        if (userRole === 'BRAND_OWNER' && campaign.brand_id !== userId) {
-          return { success: false, message: 'Unauthorized' };
+      // Get brand profile details
+      let brandProfile = null;
+      if (campaignDetails && campaignDetails.brand_id) {
+        const { data: brandProfileData, error: brandError } = await supabaseAdmin
+          .from('v1_brand_profiles')
+          .select('*')
+          .eq('user_id', campaignDetails.brand_id)
+          .eq('is_deleted', false)
+          .maybeSingle();
+
+        if (brandError) {
+          console.error('[SubmissionService/getWorkSubmissions] Brand profile error:', brandError);
+        } else {
+          brandProfile = brandProfileData;
         }
       }
 
+      // Get influencer profile and user details
+      let influencerProfile = null;
+      let influencerUser = null;
+      if (application.influencer_id) {
+        const { data: influencerProfileData, error: influencerError } = await supabaseAdmin
+          .from('v1_influencer_profiles')
+          .select('*')
+          .eq('user_id', application.influencer_id)
+          .eq('is_deleted', false)
+          .maybeSingle();
+
+        if (influencerError) {
+          console.error('[SubmissionService/getWorkSubmissions] Influencer profile error:', influencerError);
+        } else {
+          influencerProfile = influencerProfileData;
+        }
+
+        // Get influencer user details
+        const { data: userData, error: userError } = await supabaseAdmin
+          .from('v1_users')
+          .select('id, name, email, role, profile_picture_url')
+          .eq('id', application.influencer_id)
+          .eq('is_deleted', false)
+          .maybeSingle();
+
+        if (userError) {
+          console.error('[SubmissionService/getWorkSubmissions] User error:', userError);
+        } else {
+          influencerUser = userData;
+        }
+      }
+
+      // Combine influencer profile with user data
+      const influencerDetails = influencerProfile ? {
+        ...influencerProfile,
+        user: influencerUser
+      } : null;
+
+      // Remove v1_campaigns from application and attach details to each work submission
+      const { v1_campaigns, ...applicationWithoutCampaign } = application;
+      const workSubmissionsWithDetails = (workSubmissions || []).map(workSubmission => ({
+        ...workSubmission,
+        application: {
+          ...applicationWithoutCampaign,
+          campaign: campaignDetails ? {
+            ...campaignDetails,
+            brand_profile: brandProfile
+          } : null,
+          influencer_profile: influencerDetails
+        }
+      }));
+
       return {
         success: true,
-        workSubmissions: workSubmissions || []
+        workSubmissions: workSubmissionsWithDetails
       };
     } catch (err) {
       console.error('[SubmissionService/getWorkSubmissions] Exception:', err);

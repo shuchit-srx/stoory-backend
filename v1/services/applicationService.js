@@ -438,7 +438,7 @@ class ApplicationService {
       // Update accepted_count in v1_campaigns table
       // Count all applications with phase ACCEPTED or COMPLETED for this campaign
       if (app.campaign_id) {
-        const countUpdateResult = await this.updateCampaignAcceptedCount(campaignId);
+        const countUpdateResult = await this.updateCampaignAcceptedCount(app.campaign_id);
         if (!countUpdateResult.success) {
           console.error('[ApplicationService/accept] Failed to update accepted_count:', countUpdateResult.message);
           // Don't fail the entire operation if count update fails, just log it

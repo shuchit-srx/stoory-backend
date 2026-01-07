@@ -14,6 +14,36 @@ const upload = multer({
 
 class SubmissionController {
   /**
+   * Helper function to transform v1_campaigns to campaigns and v1_applications to applications in response
+   */
+  transformResponse(obj) {
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map(item => this.transformResponse(item));
+    }
+
+    if (typeof obj !== 'object') {
+      return obj;
+    }
+
+    const transformed = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === 'v1_campaigns') {
+        transformed.campaigns = this.transformResponse(value);
+      } else if (key === 'v1_applications') {
+        transformed.applications = this.transformResponse(value);
+      } else {
+        transformed[key] = this.transformResponse(value);
+      }
+    }
+
+    return transformed;
+  }
+
+  /**
    * Submit script (Influencer)
    */
   async submitScript(req, res) {
@@ -23,7 +53,7 @@ class SubmissionController {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { applicationId, version } = req.body;
+      const { applicationId } = req.body;
       const influencerId = req.user.id;
 
       // Handle file upload
@@ -64,8 +94,7 @@ class SubmissionController {
       const result = await SubmissionService.submitScript({
         applicationId,
         influencerId,
-        fileUrl,
-        version: parseInt(version)
+        fileUrl
       });
 
       if (!result.success) {
@@ -259,7 +288,9 @@ class SubmissionController {
         return res.status(400).json(result);
       }
 
-      res.json(result);
+      // Transform v1_campaigns to campaigns and v1_applications to applications
+      const transformedResult = this.transformResponse(result);
+      res.json(transformedResult);
     } catch (err) {
       console.error('[SubmissionController/getScripts] Exception:', err);
       res.status(500).json({
@@ -284,7 +315,9 @@ class SubmissionController {
         return res.status(400).json(result);
       }
 
-      res.json(result);
+      // Transform v1_campaigns to campaigns and v1_applications to applications
+      const transformedResult = this.transformResponse(result);
+      res.json(transformedResult);
     } catch (err) {
       console.error('[SubmissionController/getWorkSubmissions] Exception:', err);
       res.status(500).json({
