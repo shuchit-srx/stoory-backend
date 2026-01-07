@@ -13,6 +13,7 @@ const {
 } = require("../validators");
 const AuthService = require("../services/authService");
 const authMiddleware = require("../middleware/authMiddleware");
+const { normalizeEnums } = require("../middleware/enumNormalizer");
 
 // Backward compatibility: redirect old profile route to new profile controller
 const { ProfileController } = require("../controllers/profileController");
@@ -22,7 +23,7 @@ const { upload } = require("../../utils/imageUpload");
 // ============================================
 // PUBLIC ROUTES - OTP Authentication (Influencers)
 // ============================================
-router.post("/send-otp", validateSendOTP, AuthController.sendOTP);
+router.post("/send-otp", normalizeEnums, validateSendOTP, AuthController.sendOTP);
 router.post(
   "/send-registration-otp",
   validateSendOTP,

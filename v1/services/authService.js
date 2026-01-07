@@ -106,7 +106,7 @@ class AuthService {
 
   // ---------- Send OTP (login existing v1 user) ----------
 
-  async sendOTP(phone) {
+  async sendOTP(phone, role = null) {
     try {
       // Validate phone format
       if (!phone.startsWith("+")) {
@@ -134,9 +134,30 @@ class AuthService {
       if (!user) {
         return {
           success: false,
-          message: "Account not found. Please register first.",
+          message: "Account not found. Please register the phone number.",
           code: "USER_NOT_FOUND",
         };
+      }
+
+      // Validate role if provided
+      if (role) {
+        const validRoles = ["BRAND_OWNER", "INFLUENCER", "ADMIN"];
+        if (!validRoles.includes(role)) {
+          return {
+            success: false,
+            message: "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
+            code: "INVALID_ROLE",
+          };
+        }
+
+        // Check if user's role matches the provided role
+        if (user.role !== role) {
+          return {
+            success: false,
+            message: `Phone number does not belong to a ${role}.`,
+            code: "ROLE_MISMATCH",
+          };
+        }
       }
 
       // Generate and store OTP

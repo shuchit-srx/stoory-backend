@@ -62,6 +62,15 @@ function normalizeEnums(req, res, next) {
       }
     }
 
+    // Role enum
+    if (req.body.role !== undefined && req.body.role !== null) {
+      const normalized = String(req.body.role).toUpperCase().trim();
+      const validRoles = ["BRAND_OWNER", "INFLUENCER", "ADMIN"];
+      if (validRoles.includes(normalized)) {
+        req.body.role = normalized;
+      }
+    }
+
     // Social platforms array
     if (Array.isArray(req.body.social_platforms)) {
       req.body.social_platforms = req.body.social_platforms.map((platform) => {
