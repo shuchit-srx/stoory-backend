@@ -33,6 +33,7 @@ const adminSettingsRoutes = require("../routes/adminSettings");
 const enhancedWalletRoutes = require("../routes/enhancedWallet");
 const socialPlatformRoutes = require("../routes/socialPlatforms");
 const influencerRoutes = require("../routes/influencers");
+const oauthRoutes = require("../routes/oauth");
 
 const app = express();
 const server = http.createServer(app);
@@ -121,6 +122,20 @@ app.get("/test-socket", (req, res) => {
 
 // Setup security middleware
 setupSecurityMiddleware(app);
+
+// Serve static files for App Links (must be before other routes)
+const path = require('path');
+app.use(express.static(path.join(__dirname, '../public')));
+
+// Serve .well-known and apple-app-site-association at root paths
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/.well-known/assetlinks.json'));
+});
+
+app.get('/apple-app-site-association', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.sendFile(path.join(__dirname, '../public/apple-app-site-association'));
+});
 
 // CORS test endpoint (after security middleware)
 app.get("/api/cors-test", (req, res) => {
@@ -868,25 +883,26 @@ app.post("/webhook/razorpay", SubscriptionController.handleWebhook);
 // app.use("/api/campaigns", campaignRoutes);
 // app.use("/api/dashboard", dashboardRoutes);
 
-// app.use("/api/requests", requestRoutes);
-// app.use("/api/messages", messageRoutes);
-// app.use("/api/conversations", conversationRoutes);
-// app.use("/api/payments", paymentRoutes);
-// app.use("/api/users", userRoutes);
-// app.use("/api/subscriptions", subscriptionRoutes);
-// app.use("/api/notifications", notificationRoutes);
-// app.use("/api/fcm", fcmRoutes);
-// app.use("/api/attachments", attachmentRoutes);
-// app.use("/api/storage", directStorageRoutes);
-// app.use("/api/admin/payments", adminPaymentRoutes);
-// app.use("/api/admin/wallet", adminWalletRoutes);
-// app.use("/api/wallet", enhancedWalletRoutes);
-// app.use("/api/admin/settings", adminSettingsRoutes);
-// app.use("/api/admin/commission-settings", commissionSettingsRoutes);
-// app.use("/api/coupons", couponRoutes);
-// app.use("/api/social-platforms", socialPlatformRoutes);
-// app.use("/api/reports", reportRoutes);
-// app.use("/api/influencers", influencerRoutes);
+app.use("/api/requests", requestRoutes);
+app.use("/api/messages", messageRoutes);
+app.use("/api/conversations", conversationRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/subscriptions", subscriptionRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/fcm", fcmRoutes);
+app.use("/api/attachments", attachmentRoutes);
+app.use("/api/storage", directStorageRoutes);
+app.use("/api/admin/payments", adminPaymentRoutes);
+app.use("/api/admin/wallet", adminWalletRoutes);
+app.use("/api/wallet", enhancedWalletRoutes);
+app.use("/api/admin/settings", adminSettingsRoutes);
+app.use("/api/admin/commission-settings", commissionSettingsRoutes);
+app.use("/api/coupons", couponRoutes);
+app.use("/api/social-platforms", socialPlatformRoutes);
+app.use("/api/reports", reportRoutes);
+app.use("/api/influencers", influencerRoutes);
+app.use("/api/oauth", oauthRoutes);
 
 // v1 API routes (new tables, new flow)
 try {
