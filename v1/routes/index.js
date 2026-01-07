@@ -37,4 +37,8 @@ router.use('/payments', paymentRoutes); // → /api/v1/payments/*
 const subscriptionRoutes = require('./subscriptions');
 router.use('/subscriptions', subscriptionRoutes); // → /api/v1/subscriptions/*
 
+// Mount v1 submission routes
+const submissionRoutes = require('./submissions');
+router.use('/submissions', submissionRoutes); // → /api/v1/submissions/*
+
 module.exports = router;

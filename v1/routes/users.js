@@ -15,5 +15,13 @@ router.get(
   UserController.getUser
 );
 
+// Get all influencers (BRAND_OWNER only)
+router.get(
+  "/influencers/all",
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole("BRAND_OWNER"),
+  UserController.getInfluencers
+);
+
 module.exports = router;
 

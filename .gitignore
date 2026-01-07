@@ -120,3 +120,6 @@ draft_*.md
 
 # Local development
 .local/ 
+
+# Docs
+v1/v1_API_DOCUMENTATION.md

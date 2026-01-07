@@ -61,7 +61,7 @@ class PaymentService {
 
   /**
    * Create Razorpay order for application payment (Brand pays admin)
-   * Only allowed when application status is COMPLETED
+   * Only allowed when application phase is ACCEPTED
    */
   async createPaymentOrder(applicationId, userId) {
     try {
@@ -93,11 +93,11 @@ class PaymentService {
         };
       }
 
-      // Check if application status is COMPLETED
-      if (application.status !== "COMPLETED") {
+      // Check if application phase is ACCEPTED (payment can be made after acceptance)
+      if (application.phase !== "ACCEPTED") {
         return {
           success: false,
-          message: "Payment can only be initiated for completed applications",
+          message: "Payment can only be initiated for accepted applications",
         };
       }
 
@@ -301,11 +301,11 @@ class PaymentService {
         };
       }
 
-      // Verify application exists and is COMPLETED
+      // Verify application exists and is ACCEPTED, then transition phase after payment
       if (application_id) {
         const { data: application, error: applicationError } = await supabaseAdmin
           .from("v1_applications")
-          .select("id, status")
+          .select("id, phase, campaign_id")
           .eq("id", application_id)
           .single();
 
@@ -316,11 +316,38 @@ class PaymentService {
           };
         }
 
-        if (application.status !== "COMPLETED") {
+        if (application.phase !== "ACCEPTED") {
           return {
             success: false,
-            message: "Application must be completed before payment",
+            message: "Application must be accepted before payment",
           };
+        }
+
+        // Fetch campaign to check requires_script
+        const { data: campaign, error: campaignError } = await supabaseAdmin
+          .from("v1_campaigns")
+          .select("requires_script")
+          .eq("id", application.campaign_id)
+          .maybeSingle();
+
+        if (campaignError) {
+          console.error("[v1/PaymentService/verifyPayment] Campaign fetch error:", campaignError);
+        }
+
+        // Determine next phase based on requires_script
+        const nextPhase = campaign?.requires_script === true ? 'SCRIPT' : 'WORK';
+
+        // Update application phase after payment verification
+        const { error: phaseUpdateError } = await supabaseAdmin
+          .from("v1_applications")
+          .update({
+            phase: nextPhase
+          })
+          .eq("id", application_id);
+
+        if (phaseUpdateError) {
+          console.error("[v1/PaymentService/verifyPayment] Phase update error:", phaseUpdateError);
+          // Don't fail payment verification if phase update fails, but log it
         }
       }
 
@@ -414,7 +441,7 @@ class PaymentService {
       // Get application details
       const { data: application, error: applicationError } = await supabaseAdmin
         .from("v1_applications")
-        .select("id, influencer_id, status")
+        .select("id, influencer_id, phase")
         .eq("id", applicationId)
         .single();
 
@@ -425,7 +452,7 @@ class PaymentService {
         };
       }
 
-      if (application.status !== "COMPLETED") {
+      if (application.phase !== "COMPLETED") {
         return {
           success: false,
           message: "Application must be completed before releasing payout",

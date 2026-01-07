@@ -10,8 +10,8 @@ class AuthController {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { phone } = req.body;
-      const result = await AuthService.sendOTP(phone);
+      const { phone, role } = req.body;
+      const result = await AuthService.sendOTP(phone, role);
 
       if (result.success) {
         return res.json({

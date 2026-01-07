@@ -24,6 +24,10 @@ const validateSendOTP = [
       }
       return true;
     }),
+  body("role")
+    .optional()
+    .isIn(["BRAND_OWNER", "INFLUENCER", "ADMIN"])
+    .withMessage("Role must be one of: BRAND_OWNER, INFLUENCER, ADMIN"),
 ];
 
 const validateVerifyOTP = [

@@ -6,4 +6,5 @@ module.exports = {
   ChatService: require("./chatService"),
   UserService: require("./userService"),
   ProfileService: require("./profileService"),
+  SubmissionService: require("./submissionService"),
 };

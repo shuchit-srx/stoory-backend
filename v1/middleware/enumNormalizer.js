@@ -62,6 +62,54 @@ function normalizeEnums(req, res, next) {
       }
     }
 
+    // Application phase enum
+    if (req.body.phase !== undefined && req.body.phase !== null) {
+      const normalized = String(req.body.phase).toUpperCase().trim();
+      const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "COMPLETED", "CANCELLED"];
+      if (validPhases.includes(normalized)) {
+        req.body.phase = normalized;
+      }
+    }
+
+    // Script/Work submission status enum
+    if (req.body.status !== undefined && req.body.status !== null) {
+      const normalized = String(req.body.status).toUpperCase().trim();
+      const validSubmissionStatuses = ["PENDING", "ACCEPTED", "REVISION", "REJECTED"];
+      // Only normalize if it's a valid submission status (not campaign status)
+      if (validSubmissionStatuses.includes(normalized)) {
+        // Check if this is likely a submission status (not campaign status)
+        // We'll normalize it if it matches submission statuses
+        req.body.status = normalized;
+      }
+    }
+
+    // Entity type enum (for rejections)
+    if (req.body.entity_type !== undefined && req.body.entity_type !== null) {
+      const normalized = String(req.body.entity_type).toUpperCase().trim();
+      const validEntityTypes = ["SCRIPT", "WORK"];
+      if (validEntityTypes.includes(normalized)) {
+        req.body.entity_type = normalized;
+      }
+    }
+
+    // Rejected by role enum
+    if (req.body.rejected_by_role !== undefined && req.body.rejected_by_role !== null) {
+      const normalized = String(req.body.rejected_by_role).toUpperCase().trim();
+      const validRoles = ["BRAND", "ADMIN"];
+      if (validRoles.includes(normalized)) {
+        req.body.rejected_by_role = normalized;
+      }
+    }
+
+    // Role enum
+    if (req.body.role !== undefined && req.body.role !== null) {
+      const normalized = String(req.body.role).toUpperCase().trim();
+      const validRoles = ["BRAND_OWNER", "INFLUENCER", "ADMIN"];
+      if (validRoles.includes(normalized)) {
+        req.body.role = normalized;
+      }
+    }
+
     // Social platforms array
     if (Array.isArray(req.body.social_platforms)) {
       req.body.social_platforms = req.body.social_platforms.map((platform) => {
@@ -109,6 +157,24 @@ function normalizeEnums(req, res, next) {
         const validTypes = ["NORMAL", "BULK"];
         if (validTypes.includes(normalized)) {
           req.query.type = normalized;
+        }
+      }
+
+      // Application phase filter
+      if (req.query.phase !== undefined && req.query.phase !== null) {
+        const normalized = String(req.query.phase).toUpperCase().trim();
+        const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "COMPLETED", "CANCELLED"];
+        if (validPhases.includes(normalized)) {
+          req.query.phase = normalized;
+        }
+      }
+
+      // Script/Work submission status filter
+      if (req.query.status !== undefined && req.query.status !== null) {
+        const normalized = String(req.query.status).toUpperCase().trim();
+        const validSubmissionStatuses = ["PENDING", "ACCEPTED", "REVISION", "REJECTED"];
+        if (validSubmissionStatuses.includes(normalized)) {
+          req.query.status = normalized;
         }
       }
     }

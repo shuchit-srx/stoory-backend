@@ -36,6 +36,40 @@ class UserController {
       });
     }
   }
+
+  /**
+   * Get all influencers
+   * GET /api/v1/users/influencers
+   * Requires BRAND_OWNER role
+   */
+  async getInfluencers(req, res) {
+    try {
+      const result = await UserService.getAllInfluencers();
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: result.message || "Failed to fetch influencers",
+          error: result.error,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          influencers: result.influencers,
+          total: result.total,
+        },
+      });
+    } catch (err) {
+      console.error("[v1/UserController/getInfluencers] Exception:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: err.message,
+      });
+    }
+  }
 }
 
 module.exports = new UserController();

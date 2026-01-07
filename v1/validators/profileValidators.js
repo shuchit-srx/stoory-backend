@@ -15,6 +15,10 @@ const validateCompleteProfile = [
     .optional()
     .isString()
     .withMessage("Phone number must be a string"),
+  body("dob")
+    .optional()
+    .isISO8601()
+    .withMessage("Date of birth must be a valid ISO8601 date"),
   
   // Common fields - profile tables
   body("pan_number")

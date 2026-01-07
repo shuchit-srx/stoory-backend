@@ -251,7 +251,7 @@ class ProfileService {
         }
       }
 
-      // 2) Update v1_users table (editable fields: name, email, phone_number)
+      // 2) Update v1_users table (editable fields: name, email, phone_number, dob)
       const userUpdate = {};
       if (profileData.name !== undefined) {
         const nameValue = profileData.name !== null && profileData.name !== undefined
@@ -280,6 +280,11 @@ class ProfileService {
       if (profileData.phone_number !== undefined) {
         userUpdate.phone_number = profileData.phone_number !== null && profileData.phone_number !== undefined
           ? String(profileData.phone_number).trim() || null
+          : null;
+      }
+      if (profileData.dob !== undefined) {
+        userUpdate.dob = profileData.dob !== null && profileData.dob !== undefined
+          ? profileData.dob
           : null;
       }
 
@@ -617,7 +622,7 @@ class ProfileService {
         }
       }
 
-      // 2) Update v1_users table (editable fields: name, email, phone_number)
+      // 2) Update v1_users table (editable fields: name, email, phone_number, dob)
       const userUpdate = {};
       if (profileData.name !== undefined) {
         const nameValue = profileData.name !== null && profileData.name !== undefined
@@ -646,6 +651,11 @@ class ProfileService {
       if (profileData.phone_number !== undefined) {
         userUpdate.phone_number = profileData.phone_number !== null && profileData.phone_number !== undefined
           ? String(profileData.phone_number).trim() || null
+          : null;
+      }
+      if (profileData.dob !== undefined) {
+        userUpdate.dob = profileData.dob !== null && profileData.dob !== undefined
+          ? profileData.dob
           : null;
       }
 

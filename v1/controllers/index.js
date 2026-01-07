@@ -4,6 +4,7 @@ module.exports = {
     campaignController: require('./campaignController'),
     applicationController: require('./applicationController'),
     userController: require('./userController'),
-    profileController: require('./profileController')
+    profileController: require('./profileController'),
+    submissionController: require('./submissionController')
   };  
 

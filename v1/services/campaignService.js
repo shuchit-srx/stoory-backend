@@ -243,9 +243,65 @@ class CampaignService {
         };
       }
 
+      // Fetch brand details for all unique brand_ids
+      const brandIds = [...new Set((data || []).map(c => c.brand_id).filter(Boolean))];
+      let brandMap = {};
+      let brandProfileMap = {};
+
+      if (brandIds.length > 0) {
+        // Fetch brand users
+        const { data: brandUsers, error: brandUsersError } = await supabaseAdmin
+          .from("v1_users")
+          .select("id, name, email, role")
+          .in("id", brandIds)
+          .eq("is_deleted", false);
+
+        if (brandUsersError) {
+          console.error("[v1/getCampaigns] Brand users fetch error:", brandUsersError);
+        } else if (brandUsers) {
+          brandUsers.forEach(user => {
+            brandMap[user.id] = user;
+          });
+        }
+
+        // Fetch brand profiles
+        const { data: brandProfiles, error: brandProfilesError } = await supabaseAdmin
+          .from("v1_brand_profiles")
+          .select("*")
+          .in("user_id", brandIds)
+          .eq("is_deleted", false);
+
+        if (brandProfilesError) {
+          console.error("[v1/getCampaigns] Brand profiles fetch error:", brandProfilesError);
+        } else if (brandProfiles) {
+          brandProfiles.forEach(profile => {
+            brandProfileMap[profile.user_id] = profile;
+          });
+        }
+      }
+
+      // Attach brand details to each campaign
+      const campaignsWithBrand = (data || []).map(campaign => {
+        const brandUser = brandMap[campaign.brand_id] || null;
+        const brandProfile = brandProfileMap[campaign.brand_id] || null;
+
+        const brandDetails = brandUser ? {
+          brand_id: brandUser.id,
+          brand_name: brandUser.name,
+          brand_email: brandUser.email,
+          brand_role: brandUser.role,
+          brand_profile: brandProfile
+        } : null;
+
+        return {
+          ...campaign,
+          brand: brandDetails
+        };
+      });
+
       return {
         success: true,
-        campaigns: data || [],
+        campaigns: campaignsWithBrand,
         pagination: {
           page,
           limit,
@@ -265,34 +321,82 @@ class CampaignService {
 
   /**
    * Get single campaign by ID
+   * Includes applications with user data for each application
    */
   async getCampaignById(campaignId, userId = null) {
     try {
-      const { data, error } = await supabaseAdmin
+      // Fetch the campaign
+      const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
         .select("*")
         .eq("id", campaignId)
         .maybeSingle();
 
-      if (error) {
-        console.error("[v1/getCampaignById] Database error:", error);
+      if (campaignError) {
+        console.error("[v1/getCampaignById] Database error:", campaignError);
         return {
           success: false,
           message: "Failed to fetch campaign",
-          error: error.message,
+          error: campaignError.message,
         };
       }
 
-      if (!data) {
+      if (!campaign) {
         return {
           success: false,
           message: "Campaign not found",
         };
       }
 
+      // Fetch all applications for this campaign
+      const { data: applications, error: applicationsError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("*")
+        .eq("campaign_id", campaignId)
+        .order("created_at", { ascending: false });
+
+      if (applicationsError) {
+        console.error("[v1/getCampaignById] Applications fetch error:", applicationsError);
+        // Continue without applications if there's an error
+      }
+
+      // Fetch user data for each influencer who applied
+      let applicationsWithUsers = [];
+      if (applications && applications.length > 0) {
+        const influencerIds = [...new Set(applications.map(app => app.influencer_id).filter(Boolean))];
+        
+        let userMap = {};
+        if (influencerIds.length > 0) {
+          const { data: users, error: usersError } = await supabaseAdmin
+            .from("v1_users")
+            .select("id, name, email, phone_number, role, created_at, updated_at, is_deleted")
+            .in("id", influencerIds)
+            .eq("is_deleted", false);
+
+          if (usersError) {
+            console.error("[v1/getCampaignById] Users fetch error:", usersError);
+          } else if (users) {
+            // Create a map for quick lookup
+            users.forEach(user => {
+              userMap[user.id] = user;
+            });
+          }
+        }
+
+        // Attach user data to each application
+        applicationsWithUsers = applications.map(application => ({
+          ...application,
+          user: userMap[application.influencer_id] || null
+        }));
+      }
+
+      // Return campaign with applications array
       return {
         success: true,
-        campaign: data,
+        campaign: {
+          ...campaign,
+          applications: applicationsWithUsers
+        },
       };
     } catch (err) {
       console.error("[v1/getCampaignById] Exception:", err);
@@ -306,7 +410,7 @@ class CampaignService {
 
   /**
    * Get campaigns created by a specific brand owner
-   * Includes applications for each campaign
+   * Includes applications for each campaign with full influencer details and social accounts
    */
   async getBrandCampaigns(brandId, filters = {}, pagination = {}) {
     try {
@@ -343,14 +447,19 @@ class CampaignService {
 
       // If we have applications, fetch influencer data for each unique influencer
       let influencerMap = {};
+      let influencerProfileMap = {};
+      let socialAccountsMap = {};
+      
       if (applications && applications.length > 0) {
         const influencerIds = [...new Set(applications.map(app => app.influencer_id).filter(Boolean))];
         
         if (influencerIds.length > 0) {
+          // Fetch full influencer user data
           const { data: influencers, error: influencersError } = await supabaseAdmin
             .from("v1_users")
-            .select("id, name, email, profile_image_url")
-            .in("id", influencerIds);
+           .select("id, name, email, phone_number, role, created_at, updated_at, is_deleted")
+            .in("id", influencerIds)
+            .eq("is_deleted", false);
 
           if (influencersError) {
             console.error("[v1/getBrandCampaigns] Influencers fetch error:", influencersError);
@@ -358,6 +467,42 @@ class CampaignService {
             // Create a map for quick lookup
             influencers.forEach(influencer => {
               influencerMap[influencer.id] = influencer;
+            });
+          }
+
+          // Fetch influencer profiles
+          const { data: influencerProfiles, error: influencerProfilesError } = await supabaseAdmin
+            .from("v1_influencer_profiles")
+            .select("*")
+            .in("user_id", influencerIds)
+            .eq("is_deleted", false);
+
+          if (influencerProfilesError) {
+            console.error("[v1/getBrandCampaigns] Influencer profiles fetch error:", influencerProfilesError);
+          } else if (influencerProfiles) {
+            // Create a map for quick lookup
+            influencerProfiles.forEach(profile => {
+              influencerProfileMap[profile.user_id] = profile;
+            });
+          }
+
+          // Fetch social accounts for all influencers
+          const { data: socialAccounts, error: socialAccountsError } = await supabaseAdmin
+            .from("v1_influencer_social_accounts")
+            .select("*")
+            .in("user_id", influencerIds)
+            .eq("is_deleted", false)
+            .order("created_at", { ascending: false });
+
+          if (socialAccountsError) {
+            console.error("[v1/getBrandCampaigns] Social accounts fetch error:", socialAccountsError);
+          } else if (socialAccounts) {
+            // Group social accounts by user_id
+            socialAccounts.forEach(account => {
+              if (!socialAccountsMap[account.user_id]) {
+                socialAccountsMap[account.user_id] = [];
+              }
+              socialAccountsMap[account.user_id].push(account);
             });
           }
         }
@@ -372,10 +517,19 @@ class CampaignService {
             applicationsByCampaign[campaignId] = [];
           }
           
-          // Attach influencer data to application
+          const influencerId = application.influencer_id;
+          const influencer = influencerMap[influencerId] || null;
+          const influencerProfile = influencerProfileMap[influencerId] || null;
+          const socialAccounts = socialAccountsMap[influencerId] || [];
+          
+          // Attach influencer data, profile, and social accounts to application
           const applicationWithInfluencer = {
             ...application,
-            influencer: influencerMap[application.influencer_id] || null
+            influencer: influencer ? {
+              ...influencer,
+              profile: influencerProfile,
+              social_accounts: socialAccounts
+            } : null
           };
           
           applicationsByCampaign[campaignId].push(applicationWithInfluencer);

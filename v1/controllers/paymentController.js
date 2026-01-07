@@ -60,7 +60,7 @@ class PaymentController {
             ? 404
             : result.message === "Payment service is not configured"
             ? 503
-            : result.message === "Payment can only be initiated for completed applications" ||
+            : result.message === "Payment can only be initiated for accepted applications" ||
               result.message === "Application does not have a valid agreed amount" ||
               result.message === "Payment already completed for this application" ||
               result.message === "Payment order already exists for this application"
@@ -126,7 +126,7 @@ class PaymentController {
             : result.message === "Invalid payment signature" ||
               result.message === "Payment already verified" ||
               result.message === "Payment already processed" ||
-              result.message === "Application must be completed before payment"
+              result.message === "Application must be accepted before payment"
             ? 400
             : 500;
         return res.status(statusCode).json({
