@@ -4,7 +4,7 @@ const { canTransition } = require('./applicationStateMachine');
 class ApplicationService {
   /**
    * Helper method to update accepted_count in v1_campaigns table
-   * Counts applications with status ACCEPTED or COMPLETED for the campaign
+   * Counts applications with phase ACCEPTED or COMPLETED for the campaign
    */
   async updateCampaignAcceptedCount(campaignId) {
     try {
@@ -12,12 +12,12 @@ class ApplicationService {
         return { success: false, message: 'Campaign ID is required' };
       }
 
-      // Count applications with status ACCEPTED or COMPLETED for this campaign
+      // Count applications with phase ACCEPTED or COMPLETED for this campaign
       const { count, error: countError } = await supabaseAdmin
         .from('v1_applications')
         .select('*', { count: 'exact', head: true })
         .eq('campaign_id', campaignId)
-        .in('status', ['ACCEPTED', 'COMPLETED']);
+        .in('phase', ['ACCEPTED', 'COMPLETED']);
 
       if (countError) {
         console.error('[ApplicationService/updateCampaignAcceptedCount] Count error:', countError);
@@ -171,8 +171,7 @@ class ApplicationService {
         campaign_id: campaignId,
         influencer_id: influencerId,
         brand_id: campaign.brand_id,
-        status: 'APPLIED',
-        phase: 'WORK' // Default phase, will be updated to 'SCRIPT' or 'WORK' when accepted
+        phase: 'APPLIED'
       })
       .select()
       .single();
@@ -235,11 +234,11 @@ class ApplicationService {
       // Get script_needed from campaign
       const scriptNeeded = campaign.requires_script === true;
 
-      // Verify all application IDs belong to this campaign and fetch their current status
+      // Verify all application IDs belong to this campaign and fetch their current phase
       const applicationIds = applications.map(app => app.applicationId);
       const { data: existingApplications, error: fetchError } = await supabaseAdmin
         .from('v1_applications')
-        .select('id, campaign_id, status, brand_id')
+        .select('id, campaign_id, phase, brand_id')
         .in('id', applicationIds);
 
       if (fetchError) {
@@ -295,24 +294,22 @@ class ApplicationService {
           }
 
           // Check state transition
-          if (!canTransition(existingApp.status, 'ACCEPTED')) {
-            individualResult.message = `Cannot accept application. Current status: ${existingApp.status}`;
+          if (!canTransition(existingApp.phase, 'ACCEPTED')) {
+            individualResult.message = `Cannot accept application. Current phase: ${existingApp.phase}`;
             errors.push({ applicationId, error: individualResult.message });
             results.push(individualResult);
             continue;
           }
 
-          // Determine phase based on campaign's requires_script field
+          // Set phase to ACCEPTED only - phase will transition to SCRIPT or WORK after payment
           const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
           const netAmount = agreedAmount - platformFeeAmount;
-          const phase = scriptNeeded ? 'SCRIPT' : 'WORK';
 
           // Update application
           const { data: updated, error: updateError } = await supabaseAdmin
             .from('v1_applications')
             .update({
-              status: 'ACCEPTED',
-              phase: phase,
+              phase: 'ACCEPTED',
               agreed_amount: agreedAmount,
               platform_fee_percent: platformFeePercent,
               platform_fee_amount: platformFeeAmount,
@@ -404,48 +401,22 @@ class ApplicationService {
       const app = ownershipCheck.application;
 
       // Check state transition
-      if (!canTransition(app.status, 'ACCEPTED')) {
+      if (!canTransition(app.phase, 'ACCEPTED')) {
         return {
           success: false,
-          message: `Cannot accept application. Current status: ${app.status}`,
+          message: `Cannot accept application. Current phase: ${app.phase}`,
         };
       }
 
-      // Fetch campaign to get requires_script field
-      const campaignId = app.campaign_id;
-      const { data: campaign, error: campaignError } = await supabaseAdmin
-        .from('v1_campaigns')
-        .select('requires_script')
-        .eq('id', campaignId)
-        .maybeSingle();
-
-      if (campaignError) {
-        console.error('[ApplicationService/accept] Campaign fetch error:', campaignError);
-        return {
-          success: false,
-          message: 'Failed to fetch campaign details',
-        };
-      }
-
-      if (!campaign) {
-        return {
-          success: false,
-          message: 'Campaign not found',
-        };
-      }
-
-      // Determine phase based on campaign's requires_script field
-      const scriptNeeded = campaign.requires_script === true;
+      // Set phase to ACCEPTED only - phase will transition to SCRIPT or WORK after payment
       const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
       const netAmount = agreedAmount - platformFeeAmount;
-      const phase = scriptNeeded ? 'SCRIPT' : 'WORK';
 
       // Update application
       const { data: updated, error: updateError } = await supabaseAdmin
         .from('v1_applications')
         .update({
-          status: 'ACCEPTED',
-          phase: phase,
+          phase: 'ACCEPTED',
           agreed_amount: agreedAmount,
           platform_fee_percent: platformFeePercent,
           platform_fee_amount: platformFeeAmount,
@@ -465,8 +436,8 @@ class ApplicationService {
       }
 
       // Update accepted_count in v1_campaigns table
-      // Count all applications with status ACCEPTED or COMPLETED for this campaign
-      if (campaignId) {
+      // Count all applications with phase ACCEPTED or COMPLETED for this campaign
+      if (app.campaign_id) {
         const countUpdateResult = await this.updateCampaignAcceptedCount(campaignId);
         if (!countUpdateResult.success) {
           console.error('[ApplicationService/accept] Failed to update accepted_count:', countUpdateResult.message);
@@ -507,10 +478,10 @@ class ApplicationService {
       const app = permissionCheck.application;
 
       // Check state transition
-      if (!canTransition(app.status, 'CANCELLED')) {
+      if (!canTransition(app.phase, 'CANCELLED')) {
         return {
           success: false,
-          message: `Cannot cancel application. Current status: ${app.status}`,
+          message: `Cannot cancel application. Current phase: ${app.phase}`,
         };
       }
 
@@ -518,7 +489,7 @@ class ApplicationService {
       const { data: updated, error: updateError } = await supabaseAdmin
         .from('v1_applications')
         .update({
-          status: 'CANCELLED'
+          phase: 'CANCELLED'
         })
         .eq('id', applicationId)
         .select()
@@ -567,10 +538,10 @@ class ApplicationService {
       }
 
       // Check state transition
-      if (!canTransition(app.status, 'COMPLETED')) {
+      if (!canTransition(app.phase, 'COMPLETED')) {
         return {
           success: false,
-          message: `Cannot complete application. Current status: ${app.status}`,
+          message: `Cannot complete application. Current phase: ${app.phase}`,
         };
       }
 
@@ -578,7 +549,7 @@ class ApplicationService {
       const { data: updated, error: updateError } = await supabaseAdmin
         .from('v1_applications')
         .update({
-          status: 'COMPLETED'
+          phase: 'COMPLETED'
         })
         .eq('id', applicationId)
         .select()

@@ -62,6 +62,15 @@ function normalizeEnums(req, res, next) {
       }
     }
 
+    // Application phase enum
+    if (req.body.phase !== undefined && req.body.phase !== null) {
+      const normalized = String(req.body.phase).toUpperCase().trim();
+      const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "COMPLETED", "CANCELLED"];
+      if (validPhases.includes(normalized)) {
+        req.body.phase = normalized;
+      }
+    }
+
     // Role enum
     if (req.body.role !== undefined && req.body.role !== null) {
       const normalized = String(req.body.role).toUpperCase().trim();
@@ -118,6 +127,15 @@ function normalizeEnums(req, res, next) {
         const validTypes = ["NORMAL", "BULK"];
         if (validTypes.includes(normalized)) {
           req.query.type = normalized;
+        }
+      }
+
+      // Application phase filter
+      if (req.query.phase !== undefined && req.query.phase !== null) {
+        const normalized = String(req.query.phase).toUpperCase().trim();
+        const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "COMPLETED", "CANCELLED"];
+        if (validPhases.includes(normalized)) {
+          req.query.phase = normalized;
         }
       }
     }
