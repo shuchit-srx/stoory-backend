@@ -164,14 +164,23 @@ class ApplicationService {
       return { success: false, message: 'You have already applied to this campaign' };
     }
 
-    // --- FIX: Added brand_id to the insert payload ---
+    // Fetch values from campaign and map to application fields
+    // budget -> budget_amount
+    // platform_fee_percentage -> platform_fee_percentage
+    // platform_fee_amount -> platform_fee_amount
+    // net_amount -> agreed_amount
+    // Amounts remain in rupees (not converted to paisa)
     const { data: app, error: insertError } = await supabaseAdmin
       .from('v1_applications')
       .insert({
         campaign_id: campaignId,
         influencer_id: influencerId,
         brand_id: campaign.brand_id,
-        phase: 'APPLIED'
+        phase: 'APPLIED',
+        budget_amount: campaign.budget ?? null,
+        platform_fee_percentage: campaign.platform_fee_percentage ?? null,
+        platform_fee_amount: campaign.platform_fee_amount ?? null,
+        agreed_amount: campaign.net_amount ?? null,
       })
       .select()
       .single();
@@ -211,10 +220,10 @@ class ApplicationService {
         };
       }
 
-      // Verify brand owns the campaign and fetch requires_script
+      // Verify brand owns the campaign and fetch campaign details
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from('v1_campaigns')
-        .select('id, brand_id, requires_script')
+        .select('id, brand_id, budget, platform_fee_percentage, platform_fee_amount, net_amount, requires_script')
         .eq('id', campaignId)
         .maybeSingle();
 
@@ -230,9 +239,6 @@ class ApplicationService {
       if (campaign.brand_id !== brandId) {
         return { success: false, message: 'Unauthorized: You do not own this campaign' };
       }
-
-      // Get script_needed from campaign
-      const scriptNeeded = campaign.requires_script === true;
 
       // Verify all application IDs belong to this campaign and fetch their current phase
       const applicationIds = applications.map(app => app.applicationId);
@@ -265,25 +271,10 @@ class ApplicationService {
 
       // Process each application
       for (const appData of applications) {
-        const { applicationId, agreedAmount, platformFeePercent } = appData;
+        const { applicationId } = appData;
         let individualResult = { applicationId, success: false, message: 'Unknown error' };
 
         try {
-          // Validate inputs
-          if (typeof agreedAmount !== 'number' || agreedAmount <= 0) {
-            individualResult.message = 'Invalid agreedAmount. Must be a positive number.';
-            errors.push({ applicationId, error: individualResult.message });
-            results.push(individualResult);
-            continue;
-          }
-
-          if (typeof platformFeePercent !== 'number' || platformFeePercent < 0 || platformFeePercent > 100) {
-            individualResult.message = 'Invalid platformFeePercent. Must be between 0 and 100.';
-            errors.push({ applicationId, error: individualResult.message });
-            results.push(individualResult);
-            continue;
-          }
-
           // Find the existing application
           const existingApp = existingApplications.find(app => app.id === applicationId);
           if (!existingApp) {
@@ -301,19 +292,20 @@ class ApplicationService {
             continue;
           }
 
-          // Set phase to ACCEPTED only - phase will transition to SCRIPT or WORK after payment
-          const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
-          const netAmount = agreedAmount - platformFeeAmount;
-
-          // Update application
+          // Use values from campaign
+          // budget -> budget_amount
+          // platform_fee_percentage -> platform_fee_percentage
+          // platform_fee_amount -> platform_fee_amount
+          // net_amount -> agreed_amount
+          // Amounts remain in rupees (not converted to paisa)
           const { data: updated, error: updateError } = await supabaseAdmin
             .from('v1_applications')
             .update({
               phase: 'ACCEPTED',
-              agreed_amount: agreedAmount,
-              platform_fee_percent: platformFeePercent,
-              platform_fee_amount: platformFeeAmount,
-              net_amount: netAmount,
+              budget_amount: campaign.budget ?? null,
+              platform_fee_percentage: campaign.platform_fee_percentage ?? null,
+              platform_fee_amount: campaign.platform_fee_amount ?? null,
+              agreed_amount: campaign.net_amount ?? null,
               brand_id: brandId
             })
             .eq('id', applicationId)
@@ -338,6 +330,24 @@ class ApplicationService {
 
           if (existingApp.campaign_id) {
             campaignIdsToUpdate.add(existingApp.campaign_id);
+          }
+
+          // Automatically generate MOU for the accepted application
+          // Use a small delay to ensure database transaction is committed
+          try {
+            const MOUService = require('./mouService');
+            // Small delay to ensure the application update is committed
+            await new Promise(resolve => setTimeout(resolve, 100));
+            const mouResult = await MOUService.generateMOUForApplication(applicationId);
+            if (mouResult.success) {
+              console.log(`✅ [ApplicationService/bulkAccept] MOU generated successfully for application ${applicationId}`);
+            } else {
+              console.error(`❌ [ApplicationService/bulkAccept] Failed to generate MOU for application ${applicationId}: ${mouResult.message}`, mouResult.error || '');
+              // Don't fail the entire operation if MOU generation fails, just log it
+            }
+          } catch (mouError) {
+            console.error(`[ApplicationService/bulkAccept] Exception generating MOU for application ${applicationId}:`, mouError.message || mouError);
+            // Don't fail the entire operation if MOU generation fails, just log it
           }
 
         } catch (err) {
@@ -387,9 +397,6 @@ class ApplicationService {
   async accept({
     applicationId,
     brandId,
-    agreedAmount,
-    platformFeePercent,
-    requiresScript,
   }) {
     try {
       // Check ownership
@@ -408,19 +415,42 @@ class ApplicationService {
         };
       }
 
-      // Set phase to ACCEPTED only - phase will transition to SCRIPT or WORK after payment
-      const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
-      const netAmount = agreedAmount - platformFeeAmount;
+      // Fetch campaign to get budget, platform_fee_percentage, platform_fee_amount, and net_amount
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('budget, platform_fee_percentage, platform_fee_amount, net_amount, requires_script')
+        .eq('id', app.campaign_id)
+        .maybeSingle();
 
-      // Update application
+      if (campaignError) {
+        console.error('[ApplicationService/accept] Campaign fetch error:', campaignError);
+        return {
+          success: false,
+          message: 'Failed to fetch campaign details',
+        };
+      }
+
+      if (!campaign) {
+        return {
+          success: false,
+          message: 'Campaign not found',
+        };
+      }
+
+      // Use values from campaign
+      // budget -> budget_amount (already set during apply, but update to ensure consistency)
+      // platform_fee_percentage -> platform_fee_percentage
+      // platform_fee_amount -> platform_fee_amount
+      // net_amount -> agreed_amount
+      // Amounts remain in rupees (not converted to paisa)
       const { data: updated, error: updateError } = await supabaseAdmin
         .from('v1_applications')
         .update({
           phase: 'ACCEPTED',
-          agreed_amount: agreedAmount,
-          platform_fee_percent: platformFeePercent,
-          platform_fee_amount: platformFeeAmount,
-          net_amount: netAmount,
+          budget_amount: campaign.budget ?? null,
+          platform_fee_percentage: campaign.platform_fee_percentage ?? null,
+          platform_fee_amount: campaign.platform_fee_amount ?? null,
+          agreed_amount: campaign.net_amount ?? null,
           brand_id: brandId
         })
         .eq('id', applicationId)
@@ -443,6 +473,24 @@ class ApplicationService {
           console.error('[ApplicationService/accept] Failed to update accepted_count:', countUpdateResult.message);
           // Don't fail the entire operation if count update fails, just log it
         }
+      }
+
+      // Automatically generate MOU for the accepted application
+      // Use a small delay to ensure database transaction is committed
+      try {
+        const MOUService = require('./mouService');
+        // Small delay to ensure the application update is committed
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const mouResult = await MOUService.generateMOUForApplication(applicationId);
+        if (mouResult.success) {
+          console.log(`✅ [ApplicationService/accept] MOU generated successfully for application ${applicationId}`);
+        } else {
+          console.error(`❌ [ApplicationService/accept] Failed to generate MOU for application ${applicationId}: ${mouResult.message}`, mouResult.error || '');
+          // Don't fail the entire operation if MOU generation fails, just log it
+        }
+      } catch (mouError) {
+        console.error(`[ApplicationService/accept] Exception generating MOU for application ${applicationId}:`, mouError.message || mouError);
+        // Don't fail the entire operation if MOU generation fails, just log it
       }
 
       return {

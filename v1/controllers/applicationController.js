@@ -87,9 +87,6 @@ class ApplicationController {
       const result = await ApplicationService.accept({
         applicationId: req.params.id,
         brandId: brandProfileResult.brandId,
-        agreedAmount: req.body.agreedAmount,
-        platformFeePercent: req.body.platformFeePercent,
-        requiresScript: req.body.requiresScript,
       });
 
       if (!result.success) {

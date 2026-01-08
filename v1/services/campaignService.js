@@ -121,6 +121,46 @@ class CampaignService {
             };
           }
         }
+
+        // Fetch non-expired admin settings to get commission_percentage
+        let platformFeePercentage = null;
+        let platformFeeAmount = null;
+        let netAmount = null;
+        const budget = campaignData.budget ?? null;
+
+        if (budget !== null && budget > 0) {
+          const { data: adminSettings, error: adminSettingsError } = await supabaseAdmin
+            .from("v1_admin_settings")
+            .select("commission_percentage")
+            .eq("is_expired", false)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (adminSettingsError) {
+            console.error("[v1/createCampaign] Error fetching admin settings:", adminSettingsError);
+            return {
+              success: false,
+              message: "Failed to fetch admin settings",
+              error: adminSettingsError.message,
+            };
+          }
+
+          if (!adminSettings || !adminSettings.commission_percentage) {
+            return {
+              success: false,
+              message: "No active admin settings found. Please configure commission percentage first.",
+            };
+          }
+
+          // Use commission_percentage as platform_fee_percentage
+          platformFeePercentage = parseFloat(adminSettings.commission_percentage);
+          
+          // Calculate platform_fee_amount and net_amount
+          // Amounts remain in rupees (not converted to paisa)
+          platformFeeAmount = (budget * platformFeePercentage) / 100;
+          netAmount = budget - platformFeeAmount;
+        }
   
         // Build campaign object
         const campaign = {
@@ -133,7 +173,10 @@ class CampaignService {
           accepted_count: 0, // Always start at 0
           requires_script: campaignData.requires_script || false,
           start_deadline: campaignData.start_deadline, // Required field
-          budget: campaignData.budget ?? null,
+          budget: budget,
+          platform_fee_percentage: platformFeePercentage,
+          platform_fee_amount: platformFeeAmount,
+          net_amount: netAmount,
           // New fields
           description: campaignData.description ?? null,
           cover_image_url: campaignData.cover_image_url ?? null,
