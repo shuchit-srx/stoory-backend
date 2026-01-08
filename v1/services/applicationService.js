@@ -320,35 +320,40 @@ class ApplicationService {
             continue;
           }
 
-          individualResult = {
-            applicationId,
-            success: true,
-            message: 'Application accepted successfully',
-            application: updated,
-          };
-          results.push(individualResult);
-
           if (existingApp.campaign_id) {
             campaignIdsToUpdate.add(existingApp.campaign_id);
           }
 
-          // Automatically generate MOU for the accepted application
-          // Use a small delay to ensure database transaction is committed
-          try {
-            const MOUService = require('./mouService');
-            // Small delay to ensure the application update is committed
-            await new Promise(resolve => setTimeout(resolve, 100));
-            const mouResult = await MOUService.generateMOUForApplication(applicationId);
-            if (mouResult.success) {
-              console.log(`✅ [ApplicationService/bulkAccept] MOU generated successfully for application ${applicationId}`);
-            } else {
-              console.error(`❌ [ApplicationService/bulkAccept] Failed to generate MOU for application ${applicationId}: ${mouResult.message}`, mouResult.error || '');
-              // Don't fail the entire operation if MOU generation fails, just log it
-            }
-          } catch (mouError) {
-            console.error(`[ApplicationService/bulkAccept] Exception generating MOU for application ${applicationId}:`, mouError.message || mouError);
-            // Don't fail the entire operation if MOU generation fails, just log it
+          // Automatically generate MOU for the accepted application immediately
+          // This must happen synchronously before marking as successful
+          const MOUService = require('./mouService');
+          const mouResult = await MOUService.generateMOUForApplication(applicationId);
+          
+          if (!mouResult.success) {
+            console.error(`❌ [ApplicationService/bulkAccept] Failed to generate MOU for application ${applicationId}: ${mouResult.message}`, mouResult.error || '');
+            // MOU generation is critical - mark this application as failed
+            individualResult = {
+              applicationId,
+              success: false,
+              message: `Application was accepted but MOU generation failed: ${mouResult.message}`,
+              error: mouResult.error || mouResult.message,
+              application: updated, // Still include the updated application for reference
+            };
+            errors.push({ applicationId, error: individualResult.message });
+            results.push(individualResult);
+            continue;
           }
+          
+          console.log(`✅ [ApplicationService/bulkAccept] MOU generated successfully for application ${applicationId}`);
+
+          individualResult = {
+            applicationId,
+            success: true,
+            message: 'Application accepted successfully and MOU generated',
+            application: updated,
+            mou: mouResult.data, // Include MOU data in response
+          };
+          results.push(individualResult);
 
         } catch (err) {
           console.error(`[ApplicationService/bulkAccept] Exception for ${applicationId}:`, err);
@@ -465,6 +470,24 @@ class ApplicationService {
         };
       }
 
+      // Automatically generate MOU for the accepted application immediately
+      // This must happen synchronously before returning success
+      const MOUService = require('./mouService');
+      const mouResult = await MOUService.generateMOUForApplication(applicationId);
+      
+      if (!mouResult.success) {
+        console.error(`❌ [ApplicationService/accept] Failed to generate MOU for application ${applicationId}: ${mouResult.message}`, mouResult.error || '');
+        // MOU generation is critical - fail the operation if it doesn't succeed
+        return {
+          success: false,
+          message: `Application was accepted but MOU generation failed: ${mouResult.message}`,
+          error: mouResult.error || mouResult.message,
+          application: updated, // Still return the updated application for reference
+        };
+      }
+      
+      console.log(`✅ [ApplicationService/accept] MOU generated successfully for application ${applicationId}`);
+
       // Update accepted_count in v1_campaigns table
       // Count all applications with phase ACCEPTED or COMPLETED for this campaign
       if (app.campaign_id) {
@@ -475,28 +498,11 @@ class ApplicationService {
         }
       }
 
-      // Automatically generate MOU for the accepted application
-      // Use a small delay to ensure database transaction is committed
-      try {
-        const MOUService = require('./mouService');
-        // Small delay to ensure the application update is committed
-        await new Promise(resolve => setTimeout(resolve, 100));
-        const mouResult = await MOUService.generateMOUForApplication(applicationId);
-        if (mouResult.success) {
-          console.log(`✅ [ApplicationService/accept] MOU generated successfully for application ${applicationId}`);
-        } else {
-          console.error(`❌ [ApplicationService/accept] Failed to generate MOU for application ${applicationId}: ${mouResult.message}`, mouResult.error || '');
-          // Don't fail the entire operation if MOU generation fails, just log it
-        }
-      } catch (mouError) {
-        console.error(`[ApplicationService/accept] Exception generating MOU for application ${applicationId}:`, mouError.message || mouError);
-        // Don't fail the entire operation if MOU generation fails, just log it
-      }
-
       return {
         success: true,
-        message: 'Application accepted successfully',
+        message: 'Application accepted successfully and MOU generated',
         application: updated,
+        mou: mouResult.data, // Include MOU data in response
       };
     } catch (err) {
       console.error('[ApplicationService/accept] Error:', err);

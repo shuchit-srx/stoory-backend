@@ -283,8 +283,7 @@ class MOUService {
           *,
           v1_campaigns(
             *,
-            brand_id,
-            buffer_days
+            brand_id
           )
         `)
         .eq('id', applicationId)
@@ -313,18 +312,21 @@ class MOUService {
       // Fetch influencer details
       const { data: influencerUser, error: influencerError } = await supabaseAdmin
         .from('v1_users')
-        .select('id, name, email, phone')
+        .select('id, name, email, phone_number')
         .eq('id', application.influencer_id)
         .eq('is_deleted', false)
         .maybeSingle();
 
       if (influencerError) {
         console.error('[MOUService/generateMOUForApplication] Influencer fetch error:', influencerError);
+        console.error('[MOUService/generateMOUForApplication] Influencer ID:', application.influencer_id);
         // Continue with fallback values instead of failing
       }
 
       if (!influencerUser) {
         console.warn(`[MOUService/generateMOUForApplication] Influencer user not found for ID: ${application.influencer_id}`);
+      } else {
+        console.log(`[MOUService/generateMOUForApplication] Found influencer: ${influencerUser.name} (${influencerUser.email})`);
       }
 
       const { data: influencerProfile, error: influencerProfileError } = await supabaseAdmin
@@ -341,18 +343,21 @@ class MOUService {
       // Fetch brand details
       const { data: brandUser, error: brandError } = await supabaseAdmin
         .from('v1_users')
-        .select('id, name, email, phone')
+        .select('id, name, email, phone_number')
         .eq('id', campaign.brand_id)
         .eq('is_deleted', false)
         .maybeSingle();
 
       if (brandError) {
         console.error('[MOUService/generateMOUForApplication] Brand fetch error:', brandError);
+        console.error('[MOUService/generateMOUForApplication] Brand ID:', campaign.brand_id);
         // Continue with fallback values instead of failing
       }
 
       if (!brandUser) {
         console.warn(`[MOUService/generateMOUForApplication] Brand user not found for ID: ${campaign.brand_id}`);
+      } else {
+        console.log(`[MOUService/generateMOUForApplication] Found brand: ${brandUser.name} (${brandUser.email})`);
       }
 
       const { data: brandProfile, error: brandProfileError } = await supabaseAdmin
@@ -411,13 +416,13 @@ class MOUService {
         influencer: {
           name: influencerUser?.name || 'Not specified',
           email: influencerUser?.email || 'Not specified',
-          phone: influencerUser?.phone || 'Not specified',
+          phone: influencerUser?.phone_number || 'Not specified',
           profile: influencerProfile
         },
         brand: {
           name: brandUser?.name || 'Not specified',
           email: brandUser?.email || 'Not specified',
-          phone: brandUser?.phone || 'Not specified',
+          phone: brandUser?.phone_number || 'Not specified',
           brandName: brandProfile?.brand_name || brandUser?.name || 'Not specified',
           profile: brandProfile
         },
@@ -533,36 +538,37 @@ class MOUService {
     let content = `MEMORANDUM OF UNDERSTANDING\n`;
     content += `================================\n\n`;
     content += `This Memorandum of Understanding (MOU) is entered into between:\n\n`;
+    if(brand){
     content += `PARTY 1 - BRAND OWNER:\n`;
     content += `Name: ${brand.name}\n`;
     content += `Brand Name: ${brand.brandName}\n`;
     content += `Email: ${brand.email}\n`;
     content += `Phone: ${brand.phone}\n\n`;
+  }
+  if(influencer){
     content += `PARTY 2 - INFLUENCER:\n`;
     content += `Name: ${influencer.name}\n`;
     content += `Email: ${influencer.email}\n`;
     content += `Phone: ${influencer.phone}\n\n`;
+  }
+    
+  if(campaign){
     content += `CAMPAIGN DETAILS:\n`;
     content += `Campaign Title: ${campaign.title}\n`;
     if (campaign.description) {
-      content += `Campaign Description: ${campaign.description}\n`;
+        content += `Campaign Description: ${campaign.description}\n`;
+      }
+      content += `\n`;
     }
-    content += `\n`;
 
     // Combined FINANCIAL TERMS with CALCULATION BREAKDOWN
     content += `FINANCIAL TERMS:\n`;
     content += `----------------\n`;
-    content += `Total Budget: ${formatCurrency(financials.budget)}\n`;
+    content += `Total Budget (Paid by Brand): ${formatCurrency(financials.budget)}\n`;
     content += `Platform Fee Percentage: ${financials.platformFeePercentage}%\n`;
     content += `Platform Fee Amount: ${formatCurrency(financials.platformFeeAmount)}\n`;
     content += `Agreed Amount (Net Amount to Influencer): ${formatCurrency(financials.agreedAmount)}\n\n`;
-    content += `Calculation Breakdown:\n`;
-    content += `Total Budget = ${formatCurrency(financials.budget)}\n`;
-    content += `Platform Fee (${financials.platformFeePercentage}%) = ${formatCurrency(financials.platformFeeAmount)}\n`;
-    content += `Agreed Amount (Net Amount to Influencer) = Total Budget - Platform Fee\n`;
-    content += `Agreed Amount (Net Amount to Influencer) = ${formatCurrency(financials.budget)} - ${formatCurrency(financials.platformFeeAmount)}\n`;
-    content += `Agreed Amount (Net Amount to Influencer) = ${formatCurrency(financials.agreedAmount)}\n\n`;
-    content += `Both parties are satisfied with the finance breakdown mentioned above.\n\n`;
+    
 
     // PROCEDURE section (replaced WORK PROCEDURE)
     content += `PROCEDURE:\n`;
