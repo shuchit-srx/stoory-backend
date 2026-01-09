@@ -396,6 +396,17 @@ class PaymentService {
           console.error("[v1/PaymentService/verifyPayment] Phase update error:", phaseUpdateError);
           // Don't fail payment verification if phase update fails, but log it
         }
+
+        // Create chat for this application after payment is verified
+        // Chat should be created when payment is done so influencer and brand can start chatting
+        try {
+          const ChatService = require('./chatService');
+          await ChatService.createChat(orderApplicationId);
+          console.log(`[v1/PaymentService/verifyPayment] Chat created for application ${orderApplicationId}`);
+        } catch (chatError) {
+          console.error(`[v1/PaymentService/verifyPayment] Failed to create chat:`, chatError);
+          // Don't fail payment if chat creation fails, but log it
+        }
       }
 
       // Update payment order

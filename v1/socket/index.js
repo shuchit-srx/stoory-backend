@@ -1,6 +1,7 @@
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const { ChatService } = require('../services');
+const { supabaseAdmin } = require('../db/config');
 
 // Rate limiting: Track message counts per user
 const messageRateLimits = new Map();
@@ -50,11 +51,6 @@ const initSocket = (server) => {
     // Track user's current room
     socket.currentRoom = null;
     socket.userId = socket.user.id;
-
-    // Cleanup rate limit on disconnect
-    socket.on('disconnect', () => {
-      messageRateLimits.delete(socket.userId);
-    });
 
     // Join chat room
     socket.on('join_chat', async ({ applicationId }) => {
@@ -225,6 +221,62 @@ const initSocket = (server) => {
           isTyping: Boolean(isTyping),
           timestamp: new Date().toISOString()
         });
+      }
+    });
+
+    // Mark message as read
+    socket.on('mark_read', async ({ messageId }, callback) => {
+      try {
+        if (!messageId) {
+          return socket.emit('error', { 
+            message: 'messageId is required' 
+          });
+        }
+
+        // Mark message as read
+        const readReceipt = await ChatService.markMessageAsRead(
+          messageId,
+          socket.user.id
+        );
+
+        // Get the message to find the chat room
+        const { data: message, error: messageError } = await supabaseAdmin
+          .from('v1_chat_messages')
+          .select('chat_id, v1_chats(application_id)')
+          .eq('id', messageId)
+          .single();
+
+        if (!messageError && message && message.v1_chats) {
+          const applicationId = message.v1_chats.application_id;
+          const roomName = `app_${applicationId}`;
+
+          // Broadcast read receipt to room
+          io.to(roomName).emit('message_read', {
+            messageId,
+            userId: socket.user.id,
+            readAt: readReceipt.read_at || new Date().toISOString(),
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        // Acknowledge to sender
+        if (callback) {
+          callback({ 
+            success: true, 
+            readReceipt 
+          });
+        }
+      } catch (error) {
+        console.error('Mark read error:', error);
+        socket.emit('error', { 
+          message: error.message || 'Failed to mark message as read' 
+        });
+        if (callback) {
+          callback({ 
+            success: false, 
+            error: error.message 
+          });
+        }
       }
     });
 

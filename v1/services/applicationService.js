@@ -617,6 +617,17 @@ class ApplicationService {
         };
       }
 
+      // Close chat for this application when admin completes it
+      // Chat should only close when admin completes, not when work is completed
+      try {
+        const ChatService = require('./chatService');
+        await ChatService.closeChat(applicationId);
+        console.log(`[ApplicationService/complete] Chat closed for application ${applicationId}`);
+      } catch (chatError) {
+        console.error(`[ApplicationService/complete] Failed to close chat:`, chatError);
+        // Don't fail completion if chat closure fails, but log it
+      }
+
       return {
         success: true,
         message: 'Application completed successfully',

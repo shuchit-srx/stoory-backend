@@ -13,12 +13,25 @@ const ChatService = {
       throw new Error('applicationId is required');
     }
 
+    // Check if payment is verified before creating chat
+    // Chat should only be created after brand owner pays the platform
+    const { data: paymentOrder } = await supabaseAdmin
+      .from('v1_payment_orders')
+      .select('status')
+      .eq('application_id', applicationId)
+      .eq('status', 'VERIFIED')
+      .maybeSingle();
+
+    if (!paymentOrder) {
+      throw new Error('Payment must be verified before chat can be created');
+    }
+
     // Check if chat already exists
     const { data: existingChat } = await supabaseAdmin
       .from('v1_chats')
       .select('id')
       .eq('application_id', applicationId)
-      .single();
+      .maybeSingle();
 
     if (existingChat) {
       return existingChat;
@@ -57,7 +70,7 @@ const ChatService = {
       // Check if user is either the influencer or brand owner of this application
       const { data: application, error } = await supabaseAdmin
         .from('v1_applications')
-        .select('influencer_id, campaigns(created_by)')
+        .select('influencer_id, v1_campaigns!inner(brand_id)')
         .eq('id', applicationId)
         .single();
 
@@ -68,7 +81,7 @@ const ChatService = {
 
       // User is either the influencer or the brand owner
       const isInfluencer = application.influencer_id === userId;
-      const isBrandOwner = application.campaigns?.created_by === userId;
+      const isBrandOwner = application.v1_campaigns?.brand_id === userId;
 
       return isInfluencer || isBrandOwner;
     } catch (error) {
@@ -219,7 +232,7 @@ const ChatService = {
 
   /**
    * closeChat
-   * Call when Application moves to COMPLETED or CANCELLED [cite: 229]
+   * Call when Application moves to COMPLETED by admin (not when work is completed)
    * @param {string} applicationId - The application ID
    * @returns {Promise<void>}
    */
@@ -237,6 +250,86 @@ const ChatService = {
       console.error('Error closing chat:', error);
       throw new Error(`Failed to close chat: ${error.message}`);
     }
+  },
+
+  /**
+   * markMessageAsRead
+   * Marks a message as read by a user
+   * @param {string} messageId - The message ID
+   * @param {string} userId - The user ID who read the message
+   * @returns {Promise<Object>} - The read receipt object
+   */
+  async markMessageAsRead(messageId, userId) {
+    if (!messageId || !userId) {
+      throw new Error('messageId and userId are required');
+    }
+
+    // Get message with chat info
+    const { data: message, error: messageError } = await supabaseAdmin
+      .from('v1_chat_messages')
+      .select('id, chat_id, sender_id, v1_chats!inner(application_id)')
+      .eq('id', messageId)
+      .single();
+
+    if (messageError || !message) {
+      throw new Error('Message not found');
+    }
+
+    // Don't mark own messages as read
+    if (message.sender_id === userId) {
+      return { success: true, message: 'Cannot mark own message as read' };
+    }
+
+    // Validate user access using existing method
+    const hasAccess = await this.validateUserAccess(userId, message.v1_chats.application_id);
+    if (!hasAccess) {
+      throw new Error('You do not have access to this message');
+    }
+
+    // Insert or update read receipt (upsert)
+    const { data: readReceipt, error: readError } = await supabaseAdmin
+      .from('v1_chat_message_reads')
+      .upsert({
+        message_id: messageId,
+        user_id: userId,
+        read_at: new Date().toISOString()
+      }, {
+        onConflict: 'message_id,user_id'
+      })
+      .select()
+      .single();
+
+    if (readError) {
+      console.error('Error marking message as read:', readError);
+      throw new Error(`Failed to mark message as read: ${readError.message}`);
+    }
+
+    return readReceipt;
+  },
+
+  /**
+   * getReadReceipts
+   * Gets read receipts for a message
+   * @param {string} messageId - The message ID
+   * @returns {Promise<Array>} - Array of read receipts
+   */
+  async getReadReceipts(messageId) {
+    if (!messageId) {
+      throw new Error('messageId is required');
+    }
+
+    const { data: readReceipts, error } = await supabaseAdmin
+      .from('v1_chat_message_reads')
+      .select('*')
+      .eq('message_id', messageId)
+      .order('read_at', { ascending: false });
+
+    if (error) {
+      console.error('Error getting read receipts:', error);
+      throw new Error(`Failed to get read receipts: ${error.message}`);
+    }
+
+    return readReceipts || [];
   }
 };
 
