@@ -2,14 +2,18 @@ const express = require("express");
 const router = express.Router();
 const SubscriptionController = require("../controllers/subscriptionController");
 const authMiddleware = require("../middleware/authMiddleware");
-const { validateCreateSubscription } = require("../validators/subscriptionValidators");
+const {
+  validateCreateSubscription,
+  validateSubscriptionPaymentOrder,
+  validateVerifySubscriptionPayment,
+} = require("../validators/subscriptionValidators");
 
 /**
  * Subscription Routes
  * All routes require authentication
  */
 
-// Create a new subscription (BRAND_OWNER only)
+// Create a new subscription (BRAND_OWNER only) - Direct creation (for admin/internal use)
 router.post(
   "/create",
   authMiddleware.authenticateToken,
@@ -24,6 +28,26 @@ router.get(
   authMiddleware.authenticateToken,
   authMiddleware.requireRole("BRAND_OWNER"),
   SubscriptionController.getSubscriptionStatus
+);
+
+// Create subscription payment order (BRAND_OWNER only)
+// Brand owner pays admin for subscription
+router.post(
+  "/payment/order",
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole("BRAND_OWNER"),
+  validateSubscriptionPaymentOrder,
+  SubscriptionController.createSubscriptionPaymentOrder
+);
+
+// Verify subscription payment and create subscription (BRAND_OWNER only)
+// Brand owner pays admin for subscription
+router.post(
+  "/payment/verify",
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole("BRAND_OWNER"),
+  validateVerifySubscriptionPayment,
+  SubscriptionController.verifySubscriptionPayment
 );
 
 module.exports = router;

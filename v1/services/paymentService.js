@@ -618,6 +618,384 @@ class PaymentService {
       };
     }
   }
+
+  /**
+   * Create payment order for subscription
+   * Brand owner pays admin for subscription
+   * @param {string} userId - User ID
+   * @param {string} planId - Plan ID
+   * @returns {Promise<Object>} Result with Razorpay order and payment order
+   */
+  async createSubscriptionPaymentOrder(userId, planId) {
+    try {
+      if (!razorpay) {
+        return {
+          success: false,
+          message: "Payment service is not configured",
+        };
+      }
+
+      // Validate inputs
+      if (!userId || !planId) {
+        return {
+          success: false,
+          message: "userId and planId are required",
+        };
+      }
+
+      // Check if user exists
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, role")
+        .eq("id", userId)
+        .single();
+
+      if (userError || !user) {
+        return {
+          success: false,
+          message: "User not found",
+        };
+      }
+
+      // Only BRAND_OWNER can subscribe
+      if (user.role !== "BRAND_OWNER") {
+        return {
+          success: false,
+          message: "Only brand owners can create subscriptions",
+        };
+      }
+
+      // Get plan details
+      const { data: plan, error: planError } = await supabaseAdmin
+        .from("v1_plans")
+        .select("*")
+        .eq("id", planId)
+        .eq("is_active", true)
+        .single();
+
+      if (planError || !plan) {
+        return {
+          success: false,
+          message: "Plan not found or not active",
+        };
+      }
+
+      // Check if user already has an active subscription
+      const { data: existingSubscriptions, error: existingError } =
+        await supabaseAdmin
+          .from("v1_subscriptions")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("status", "ACTIVE");
+
+      if (existingError) {
+        console.error(
+          "[v1/PaymentService/createSubscriptionPaymentOrder] Error checking existing subscription:",
+          existingError
+        );
+        return {
+          success: false,
+          message: "Failed to check existing subscriptions",
+          error: existingError.message,
+        };
+      }
+
+      if (existingSubscriptions && existingSubscriptions.length > 0) {
+        return {
+          success: false,
+          message: "User already has an active subscription",
+        };
+      }
+
+      // Check for existing pending payment order for this subscription
+      // Query payment orders with subscription payment type in metadata
+      const { data: existingPayments, error: existingPaymentError } =
+        await supabaseAdmin
+          .from("v1_payment_orders")
+          .select("id, status, metadata")
+          .is("application_id", null); // Subscription payments don't have application_id
+
+      let existingPayment = null;
+      if (existingPayments && !existingPaymentError) {
+        existingPayment = existingPayments.find(
+          (p) =>
+            p.metadata?.payment_type === "subscription_payment" &&
+            p.metadata?.plan_id === planId &&
+            p.metadata?.user_id === userId
+        );
+      }
+
+      if (existingPayment) {
+        const normalizedStatus =
+          this.normalizeStatus(existingPayment.status) ||
+          existingPayment.status;
+        if (normalizedStatus === "VERIFIED") {
+          return {
+            success: false,
+            message: "Payment already completed for this subscription",
+          };
+        }
+        return {
+          success: false,
+          message: "Payment order already exists for this subscription",
+        };
+      }
+
+      // Convert price to paise for Razorpay
+      const amountInPaise = Math.round(plan.price * 100);
+
+      if (amountInPaise <= 0) {
+        return {
+          success: false,
+          message: "Invalid plan price",
+        };
+      }
+
+      // Razorpay receipt must be <= 40 chars
+      const rawReceipt = `sub_${planId.substring(0, 15)}_${Date.now()}`;
+      const safeReceipt = rawReceipt.substring(0, 40);
+
+      // Create Razorpay order
+      const orderOptions = {
+        amount: amountInPaise,
+        currency: "INR",
+        receipt: safeReceipt,
+        notes: {
+          user_id: userId,
+          plan_id: planId,
+          payment_type: "subscription_payment",
+          plan_name: plan.name,
+          billing_cycle: plan.billing_cycle,
+        },
+      };
+
+      const razorpayOrder = await razorpay.orders.create(orderOptions);
+
+      // Store payment order in database (amount in rupees)
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .insert({
+          application_id: null, // Subscription payments don't have application_id
+          amount: plan.price,
+          currency: "INR",
+          status: "CREATED",
+          razorpay_order_id: razorpayOrder.id,
+          metadata: {
+            user_id: userId,
+            plan_id: planId,
+            payer_id: userId,
+            payer_role: user.role,
+            payment_type: "subscription_payment",
+            plan_name: plan.name,
+            billing_cycle: plan.billing_cycle,
+            price: plan.price,
+          },
+        })
+        .select()
+        .single();
+
+      if (orderError) {
+        console.error(
+          "[v1/PaymentService/createSubscriptionPaymentOrder] Database error:",
+          orderError
+        );
+        return {
+          success: false,
+          message: "Failed to create payment order",
+          error: orderError.message,
+        };
+      }
+
+      // Convert Razorpay order amounts from paise to rupees
+      const orderInRupees = this.convertRazorpayOrderToRupees(razorpayOrder);
+
+      return {
+        success: true,
+        order: orderInRupees,
+        payment_order: paymentOrder,
+        plan: plan,
+        message: "Subscription payment order created successfully",
+      };
+    } catch (err) {
+      console.error(
+        "[v1/PaymentService/createSubscriptionPaymentOrder] Exception:",
+        err
+      );
+      return {
+        success: false,
+        message: "Failed to create subscription payment order",
+        error: err.message,
+      };
+    }
+  }
+
+  /**
+   * Verify subscription payment and create subscription
+   * Brand owner pays admin for subscription
+   * @param {Object} paymentData - Payment verification data
+   * @returns {Promise<Object>} Result with subscription
+   */
+  async verifySubscriptionPayment(paymentData) {
+    try {
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        plan_id,
+      } = paymentData;
+
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return {
+          success: false,
+          message: "Missing required payment information",
+        };
+      }
+
+      // Verify payment signature
+      const text = `${razorpay_order_id}|${razorpay_payment_id}`;
+      const expectedSignature = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .update(text)
+        .digest("hex");
+
+      if (razorpay_signature !== expectedSignature) {
+        return {
+          success: false,
+          message: "Invalid payment signature",
+        };
+      }
+
+      // Get payment order
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .select("*")
+        .eq("razorpay_order_id", razorpay_order_id)
+        .single();
+
+      if (orderError || !paymentOrder) {
+        return {
+          success: false,
+          message: "Payment order not found",
+        };
+      }
+
+      // Check if it's a subscription payment
+      if (
+        !paymentOrder.metadata ||
+        paymentOrder.metadata.payment_type !== "subscription_payment"
+      ) {
+        return {
+          success: false,
+          message: "Invalid payment order type",
+        };
+      }
+
+      // Normalize status
+      paymentOrder.status =
+        this.normalizeStatus(paymentOrder.status) || paymentOrder.status;
+
+      // Check if payment already verified
+      if (paymentOrder.status === "VERIFIED") {
+        return {
+          success: false,
+          message: "Payment already verified",
+        };
+      }
+
+      // Check for duplicate payment
+      const { data: existingPayment } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .select("id")
+        .eq("razorpay_payment_id", razorpay_payment_id)
+        .maybeSingle();
+
+      if (existingPayment && existingPayment.id !== paymentOrder.id) {
+        return {
+          success: false,
+          message: "Payment already processed",
+        };
+      }
+
+      // Get plan_id from payment order metadata
+      const orderPlanId = paymentOrder.metadata.plan_id;
+      const userId = paymentOrder.metadata.user_id;
+
+      // Validate plan_id matches if provided
+      if (plan_id && plan_id !== orderPlanId) {
+        return {
+          success: false,
+          message: "Plan ID mismatch with payment order",
+        };
+      }
+
+      // Update payment order status
+      const { error: updateError } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .update({
+          status: "VERIFIED",
+          razorpay_payment_id: razorpay_payment_id,
+          razorpay_signature: razorpay_signature,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", paymentOrder.id);
+
+      if (updateError) {
+        console.error(
+          "[v1/PaymentService/verifySubscriptionPayment] Update error:",
+          updateError
+        );
+        return {
+          success: false,
+          message: "Failed to update payment order",
+          error: updateError.message,
+        };
+      }
+
+      // Create subscription using SubscriptionService
+      const SubscriptionService = require("./subscriptionService");
+      const subscriptionResult = await SubscriptionService.createSubscription(
+        userId,
+        orderPlanId,
+        false // is_auto_renew - can be made configurable
+      );
+
+      if (!subscriptionResult.success) {
+        // Payment is verified but subscription creation failed
+        // This is a critical error - payment is done but subscription not created
+        console.error(
+          "[v1/PaymentService/verifySubscriptionPayment] Subscription creation failed after payment:",
+          subscriptionResult
+        );
+        return {
+          success: false,
+          message:
+            "Payment verified but subscription creation failed. Please contact support.",
+          error: subscriptionResult.message,
+        };
+      }
+
+      return {
+        success: true,
+        message: "Payment verified and subscription created successfully",
+        payment_order: {
+          ...paymentOrder,
+          status: "VERIFIED",
+          razorpay_payment_id: razorpay_payment_id,
+        },
+        subscription: subscriptionResult.subscription,
+      };
+    } catch (err) {
+      console.error(
+        "[v1/PaymentService/verifySubscriptionPayment] Exception:",
+        err
+      );
+      return {
+        success: false,
+        message: "Failed to verify subscription payment",
+        error: err.message,
+      };
+    }
+  }
 }
 
 module.exports = new PaymentService();
