@@ -473,18 +473,8 @@ class PaymentService {
         };
       }
 
-      // Create chat for this application AFTER payment is verified
-      // Chat should be created when payment is done so influencer and brand can start chatting
-      if (orderApplicationId) {
-        try {
-          const ChatService = require('./chatService');
-          await ChatService.createChat(orderApplicationId);
-          console.log(`[v1/PaymentService/verifyPayment] Chat created for application ${orderApplicationId}`);
-        } catch (chatError) {
-          console.error(`[v1/PaymentService/verifyPayment] Failed to create chat:`, chatError);
-          // Don't fail payment if chat creation fails, but log it
-        }
-      }
+      // Chat creation is now handled via endpoint only: POST /api/v1/chat/:applicationId
+      // Chat should be created explicitly by calling the endpoint after payment verification
 
       return {
         success: true,
