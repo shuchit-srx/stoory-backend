@@ -400,19 +400,30 @@ class PaymentService {
       }
 
       // Verify application exists and is ACCEPTED, then transition phase after payment
+      let application = null;
       if (orderApplicationId) {
-        const { data: application, error: applicationError } = await supabaseAdmin
+        const { data: appData, error: applicationError } = await supabaseAdmin
           .from("v1_applications")
-          .select("id, phase, campaign_id")
+          .select(`
+            id, 
+            phase, 
+            campaign_id,
+            v1_campaigns!inner(
+              id,
+              brand_id
+            )
+          `)
           .eq("id", orderApplicationId)
           .single();
 
-        if (applicationError || !application) {
+        if (applicationError || !appData) {
           return {
             success: false,
             message: "Application not found",
           };
         }
+
+        application = appData;
 
         if (application.phase !== "ACCEPTED") {
           return {
@@ -471,6 +482,58 @@ class PaymentService {
           message: "Failed to verify payment",
           error: updateError.message,
         };
+      }
+
+      // Insert transaction record into v1_transactions after payment verification
+      if (application && application.v1_campaigns) {
+        try {
+          const brandOwnerId = application.v1_campaigns.brand_id;
+          
+          // Get admin user ID (first admin user found, or use system admin)
+          const { data: adminUser } = await supabaseAdmin
+            .from("v1_users")
+            .select("id")
+            .eq("role", "ADMIN")
+            .eq("is_deleted", false)
+            .limit(1)
+            .maybeSingle();
+
+          // If no admin user found, use system admin ID
+          const adminUserId = adminUser?.id || process.env.SYSTEM_ADMIN_USER_ID || "00000000-0000-0000-0000-000000000000";
+
+          // Calculate amounts from payment order metadata
+          const grossAmount = paymentOrder.amount || paymentOrder.metadata?.budget_amount || 0;
+          const platformFee = paymentOrder.metadata?.commission_amount || 0;
+          const netAmount = paymentOrder.metadata?.net_amount || (grossAmount - platformFee);
+
+          // Insert transaction record
+          const { error: transactionError } = await supabaseAdmin
+            .from("v1_transactions")
+            .insert({
+              application_id: orderApplicationId,
+              type: "BRAND_PAYMENT",
+              from_entity: brandOwnerId,
+              to_entity: adminUserId,
+              gross_amount: grossAmount,
+              platform_fee: platformFee,
+              net_amount: netAmount,
+              status: "COMPLETED",
+            });
+
+          if (transactionError) {
+            console.error(
+              "[v1/PaymentService/verifyPayment] Transaction insert error:",
+              transactionError
+            );
+            // Don't fail payment verification if transaction record fails, but log it
+          }
+        } catch (txnErr) {
+          console.error(
+            "[v1/PaymentService/verifyPayment] Transaction creation exception:",
+            txnErr
+          );
+          // Don't fail payment verification if transaction record fails
+        }
       }
 
       // Chat creation is now handled via endpoint only: POST /api/v1/chat/:applicationId

@@ -308,6 +308,96 @@ class PaymentController {
       });
     }
   }
+
+  /**
+   * Get transactions for a brand owner
+   * GET /api/v1/payments/transactions
+   */
+  async getBrandTransactions(req, res) {
+    try {
+      const userId = req.user.id;
+      const { type, status, limit = 50, offset = 0 } = req.query;
+
+      // Verify user is a brand owner
+      const { supabaseAdmin } = require("../db/config");
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, role")
+        .eq("id", userId)
+        .single();
+
+      if (userError || !user) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      // Check if user is brand owner or admin
+      if (user.role !== "BRAND_OWNER" && user.role !== "ADMIN") {
+        return res.status(403).json({
+          success: false,
+          message: "Only brand owners and admins can view transactions",
+        });
+      }
+
+      // Build query
+      let query = supabaseAdmin
+        .from("v1_transactions")
+        .select(`
+          *,
+          v1_applications(
+            id,
+            phase,
+            v1_campaigns(
+              id,
+              title,
+              brand_id
+            )
+          )
+        `)
+        .eq("from_entity", userId) // Brand owner is the from_entity
+        .order("created_at", { ascending: false })
+        .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+      // Apply filters
+      if (type) {
+        query = query.eq("type", type);
+      }
+      if (status) {
+        query = query.eq("status", status);
+      }
+
+      const { data: transactions, error, count } = await query;
+
+      if (error) {
+        console.error("[v1/PaymentController/getBrandTransactions] Database error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch transactions",
+          error: error.message,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Transactions fetched successfully",
+        transactions: transactions || [],
+        pagination: {
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          count: transactions?.length || 0,
+        },
+      });
+    } catch (err) {
+      console.error("[v1/PaymentController/getBrandTransactions] Exception:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: err.message,
+      });
+    }
+  }
 }
 
 module.exports = new PaymentController();

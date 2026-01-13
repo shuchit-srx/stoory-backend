@@ -48,12 +48,21 @@ router.post(
   PaymentController.releasePayout
 );
 
-// Get payments for an application (Brand, Influencer, Admin)
+// Get payments for an application (Brand, , Admin)
 router.get(
   "/applications/:applicationId",
   authMiddleware.authenticateToken,
+  authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
   validateApplicationIdParam,
   PaymentController.getApplicationPayments
+);
+
+// Get transactions for a brand owner
+router.get(
+  "/transactions/all",
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
+  PaymentController.getBrandTransactions
 );
 
 module.exports = router;
