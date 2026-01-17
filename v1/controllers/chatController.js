@@ -141,8 +141,34 @@ const getChat = async (req, res) => {
   }
 };
 
+/**
+ * Get all chat IDs for the authenticated user
+ * GET /api/v1/chat/user/chats
+ */
+const getUserChats = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get all chats for this user
+    const chats = await ChatService.getUserChats(userId);
+
+    res.json({
+      success: true,
+      data: chats,
+      count: chats.length
+    });
+  } catch (error) {
+    console.error('Get user chats error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get user chats'
+    });
+  }
+};
+
 module.exports = {
   getHistory,
   createChat,
-  getChat
+  getChat,
+  getUserChats
 };

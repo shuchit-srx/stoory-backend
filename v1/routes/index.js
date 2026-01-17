@@ -57,4 +57,8 @@ router.use('/admin/settings', adminSettingsRoutes); // → /api/v1/admin/setting
 const couponRoutes = require('./coupons');
 router.use('/coupons', couponRoutes); // → /api/v1/coupons/*
 
+// Mount v1 portfolio routes
+const portfolioRoutes = require('./portfolios');
+router.use('/portfolios', portfolioRoutes); // → /api/v1/portfolios/*
+
 module.exports = router;

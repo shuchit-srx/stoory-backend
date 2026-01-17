@@ -10,6 +10,7 @@ const {
   validateResendEmailVerification,
   validateForgotPassword,
   validateResetPassword,
+  validateVerifyPAN,
 } = require("../validators");
 const AuthService = require("../services/authService");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -71,6 +72,19 @@ router.post(
   "/brand/reset-password",
   validateResetPassword,
   AuthController.resetPassword
+);
+
+// ============================================
+// PAN VERIFICATION (Public - Optional Auth)
+// ============================================
+// PAN verification (works with or without authentication)
+// If authenticated: checks if already verified, saves verification status to profile
+// If not authenticated: just returns verification result
+router.post(
+  "/verify-pan",
+  authMiddleware.authenticateTokenOptional,
+  validateVerifyPAN,
+  AuthController.verifyPAN
 );
 
 module.exports = router;

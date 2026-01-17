@@ -35,4 +35,14 @@ router.get(
   chatController.getChat
 );
 
+/**
+ * GET /api/v1/chat/user/chats
+ * Get all chat IDs for the authenticated user (influencer or brand_owner)
+ */
+router.get(
+  '/user/my-chats',
+  authMiddleware.authenticateToken,
+  chatController.getUserChats
+);
+
 module.exports = router;

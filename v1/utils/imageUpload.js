@@ -146,9 +146,131 @@ const uploadBulkCampaignFiles = multer({
     // No fileFilter - allow all file types for bulk campaigns
 });
 
+// File filter for portfolio media (images and videos)
+const portfolioFileFilter = (req, file, cb) => {
+    // Check file type - allow images and videos
+    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only image and video files are allowed for portfolio!'), false);
+    }
+};
+
+// Multer configuration for portfolio files (images and videos)
+const uploadPortfolioMedia = multer({
+    storage: storage,
+    fileFilter: portfolioFileFilter,
+    limits: {
+        fileSize: 100 * 1024 * 1024, // 100MB limit for portfolio media (videos can be large)
+    }
+});
+
+/**
+ * Upload portfolio media (image or video) to Supabase Storage
+ * @param {Buffer} fileBuffer - The file buffer
+ * @param {string} fileName - The file name
+ * @param {string} mimeType - The MIME type of the file
+ * @returns {Promise<{url: string, error: string}>}
+ */
+async function uploadPortfolioMediaToStorage(fileBuffer, fileName, mimeType) {
+    try {
+        console.log('Starting portfolio media upload process...');
+        console.log('File name:', fileName);
+        console.log('MIME type:', mimeType);
+        console.log('File buffer size:', fileBuffer.length, 'bytes');
+
+        // Determine bucket based on file type
+        const isVideo = mimeType.startsWith('video/');
+        const bucket = isVideo ? 'attachments' : 'images'; // Videos go to attachments, images to images bucket
+        const folder = isVideo ? 'portfolio/videos' : 'portfolio/images';
+
+        // Generate unique filename
+        const timestamp = Date.now();
+        const fileExtension = path.extname(fileName);
+        const uniqueFileName = `${folder}/${timestamp}_${Math.random().toString(36).substring(2)}${fileExtension}`;
+        
+        console.log('Generated filename:', uniqueFileName);
+        console.log('Target bucket:', bucket);
+
+        // Upload to Supabase Storage
+        console.log('Uploading to Supabase Storage...');
+        const { data, error } = await supabaseAdmin.storage
+            .from(bucket)
+            .upload(uniqueFileName, fileBuffer, {
+                contentType: mimeType,
+                cacheControl: '3600',
+                upsert: false
+            });
+
+        if (error) {
+            console.error('Supabase storage upload error:', error);
+            console.error('Error details:', {
+                message: error.message,
+                statusCode: error.statusCode,
+                error: error.error
+            });
+            return { url: null, error: error.message };
+        }
+
+        console.log('Upload successful, data:', data);
+
+        // Get public URL
+        const { data: urlData } = supabaseAdmin.storage
+            .from(bucket)
+            .getPublicUrl(uniqueFileName);
+
+        console.log('Public URL generated:', urlData.publicUrl);
+        return { url: urlData.publicUrl, error: null };
+    } catch (error) {
+        console.error('Portfolio media upload error:', error);
+        console.error('Error stack:', error.stack);
+        return { url: null, error: error.message };
+    }
+}
+
+/**
+ * Delete portfolio media from Supabase Storage
+ * @param {string} mediaUrl - The media URL to delete
+ * @returns {Promise<{success: boolean, error: string}>}
+ */
+async function deletePortfolioMediaFromStorage(mediaUrl) {
+    try {
+        if (!mediaUrl) {
+            return { success: true, error: null };
+        }
+
+        // Determine bucket from URL
+        const isVideo = mediaUrl.includes('/portfolio/videos/');
+        const bucket = isVideo ? 'attachments' : 'images';
+
+        // Extract file path from URL
+        const urlParts = mediaUrl.split('/');
+        const fileName = urlParts[urlParts.length - 1];
+        const folder = urlParts[urlParts.length - 2];
+        const filePath = `${folder}/${fileName}`;
+
+        const { error } = await supabaseAdmin.storage
+            .from(bucket)
+            .remove([filePath]);
+
+        if (error) {
+            console.error('Supabase storage delete error:', error);
+            return { success: false, error: error.message };
+        }
+
+        return { success: true, error: null };
+    } catch (error) {
+        console.error('Portfolio media deletion error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
 module.exports = {
     upload,
     uploadBulkCampaignFiles,
+    uploadPortfolioMedia,
     uploadImageToStorage,
-    deleteImageFromStorage
+    deleteImageFromStorage,
+    uploadPortfolioMediaToStorage,
+    deletePortfolioMediaFromStorage
 };

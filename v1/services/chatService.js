@@ -366,6 +366,72 @@ const ChatService = {
     }
 
     return readReceipts || [];
+  },
+
+  /**
+   * getUserChats
+   * Gets all chat IDs for a user (influencer or brand_owner)
+   * @param {string} userId - The user ID
+   * @returns {Promise<Array>} - Array of chat objects with id, application_id, and status
+   */
+  async getUserChats(userId) {
+    if (!userId) {
+      throw new Error('userId is required');
+    }
+
+    try {
+      // Step 1: Get all applications where user is influencer
+      const { data: influencerApplications, error: influencerError } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id')
+        .eq('influencer_id', userId);
+
+      if (influencerError) {
+        console.error('Error getting influencer applications:', influencerError);
+        throw new Error(`Failed to get influencer applications: ${influencerError.message}`);
+      }
+
+      // Step 2: Get all applications where user is brand owner (via campaigns)
+      const { data: brandApplications, error: brandError } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns!inner(brand_id)')
+        .eq('v1_campaigns.brand_id', userId);
+
+      if (brandError) {
+        console.error('Error getting brand applications:', brandError);
+        throw new Error(`Failed to get brand applications: ${brandError.message}`);
+      }
+
+      // Step 3: Combine all application IDs
+      const applicationIds = [
+        ...(influencerApplications || []).map(app => app.id),
+        ...(brandApplications || []).map(app => app.id)
+      ];
+
+      // Remove duplicates
+      const uniqueApplicationIds = [...new Set(applicationIds)];
+
+      if (uniqueApplicationIds.length === 0) {
+        return [];
+      }
+
+      // Step 4: Get all chats for these applications
+      const { data: chats, error: chatsError } = await supabaseAdmin
+        .from('v1_chats')
+        .select('id, application_id, status, created_at, updated_at')
+        .in('application_id', uniqueApplicationIds)
+        .order('updated_at', { ascending: false });
+
+      if (chatsError) {
+        console.error('Error getting user chats:', chatsError);
+        throw new Error(`Failed to get user chats: ${chatsError.message}`);
+      }
+
+      return chats || [];
+    } catch (error) {
+      console.error('Error in getUserChats:', error);
+      throw error;
+    }
   }
 };
 

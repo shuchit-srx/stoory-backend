@@ -1,5 +1,6 @@
 const { validationResult } = require("express-validator");
 const { AuthService } = require("../services");
+const PanVerificationService = require("../services/panVerificationService");
 const validators = require("../validators");
 
 class AuthController {
@@ -360,6 +361,74 @@ class AuthController {
       });
     } catch (err) {
       console.error("[v1/resetPassword] error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  // ============================================
+  // PAN VERIFICATION
+  // ============================================
+
+  /**
+   * Verify PAN using Zoop
+   * Works with or without authentication
+   * If authenticated: checks if already verified, saves verification status to profile
+   * If not authenticated: just returns verification result
+   */
+  async verifyPAN(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const panInput = req.body?.pan || req.body?.pan_number;
+      const userId = req.user?.id; // Optional: from authMiddleware
+      const userRole = req.user?.role; // Optional: from authMiddleware
+
+      if (!panInput) {
+        return res.status(400).json({
+          success: false,
+          message: "PAN number is required",
+        });
+      }
+
+      const result = await PanVerificationService.verifyPAN(
+        panInput,
+        userId,
+        userRole,
+        {
+          consent_text: req.body?.consent_text,
+          task_id: req.body?.task_id,
+        }
+      );
+
+      if (!result.success) {
+        const statusCode =
+          result.error_type === "invalid_format" ||
+          result.error_type === "different_pan_exists" ||
+          result.error_type === "duplicate_pan"
+            ? 400
+            : result.error_type === "timeout"
+            ? 504
+            : result.error_type === "service_unavailable"
+            ? 503
+            : result.http_status || 500;
+
+        return res.status(statusCode).json({
+          success: false,
+          message: result.message,
+          error_type: result.error_type,
+          ...(result.vendor_error ? { vendor_error: result.vendor_error } : {}),
+        });
+      }
+
+      return res.json(result);
+    } catch (err) {
+      console.error("[v1/verifyPAN] error:", err);
       return res.status(500).json({
         success: false,
         message: "Internal server error",

@@ -7,6 +7,7 @@ module.exports = {
     profileController: require('./profileController'),
     submissionController: require('./submissionController'),
     paymentController: require('./paymentController'),
-    mouController: require('./mouController')
+    mouController: require('./mouController'),
+    portfolioController: require('./portfolioController')
   };  
 
