@@ -40,7 +40,7 @@ router.get(
  * Get all chat IDs for the authenticated user (influencer or brand_owner)
  */
 router.get(
-  '/user/chats',
+  '/user/my-chats',
   authMiddleware.authenticateToken,
   chatController.getUserChats
 );
