@@ -11,9 +11,6 @@ class AuthService {
       process.env.JWT_SECRET || "your-secret-key-change-in-production";
     this.jwtExpiry = "1d";
     this.refreshJwtExpiry = "180d";
-
-    // Mock phone for testing (same as legacy)
-    this.mockPhone = "9876543210";
   }
 
   // ---------- OTP helpers (reuse otp_codes table) ----------
@@ -47,8 +44,8 @@ class AuthService {
 
   async verifyStoredOTP(phone, otp) {
     try {
-      // Bypass OTP for test number
-      if (otp === "123456") {
+      // Bypass OTP for test number only
+      if (phone === "+919876543210" && otp === "123456") {
         return { success: true };
       }
 
@@ -204,6 +201,14 @@ class AuthService {
           success: false,
           message:
             "Invalid phone number format. Use international format: +[country code][number]",
+        };
+      }
+
+      // Bypass for test phone number
+      if (phone === "+919876543210") {
+        return {
+          success: true,
+          message: "OTP sent successfully",
         };
       }
 
