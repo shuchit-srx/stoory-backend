@@ -61,4 +61,8 @@ router.use('/coupons', couponRoutes); // → /api/v1/coupons/*
 const portfolioRoutes = require('./portfolios');
 router.use('/portfolios', portfolioRoutes); // → /api/v1/portfolios/*
 
+// Mount v1 payout routes
+const payoutRoutes = require('./payouts');
+router.use('/payouts', payoutRoutes); // → /api/v1/payouts/*
+
 module.exports = router;
