@@ -10,7 +10,6 @@ class ApplicationService {
     try {
       if (!campaignId) {
         return { success: false, message: 'Campaign ID is required' };
-        return ;
       }
 
       // Count applications with phase ACCEPTED or COMPLETED for this campaign
