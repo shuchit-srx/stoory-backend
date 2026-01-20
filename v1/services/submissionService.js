@@ -556,6 +556,47 @@ class SubmissionService {
         if (phaseError) {
           console.error('[SubmissionService/reviewWork] Phase update error:', phaseError);
           // Log but don't fail
+        } else {
+          // Create payout entry when work is accepted and application is completed
+          // Get application details to calculate payout amount
+          const { data: applicationDetails, error: appError } = await supabaseAdmin
+            .from('v1_applications')
+            .select('agreed_amount, influencer_id')
+            .eq('id', application.id)
+            .maybeSingle();
+
+          if (appError) {
+            console.error('[SubmissionService/reviewWork] Application fetch error:', appError);
+          } else if (applicationDetails) {
+            // Amount is the agreed_amount (full amount to influencer)
+            const payoutAmount = applicationDetails.agreed_amount;
+
+            if (payoutAmount && payoutAmount > 0) {
+              // Check if payout already exists for this application
+              const { data: existingPayout } = await supabaseAdmin
+                .from('v1_payouts')
+                .select('id')
+                .eq('application_id', application.id)
+                .maybeSingle();
+
+              if (!existingPayout) {
+                const { error: payoutError } = await supabaseAdmin
+                  .from('v1_payouts')
+                  .insert({
+                    application_id: application.id,
+                    influencer_id: applicationDetails.influencer_id,
+                    amount: payoutAmount,
+                    status: 'PENDING',
+                    created_at: new Date().toISOString()
+                  });
+
+                if (payoutError) {
+                  console.error('[SubmissionService/reviewWork] Payout creation error:', payoutError);
+                  // Don't fail work review if payout creation fails, just log it
+                }
+              }
+            }
+          }
         }
       }
 
