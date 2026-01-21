@@ -233,12 +233,16 @@ class CampaignService {
         filters;
 
       const { page = 1, limit = 20 } = pagination;
-      const offset = (page - 1) * limit;
+      
+      // Validate pagination parameters
+      const validatedPage = Math.max(1, parseInt(page) || 1);
+      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items per page
+      const offset = (validatedPage - 1) * validatedLimit;
 
-      // Build query
+      // Build query - select only required fields
       let query = supabaseAdmin
         .from("v1_campaigns")
-        .select("*", { count: "exact" })
+        .select("id, title, cover_image_url, budget, platform, content_type, brand_id", { count: "exact" })
         .order("created_at", { ascending: false });
 
       // Apply filters
@@ -273,7 +277,7 @@ class CampaignService {
       }
 
       // Apply pagination
-      query = query.range(offset, offset + limit - 1);
+      query = query.range(offset, offset + validatedLimit - 1);
 
       const { data, error, count } = await query;
 
@@ -286,16 +290,15 @@ class CampaignService {
         };
       }
 
-      // Fetch brand details for all unique brand_ids
+      // Fetch brand details for all unique brand_ids - only get id and name
       const brandIds = [...new Set((data || []).map(c => c.brand_id).filter(Boolean))];
       let brandMap = {};
-      let brandProfileMap = {};
 
       if (brandIds.length > 0) {
-        // Fetch brand users
+        // Fetch brand users - only get id and name
         const { data: brandUsers, error: brandUsersError } = await supabaseAdmin
           .from("v1_users")
-          .select("id, name, email, role")
+          .select("id, name")
           .in("id", brandIds)
           .eq("is_deleted", false);
 
@@ -306,39 +309,25 @@ class CampaignService {
             brandMap[user.id] = user;
           });
         }
-
-        // Fetch brand profiles
-        const { data: brandProfiles, error: brandProfilesError } = await supabaseAdmin
-          .from("v1_brand_profiles")
-          .select("*")
-          .in("user_id", brandIds)
-          .eq("is_deleted", false);
-
-        if (brandProfilesError) {
-          console.error("[v1/getCampaigns] Brand profiles fetch error:", brandProfilesError);
-        } else if (brandProfiles) {
-          brandProfiles.forEach(profile => {
-            brandProfileMap[profile.user_id] = profile;
-          });
-        }
       }
 
-      // Attach brand details to each campaign
+      // Attach brand details to each campaign - simplified structure
       const campaignsWithBrand = (data || []).map(campaign => {
         const brandUser = brandMap[campaign.brand_id] || null;
-        const brandProfile = brandProfileMap[campaign.brand_id] || null;
 
-        const brandDetails = brandUser ? {
-          brand_id: brandUser.id,
-          brand_name: brandUser.name,
-          brand_email: brandUser.email,
-          brand_role: brandUser.role,
-          brand_profile: brandProfile
+        const brand = brandUser ? {
+          id: brandUser.id,
+          brand_name: brandUser.name
         } : null;
 
         return {
-          ...campaign,
-          brand: brandDetails
+          id: campaign.id,
+          title: campaign.title,
+          cover_image_url: campaign.cover_image_url,
+          budget: campaign.budget,
+          platform: campaign.platform,
+          content_type: campaign.content_type,
+          brand: brand
         };
       });
 
@@ -346,10 +335,10 @@ class CampaignService {
         success: true,
         campaigns: campaignsWithBrand,
         pagination: {
-          page,
-          limit,
+          page: validatedPage,
+          limit: validatedLimit,
           total: count || 0,
-          totalPages: Math.ceil((count || 0) / limit),
+          totalPages: Math.ceil((count || 0) / validatedLimit),
         },
       };
     } catch (err) {
