@@ -704,7 +704,7 @@ class SubmissionService {
         // Get influencer user details
         const { data: userData, error: userError } = await supabaseAdmin
           .from('v1_users')
-          .select('id, name, email, role, profile_picture_url')
+        .select('id, name, email, role')
           .eq('id', application.influencer_id)
           .eq('is_deleted', false)
           .maybeSingle();
@@ -839,7 +839,7 @@ class SubmissionService {
         // Get influencer user details
         const { data: userData, error: userError } = await supabaseAdmin
           .from('v1_users')
-          .select('id, name, email, role, profile_picture_url')
+        .select('id, name, email, role')
           .eq('id', application.influencer_id)
           .eq('is_deleted', false)
           .maybeSingle();

@@ -228,7 +228,8 @@ class PaymentService {
       const { data: existingPayment } = await supabaseAdmin
         .from("v1_payment_orders")
         .select("id, status")
-        .eq("application_id", applicationId)
+        .eq("payable_type", "APPLICATION")
+        .eq("payable_id", applicationId)
         .maybeSingle();
 
       if (existingPayment) {
@@ -279,7 +280,8 @@ class PaymentService {
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
         .from("v1_payment_orders")
         .insert({
-          application_id: applicationId,
+          payable_type: "APPLICATION",
+          payable_id: applicationId,
           amount: breakdown.total_amount,
           currency: "INR",
           status: "CREATED",
@@ -329,6 +331,244 @@ class PaymentService {
       return {
         success: false,
         message: "Failed to create payment order",
+        error: err.message,
+      };
+    }
+  }
+
+  /**
+   * Create bulk payment order for campaign (Brand pays admin for all accepted applications)
+   * Aggregates budget_amount of all ACCEPTED applications for the campaign
+   * Only allowed when campaign has accepted applications
+   */
+  async createBulkPaymentOrderForCampaign(campaignId, userId) {
+    try {
+      if (!razorpay) {
+        return {
+          success: false,
+          message: "Payment service is not configured",
+        };
+      }
+
+      // Get campaign with platform_fee_percentage
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from("v1_campaigns")
+        .select("id, brand_id, title, platform_fee_percentage")
+        .eq("id", campaignId)
+        .single();
+
+      if (campaignError || !campaign) {
+        return {
+          success: false,
+          message: "Campaign not found",
+        };
+      }
+
+      // Check if user is the brand owner or admin
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, role")
+        .eq("id", userId)
+        .single();
+
+      if (userError || !user) {
+        return {
+          success: false,
+          message: "User not found",
+        };
+      }
+
+      // Permission check: Only brand owner can pay for their campaigns
+      if (user.role !== "ADMIN" && campaign.brand_id !== userId) {
+        return {
+          success: false,
+          message: "You don't have permission to pay for this campaign",
+        };
+      }
+
+      // Get all ACCEPTED applications for this campaign
+      const { data: applications, error: applicationsError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("id, budget_amount, agreed_amount, phase")
+        .eq("campaign_id", campaignId)
+        .eq("phase", "ACCEPTED");
+
+      if (applicationsError) {
+        return {
+          success: false,
+          message: "Failed to load applications",
+          error: applicationsError.message,
+        };
+      }
+
+      if (!applications || applications.length === 0) {
+        return {
+          success: false,
+          message: "No accepted applications found for this campaign",
+        };
+      }
+
+      const applicationIds = applications.map(a => a.id);
+
+      // Check which applications already have verified payments
+      const { data: existingPayments, error: existingPaymentsError } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .select("payable_type, payable_id, status")
+        .eq("payable_type", "APPLICATION")
+        .in("payable_id", applicationIds);
+
+      if (existingPaymentsError) {
+        console.error("[v1/PaymentService/createBulkPaymentOrderForCampaign] Error checking existing payments:", existingPaymentsError);
+      }
+
+      // Filter out applications that already have verified payments
+      const paidAppIds = new Set(
+        (existingPayments || [])
+          .filter(p => {
+            const normalizedStatus = this.normalizeStatus(p.status) || p.status;
+            return normalizedStatus === "VERIFIED";
+          })
+          .map(p => p.payable_id)
+      );
+
+      const payableApplications = applications.filter(a => !paidAppIds.has(a.id));
+
+      if (payableApplications.length === 0) {
+        return {
+          success: false,
+          message: "All accepted applications are already paid",
+        };
+      }
+
+      // Aggregate budget_amount of all payable applications
+      const totalAmount = payableApplications.reduce((sum, app) => {
+        const amount = Number(app.budget_amount ?? app.agreed_amount ?? 0);
+        return sum + (isNaN(amount) ? 0 : amount);
+      }, 0);
+
+      if (!totalAmount || totalAmount <= 0) {
+        return {
+          success: false,
+          message: "Invalid total amount for bulk payment",
+        };
+      }
+
+      // Get platform_fee_percentage from campaign
+      const platformFeePercentage = campaign.platform_fee_percentage;
+
+      if (platformFeePercentage === null || platformFeePercentage === undefined) {
+        return {
+          success: false,
+          message: "Campaign does not have a valid platform fee percentage",
+        };
+      }
+
+      // Check if bulk payment order already exists for this campaign
+      const { data: existingBulkPayment } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .select("id, status")
+        .eq("payable_type", "CAMPAIGN")
+        .eq("payable_id", campaignId)
+        .maybeSingle();
+
+      if (existingBulkPayment) {
+        const normalizedStatus = this.normalizeStatus(existingBulkPayment.status) || existingBulkPayment.status;
+        if (normalizedStatus === "VERIFIED") {
+          return {
+            success: false,
+            message: "Bulk payment already completed for this campaign",
+          };
+        }
+        return {
+          success: false,
+          message: "Bulk payment order already exists for this campaign",
+        };
+      }
+
+      // Calculate commission breakdown using total amount and platform_fee_percentage
+      const breakdown = await this.calculateCommissionBreakdown(totalAmount, platformFeePercentage);
+
+      // Razorpay receipt must be <= 40 chars
+      const rawReceipt = `camp_${campaignId.substring(0, 20)}_${Date.now()}`;
+      const safeReceipt = rawReceipt.substring(0, 40);
+
+      // Convert to paise for Razorpay API (Razorpay requires amounts in paise)
+      const amountInPaise = Math.round(breakdown.total_amount * 100);
+
+      // Create Razorpay order
+      const orderOptions = {
+        amount: amountInPaise,
+        currency: "INR",
+        receipt: safeReceipt,
+        notes: {
+          campaign_id: campaignId,
+          brand_id: campaign.brand_id,
+          payer_id: userId,
+          payment_type: "campaign_bulk_payment",
+          application_ids: payableApplications.map(a => a.id),
+          commission_percentage: breakdown.commission_percentage,
+        },
+      };
+
+      const razorpayOrder = await razorpay.orders.create(orderOptions);
+
+      // Store payment order in database (amount in rupees)
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .insert({
+          payable_type: "CAMPAIGN",
+          payable_id: campaignId,
+          amount: breakdown.total_amount,
+          currency: "INR",
+          status: "CREATED",
+          razorpay_order_id: razorpayOrder.id,
+          metadata: {
+            campaign_id: campaignId,
+            brand_id: campaign.brand_id,
+            payer_id: userId,
+            payer_role: user.role,
+            payment_type: "campaign_bulk_payment",
+            application_ids: payableApplications.map(a => a.id),
+            application_count: payableApplications.length,
+            total_budget_amount: totalAmount,
+            commission_percentage: breakdown.commission_percentage,
+            commission_amount: breakdown.commission_amount,
+            net_amount: breakdown.net_amount,
+            campaign_title: campaign.title,
+          },
+        })
+        .select()
+        .single();
+
+      if (orderError) {
+        console.error(
+          "[v1/PaymentService/createBulkPaymentOrderForCampaign] Database error:",
+          orderError
+        );
+        return {
+          success: false,
+          message: "Failed to create payment order",
+          error: orderError.message,
+        };
+      }
+
+      // Convert Razorpay order amounts from paise to rupees for response
+      const orderInRupees = this.convertRazorpayOrderToRupees(razorpayOrder);
+
+      return {
+        success: true,
+        order: orderInRupees,
+        payment_order: paymentOrder,
+        breakdown: breakdown,
+        application_count: payableApplications.length,
+        application_ids: payableApplications.map(a => a.id),
+        message: "Bulk payment order created successfully",
+      };
+    } catch (err) {
+      console.error("[v1/PaymentService/createBulkPaymentOrderForCampaign] Exception:", err);
+      return {
+        success: false,
+        message: "Failed to create bulk payment order",
         error: err.message,
       };
     }
@@ -406,8 +646,10 @@ class PaymentService {
         };
       }
 
-      // Get application_id from payment order (it's a required field)
-      const orderApplicationId = paymentOrder.application_id;
+      // Get application_id from payment order metadata or payable_id
+      const orderApplicationId = paymentOrder.payable_type === "APPLICATION" 
+        ? paymentOrder.payable_id 
+        : paymentOrder.metadata?.application_id;
 
       // If application_id is provided in request, validate it matches the payment order
       if (application_id && application_id !== orderApplicationId) {
@@ -601,7 +843,8 @@ class PaymentService {
       const { data: payments, error } = await supabaseAdmin
         .from("v1_payment_orders")
         .select("*")
-        .eq("application_id", applicationId)
+        .eq("payable_type", "APPLICATION")
+        .eq("payable_id", applicationId)
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -759,19 +1002,19 @@ class PaymentService {
       }
 
       // Check for existing pending payment order for this subscription
-      // Query payment orders with subscription payment type in metadata
+      // Query payment orders with subscription payment type
       const { data: existingPayments, error: existingPaymentError } =
         await supabaseAdmin
           .from("v1_payment_orders")
           .select("id, status, metadata")
-          .is("application_id", null); // Subscription payments don't have application_id
+          .eq("payable_type", "SUBSCRIPTION")
+          .eq("payable_id", planId);
 
       let existingPayment = null;
       if (existingPayments && !existingPaymentError) {
         existingPayment = existingPayments.find(
           (p) =>
             p.metadata?.payment_type === "subscription_payment" &&
-            p.metadata?.plan_id === planId &&
             p.metadata?.user_id === userId
         );
       }
@@ -873,7 +1116,8 @@ class PaymentService {
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
         .from("v1_payment_orders")
         .insert({
-          application_id: null, // Subscription payments don't have application_id
+          payable_type: "SUBSCRIPTION",
+          payable_id: planId,
           amount: finalAmountRupees, // Stored in RUPEES
           currency: "INR",
           status: "CREATED",

@@ -6,6 +6,7 @@ const { normalizeEnums } = require("../middleware/enumNormalizer");
 const {
   validateApplicationIdParam,
   validateVerifyPayment,
+  validateCampaignIdParam,
 } = require("../validators/paymentValidators");
 
 /**
@@ -27,6 +28,15 @@ router.post(
   authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
   validateApplicationIdParam,
   PaymentController.createApplicationPaymentOrder
+);
+
+// Create bulk payment order for campaign (Brand pays admin for all accepted applications)
+router.post(
+  "/campaigns/:campaignId/bulk",
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
+  validateCampaignIdParam,
+  PaymentController.createCampaignBulkPaymentOrder
 );
 
 // Verify payment (Brand and Admin)

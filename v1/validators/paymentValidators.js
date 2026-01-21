@@ -14,6 +14,15 @@ const validateApplicationIdParam = [
     .withMessage('Application ID must be a valid UUID'),
 ];
 
+// Validate campaignId in URL params
+const validateCampaignIdParam = [
+  param('campaignId')
+    .notEmpty()
+    .withMessage('Campaign ID is required')
+    .isUUID()
+    .withMessage('Campaign ID must be a valid UUID'),
+];
+
 // Validate verify payment request body
 const validateVerifyPayment = [
   body('razorpay_order_id')
@@ -35,8 +44,7 @@ const validateVerifyPayment = [
     .withMessage('razorpay_signature must be a string')
     .trim(),
   body('application_id')
-    .notEmpty()
-    .withMessage('application_id is required')
+    .optional()
     .isUUID()
     .withMessage('application_id must be a valid UUID'),
 ];
@@ -44,5 +52,6 @@ const validateVerifyPayment = [
 module.exports = {
   validateApplicationIdParam,
   validateVerifyPayment,
+  validateCampaignIdParam,
 };
 

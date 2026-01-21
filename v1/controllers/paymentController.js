@@ -94,6 +94,68 @@ class PaymentController {
   }
 
   /**
+   * Create bulk payment order for campaign (Brand pays admin for all accepted applications)
+   * POST /api/v1/payments/campaigns/:campaignId/bulk
+   */
+  async createCampaignBulkPaymentOrder(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const campaignId = req.params.campaignId;
+      const userId = req.user.id;
+
+      const result = await PaymentService.createBulkPaymentOrderForCampaign(campaignId, userId);
+
+      if (!result.success) {
+        const statusCode =
+          result.message === "Campaign not found" ||
+          result.message === "User not found"
+            ? 404
+            : result.message === "You don't have permission to pay for this campaign"
+            ? 403
+            : result.message === "Payment service is not configured"
+            ? 503
+            : result.message === "No accepted applications found for this campaign" ||
+              result.message === "All accepted applications are already paid" ||
+              result.message === "Invalid total amount for bulk payment" ||
+              result.message === "Campaign does not have a valid platform fee percentage" ||
+              result.message === "Bulk payment already completed for this campaign" ||
+              result.message === "Bulk payment order already exists for this campaign"
+            ? 400
+            : 500;
+        return res.status(statusCode).json({
+          success: false,
+          message: result.message || "Failed to create bulk payment order",
+          error: result.error,
+        });
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: result.message || "Bulk payment order created successfully",
+        order: result.order,
+        payment_order: result.payment_order,
+        breakdown: result.breakdown,
+        application_count: result.application_count,
+        application_ids: result.application_ids,
+      });
+    } catch (err) {
+      console.error(
+        "[v1/PaymentController/createCampaignBulkPaymentOrder] Exception:",
+        err
+      );
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: err.message,
+      });
+    }
+  }
+
+  /**
    * Verify payment
    * POST /api/v1/payments/verify
    */
