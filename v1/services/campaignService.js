@@ -353,14 +353,14 @@ class CampaignService {
 
   /**
    * Get single campaign by ID
-   * Includes applications with user data for each application
+   * Returns only essential fields with applications and influencer data
    */
   async getCampaignById(campaignId, userId = null) {
     try {
-      // Fetch the campaign
+      // Fetch the campaign - select only required fields
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("*")
+        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language")
         .eq("id", campaignId)
         .maybeSingle();
 
@@ -380,10 +380,14 @@ class CampaignService {
         };
       }
 
-      // Fetch all applications for this campaign
+      // Set deadlines to null since start_deadline field has been removed
+      const workDeadline = null;
+      const scriptDeadline = null;
+
+      // Fetch all applications for this campaign - only required fields
       const { data: applications, error: applicationsError } = await supabaseAdmin
         .from("v1_applications")
-        .select("*")
+        .select("id, phase, created_at, influencer_id")
         .eq("campaign_id", campaignId)
         .order("created_at", { ascending: false });
 
@@ -392,43 +396,112 @@ class CampaignService {
         // Continue without applications if there's an error
       }
 
-      // Fetch user data for each influencer who applied
-      let applicationsWithUsers = [];
+      // Fetch influencer data for each application
+      let applicationsWithInfluencers = [];
       if (applications && applications.length > 0) {
         const influencerIds = [...new Set(applications.map(app => app.influencer_id).filter(Boolean))];
         
         let userMap = {};
+        let profileMap = {};
+        let socialAccountsMap = {};
+
         if (influencerIds.length > 0) {
+          // Fetch user data - only id and name
           const { data: users, error: usersError } = await supabaseAdmin
             .from("v1_users")
-            .select("id, name, email, phone_number, role, created_at, updated_at, is_deleted")
+            .select("id, name")
             .in("id", influencerIds)
             .eq("is_deleted", false);
 
           if (usersError) {
             console.error("[v1/getCampaignById] Users fetch error:", usersError);
           } else if (users) {
-            // Create a map for quick lookup
             users.forEach(user => {
               userMap[user.id] = user;
             });
           }
+
+          // Fetch influencer profiles - only profile_photo_url
+          const { data: profiles, error: profilesError } = await supabaseAdmin
+            .from("v1_influencer_profiles")
+            .select("user_id, profile_photo_url")
+            .in("user_id", influencerIds)
+            .eq("is_deleted", false);
+
+          if (profilesError) {
+            console.error("[v1/getCampaignById] Profiles fetch error:", profilesError);
+          } else if (profiles) {
+            profiles.forEach(profile => {
+              profileMap[profile.user_id] = profile;
+            });
+          }
+
+          // Fetch social accounts - only platform and followers_count
+          const { data: socialAccounts, error: socialAccountsError } = await supabaseAdmin
+            .from("v1_influencer_social_accounts")
+            .select("user_id, platform, followers_count")
+            .in("user_id", influencerIds)
+            .eq("is_deleted", false)
+            .order("created_at", { ascending: false });
+
+          if (socialAccountsError) {
+            console.error("[v1/getCampaignById] Social accounts fetch error:", socialAccountsError);
+          } else if (socialAccounts) {
+            socialAccounts.forEach(account => {
+              if (!socialAccountsMap[account.user_id]) {
+                socialAccountsMap[account.user_id] = [];
+              }
+              socialAccountsMap[account.user_id].push({
+                platform: account.platform,
+                followers: account.followers_count
+              });
+            });
+          }
         }
 
-        // Attach user data to each application
-        applicationsWithUsers = applications.map(application => ({
-          ...application,
-          user: userMap[application.influencer_id] || null
-        }));
+        // Build applications with influencer data
+        applicationsWithInfluencers = applications.map(application => {
+          const influencerId = application.influencer_id;
+          const user = userMap[influencerId] || null;
+          const profile = profileMap[influencerId] || null;
+
+          return {
+            id: application.id,
+            phase: application.phase,
+            created_at: application.created_at,
+            influencer: user ? {
+              id: user.id,
+              name: user.name,
+              profile_photo_url: profile?.profile_photo_url || null,
+              social_accounts: socialAccountsMap[influencerId] || []
+            } : null
+          };
+        });
       }
 
-      // Return campaign with applications array
+      // Build response with only required fields
+      const response = {
+        id: campaign.id,
+        title: campaign.title,
+        cover_image_url: campaign.cover_image_url,
+        description: campaign.description,
+        status: campaign.status,
+        type: campaign.type,
+        budget: campaign.budget,
+        platform: campaign.platform,
+        content_type: campaign.content_type,
+        accepting_applications_till: null, // This field doesn't exist in schema, set to null
+        script_deadline: scriptDeadline,
+        work_deadline: workDeadline,
+        buffer_days: campaign.buffer_days || null,
+        languages: campaign.language ? (Array.isArray(campaign.language) ? campaign.language : [campaign.language]) : null,
+        location: null, // Field doesn't exist in schema
+        applications: applicationsWithInfluencers
+      };
+
       return {
         success: true,
-        campaign: {
-          ...campaign,
-          applications: applicationsWithUsers
-        },
+        campaign: response,
       };
     } catch (err) {
       console.error("[v1/getCampaignById] Exception:", err);
