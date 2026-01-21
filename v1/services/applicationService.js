@@ -641,6 +641,112 @@ class ApplicationService {
       };
     }
   }
+
+  /**
+   * Get all applications for an influencer with campaign and brand details
+   */
+  async getInfluencerApplications(influencerId) {
+    try {
+      // Fetch applications with nested campaign and brand data
+      const { data: applications, error: applicationsError } = await supabaseAdmin
+        .from('v1_applications')
+        .select(`
+          id,
+          phase,
+          created_at,
+          v1_campaigns(
+            id,
+            title,
+            description,
+            budget,
+            platform,
+            content_type,
+            language,
+            brand_id
+          )
+        `)
+        .eq('influencer_id', influencerId)
+        .order('created_at', { ascending: false });
+
+      if (applicationsError) {
+        console.error('[ApplicationService/getInfluencerApplications] Error:', applicationsError);
+        return {
+          success: false,
+          message: 'Failed to fetch applications',
+          error: applicationsError.message,
+        };
+      }
+
+      if (!applications || applications.length === 0) {
+        return {
+          success: true,
+          applications: [],
+        };
+      }
+
+      // Get unique brand IDs
+      const brandIds = [...new Set(
+        applications
+          .map(app => app.v1_campaigns?.brand_id)
+          .filter(Boolean)
+      )];
+
+      // Fetch brand profiles
+      let brandMap = {};
+      if (brandIds.length > 0) {
+        const { data: brandProfiles, error: brandError } = await supabaseAdmin
+          .from('v1_brand_profiles')
+          .select('user_id, brand_name')
+          .in('user_id', brandIds)
+          .eq('is_deleted', false);
+
+        if (brandError) {
+          console.error('[ApplicationService/getInfluencerApplications] Brand fetch error:', brandError);
+        } else if (brandProfiles) {
+          brandProfiles.forEach(profile => {
+            brandMap[profile.user_id] = {
+              id: profile.user_id,
+              brand_name: profile.brand_name,
+            };
+          });
+        }
+      }
+
+      // Format response according to required structure
+      const formattedApplications = applications.map(app => {
+        const campaign = app.v1_campaigns || null;
+        const brandId = campaign?.brand_id;
+        const brand = brandId ? brandMap[brandId] || null : null;
+
+        return {
+          id: app.id,
+          phase: app.phase,
+          created_at: app.created_at,
+          campaign: campaign ? {
+            id: campaign.id,
+            title: campaign.title,
+            description: campaign.description,
+            budget: campaign.budget,
+            platform: campaign.platform,
+            content_type: campaign.content_type,
+            language: campaign.language,
+            brand: brand,
+          } : null,
+        };
+      });
+
+      return {
+        success: true,
+        applications: formattedApplications,
+      };
+    } catch (err) {
+      console.error('[ApplicationService/getInfluencerApplications] Exception:', err);
+      return {
+        success: false,
+        message: err.message || 'Failed to fetch applications',
+      };
+    }
+  }
 }
 
 module.exports = new ApplicationService();

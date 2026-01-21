@@ -48,12 +48,6 @@ const validateCreateCampaign = [
     .optional()
     .isBoolean()
     .withMessage("requires_script must be a boolean"),
-  body("start_deadline")
-    .notEmpty()
-    .withMessage("start_deadline is required")
-    .isISO8601()
-    .withMessage("start_deadline must be a valid ISO 8601 date")
-    .toDate(),
   body("budget")
     .optional()
     .isFloat({ min: 0 })
@@ -111,6 +105,25 @@ const validateCreateCampaign = [
     .isLength({ max: 10000 })
     .withMessage("brand_guideline must be up to 10000 characters")
     .trim(),
+  body("work_deadline")
+    .optional()
+    .isISO8601()
+    .withMessage("work_deadline must be a valid ISO 8601 date")
+    .toDate(),
+  body("script_deadline")
+    .optional()
+    .isISO8601()
+    .withMessage("script_deadline must be a valid ISO 8601 date")
+    .toDate(),
+  body("acception_applications_till")
+    .optional()
+    .isISO8601()
+    .withMessage("acception_applications_till must be a valid ISO 8601 date")
+    .toDate(),
+  body("buffer_days")
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage("buffer_days must be a non-negative integer"),
   // Custom validation: min_influencers <= max_influencers
   body().custom((value) => {
     if (
@@ -120,6 +133,21 @@ const validateCreateCampaign = [
       if (value.min_influencers > value.max_influencers) {
         throw new Error(
           "min_influencers cannot be greater than max_influencers"
+        );
+      }
+    }
+    // Validate that acception_applications_till <= work_deadline if both are provided
+    if (
+      value.acception_applications_till !== undefined &&
+      value.work_deadline !== undefined &&
+      value.acception_applications_till &&
+      value.work_deadline
+    ) {
+      const acceptingDate = new Date(value.acception_applications_till);
+      const workDate = new Date(value.work_deadline);
+      if (acceptingDate > workDate) {
+        throw new Error(
+          "acception_applications_till must be less than or equal to work_deadline"
         );
       }
     }
@@ -169,11 +197,6 @@ const validateUpdateCampaign = [
     .optional()
     .isBoolean()
     .withMessage("requires_script must be a boolean"),
-  body("start_deadline")
-    .optional()
-    .isISO8601()
-    .withMessage("start_deadline must be a valid ISO 8601 date")
-    .toDate(),
   body("budget")
     .optional()
     .isFloat({ min: 0 })
@@ -231,6 +254,25 @@ const validateUpdateCampaign = [
     .isLength({ max: 10000 })
     .withMessage("brand_guideline must be up to 10000 characters")
     .trim(),
+  body("work_deadline")
+    .optional()
+    .isISO8601()
+    .withMessage("work_deadline must be a valid ISO 8601 date")
+    .toDate(),
+  body("script_deadline")
+    .optional()
+    .isISO8601()
+    .withMessage("script_deadline must be a valid ISO 8601 date")
+    .toDate(),
+  body("acception_applications_till")
+    .optional()
+    .isISO8601()
+    .withMessage("acception_applications_till must be a valid ISO 8601 date")
+    .toDate(),
+  body("buffer_days")
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage("buffer_days must be a non-negative integer"),
   // Custom validation: min_influencers <= max_influencers
   body().custom((value) => {
     if (
@@ -240,6 +282,21 @@ const validateUpdateCampaign = [
       if (value.min_influencers > value.max_influencers) {
         throw new Error(
           "min_influencers cannot be greater than max_influencers"
+        );
+      }
+    }
+    // Validate that acception_applications_till <= work_deadline if both are provided
+    if (
+      value.acception_applications_till !== undefined &&
+      value.work_deadline !== undefined &&
+      value.acception_applications_till &&
+      value.work_deadline
+    ) {
+      const acceptingDate = new Date(value.acception_applications_till);
+      const workDate = new Date(value.work_deadline);
+      if (acceptingDate > workDate) {
+        throw new Error(
+          "acception_applications_till must be less than or equal to work_deadline"
         );
       }
     }

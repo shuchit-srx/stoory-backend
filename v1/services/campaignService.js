@@ -172,7 +172,6 @@ class CampaignService {
           max_influencers: campaignData.max_influencers ?? null,
           accepted_count: 0, // Always start at 0
           requires_script: campaignData.requires_script || false,
-          start_deadline: campaignData.start_deadline, // Required field
           budget: budget,
           platform_fee_percentage: platformFeePercentage,
           platform_fee_amount: platformFeeAmount,
@@ -190,6 +189,11 @@ class CampaignService {
           categories: campaignData.categories ?? null,
           language: campaignData.language ?? null,
           brand_guideline: campaignData.brand_guideline ?? null,
+          // Deadline fields
+          work_deadline: campaignData.work_deadline ?? null,
+          script_deadline: campaignData.script_deadline ?? null,
+          acception_applications_till: campaignData.acception_applications_till ?? null,
+          buffer_days: campaignData.buffer_days ?? 0,
         };
   
         // Insert campaign
@@ -360,7 +364,7 @@ class CampaignService {
       // Fetch the campaign - select only required fields
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language")
+        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language, work_deadline, script_deadline, acception_applications_till")
         .eq("id", campaignId)
         .maybeSingle();
 
@@ -380,9 +384,9 @@ class CampaignService {
         };
       }
 
-      // Set deadlines to null since start_deadline field has been removed
-      const workDeadline = null;
-      const scriptDeadline = null;
+      // Get deadline fields from campaign
+      const workDeadline = campaign.work_deadline || null;
+      const scriptDeadline = campaign.script_deadline || null;
 
       // Fetch all applications for this campaign - only required fields
       const { data: applications, error: applicationsError } = await supabaseAdmin
@@ -490,7 +494,7 @@ class CampaignService {
         budget: campaign.budget,
         platform: campaign.platform,
         content_type: campaign.content_type,
-        accepting_applications_till: null, // This field doesn't exist in schema, set to null
+        accepting_applications_till: campaign.acception_applications_till || null,
         script_deadline: scriptDeadline,
         work_deadline: workDeadline,
         buffer_days: campaign.buffer_days || null,
@@ -730,10 +734,6 @@ class CampaignService {
           update.requires_script = updateData.requires_script;
         }
   
-        if (updateData.start_deadline !== undefined) {
-          update.start_deadline = updateData.start_deadline;
-        }
-  
         if (updateData.budget !== undefined) {
           update.budget = updateData.budget ?? null;
         }
@@ -773,6 +773,23 @@ class CampaignService {
   
         if (updateData.brand_guideline !== undefined) {
           update.brand_guideline = updateData.brand_guideline ?? null;
+        }
+  
+        // Deadline fields
+        if (updateData.work_deadline !== undefined) {
+          update.work_deadline = updateData.work_deadline ?? null;
+        }
+  
+        if (updateData.script_deadline !== undefined) {
+          update.script_deadline = updateData.script_deadline ?? null;
+        }
+  
+        if (updateData.acception_applications_till !== undefined) {
+          update.acception_applications_till = updateData.acception_applications_till ?? null;
+        }
+  
+        if (updateData.buffer_days !== undefined) {
+          update.buffer_days = updateData.buffer_days ?? 0;
         }
   
         // If no updates, return early

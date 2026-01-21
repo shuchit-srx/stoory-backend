@@ -209,6 +209,25 @@ class ApplicationController {
       });
     }
   }
+
+  async getApplications(req, res) {
+    try {
+      const influencerId = req.user.id;
+
+      const result = await ApplicationService.getInfluencerApplications(influencerId);
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        message: err.message || 'Failed to fetch applications',
+      });
+    }
+  }
 }
 
 // Create instance and bind methods to preserve 'this' context
@@ -218,5 +237,6 @@ applicationController.accept = applicationController.accept.bind(applicationCont
 applicationController.bulkAccept = applicationController.bulkAccept.bind(applicationController);
 applicationController.cancel = applicationController.cancel.bind(applicationController);
 applicationController.complete = applicationController.complete.bind(applicationController);
+applicationController.getApplications = applicationController.getApplications.bind(applicationController);
 
 module.exports = applicationController;

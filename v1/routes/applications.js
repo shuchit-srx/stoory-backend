@@ -9,6 +9,14 @@ const {
   validateComplete,
 } = require('../validators/applicationValidators');
 
+// GET all applications for the authenticated influencer
+router.get(
+  '/get-my-applications',
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole('INFLUENCER'),
+  applicationController.getApplications
+);
+
 router.post(
   '/',
   authMiddleware.authenticateToken,
