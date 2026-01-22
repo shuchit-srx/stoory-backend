@@ -69,7 +69,7 @@ function normalizeEnums(req, res, next) {
     // Application phase enum
     if (req.body.phase !== undefined && req.body.phase !== null) {
       const normalized = String(req.body.phase).toUpperCase().trim();
-      const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "COMPLETED", "CANCELLED"];
+      const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "PAYOUT", "COMPLETED", "CANCELLED"];
       if (validPhases.includes(normalized)) {
         req.body.phase = normalized;
       }
@@ -167,7 +167,7 @@ function normalizeEnums(req, res, next) {
       // Application phase filter
       if (req.query.phase !== undefined && req.query.phase !== null) {
         const normalized = String(req.query.phase).toUpperCase().trim();
-        const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "COMPLETED", "CANCELLED"];
+        const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "PAYOUT", "COMPLETED", "CANCELLED"];
         if (validPhases.includes(normalized)) {
           req.query.phase = normalized;
         }

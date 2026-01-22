@@ -76,11 +76,11 @@ class PayoutService {
         };
       }
 
-      // Check if application is completed
-      if (payout.v1_applications.phase !== 'COMPLETED') {
+      // Check if application is in PAYOUT phase (required before payout can be released)
+      if (payout.v1_applications.phase !== 'PAYOUT') {
         return {
           success: false,
-          message: 'Application must be completed before paying payout',
+          message: 'Application must be in PAYOUT phase before payout can be released',
         };
       }
 
@@ -294,10 +294,16 @@ class PayoutService {
         };
       }
 
-      // Get payout details
+      // Get payout details with application
       const { data: payout, error: payoutError } = await supabaseAdmin
         .from('v1_payouts')
-        .select('*')
+        .select(`
+          *,
+          v1_applications!inner(
+            id,
+            phase
+          )
+        `)
         .eq('id', orderPayoutId)
         .maybeSingle();
 
@@ -305,6 +311,14 @@ class PayoutService {
         return {
           success: false,
           message: 'Payout not found',
+        };
+      }
+
+      // Check if application is in PAYOUT phase (required for payout release)
+      if (payout.v1_applications.phase !== 'PAYOUT') {
+        return {
+          success: false,
+          message: 'Application must be in PAYOUT phase before payout can be released',
         };
       }
 
@@ -355,6 +369,17 @@ class PayoutService {
           message: 'Payment verified but failed to update payout',
           error: payoutUpdateError.message,
         };
+      }
+
+      // Move application from PAYOUT to COMPLETED phase after payout is released
+      const { error: phaseUpdateError } = await supabaseAdmin
+        .from('v1_applications')
+        .update({ phase: 'COMPLETED' })
+        .eq('id', payout.application_id);
+
+      if (phaseUpdateError) {
+        console.error('[PayoutService/verifyPayoutPayment] Phase update error:', phaseUpdateError);
+        // Log but don't fail payout verification if phase update fails
       }
 
       // Create transaction record (all amounts in RUPEES)

@@ -547,17 +547,17 @@ class SubmissionService {
           // Log but don't fail
         }
       } else if (status === 'ACCEPTED') {
-        // Move application to COMPLETED phase
+        // Move application to PAYOUT phase (not COMPLETED)
         const { error: phaseError } = await supabaseAdmin
           .from('v1_applications')
-          .update({ phase: 'COMPLETED' })
+          .update({ phase: 'PAYOUT' })
           .eq('id', application.id);
 
         if (phaseError) {
           console.error('[SubmissionService/reviewWork] Phase update error:', phaseError);
           // Log but don't fail
         } else {
-          // Create payout entry when work is accepted and application is completed
+          // Create payout entry when work is accepted and application moves to PAYOUT phase
           // Get application details to calculate payout amount
           const { data: applicationDetails, error: appError } = await supabaseAdmin
             .from('v1_applications')
