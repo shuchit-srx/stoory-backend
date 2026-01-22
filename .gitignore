@@ -123,3 +123,6 @@ draft_*.md
 
 # Docs
 v1/docs
+
+# Database seeding scripts
+v1/scripts
