@@ -256,12 +256,12 @@ class UserService {
       const userIds = influencers.map((inf) => inf.id);
       
       // Fetch profiles with only required fields
-      const profilesResult = await supabaseAdmin
-        .from("v1_influencer_profiles")
+        const profilesResult = await supabaseAdmin
+          .from("v1_influencer_profiles")
         .select("user_id, categories, profile_photo_url, languages")
-        .in("user_id", userIds)
-        .eq("is_deleted", false);
-      
+          .in("user_id", userIds)
+          .eq("is_deleted", false);
+        
       const influencerProfiles = profilesResult.data || [];
       if (profilesResult.error) {
         console.error(
@@ -271,25 +271,25 @@ class UserService {
       }
 
       // Fetch social accounts for all influencers with only required fields
-      const socialAccountsResult = await supabaseAdmin
-        .from("v1_influencer_social_accounts")
+        const socialAccountsResult = await supabaseAdmin
+          .from("v1_influencer_social_accounts")
         .select("id, user_id, platform, username, profile_url, follower_count, engagement_rate")
-        .in("user_id", userIds)
-        .eq("is_deleted", false)
-        .order("created_at", { ascending: false });
+          .in("user_id", userIds)
+          .eq("is_deleted", false)
+          .order("created_at", { ascending: false });
 
       let socialAccountsMap = {};
-      if (socialAccountsResult.error) {
-        console.error(
-          "[v1/UserService/getAllInfluencers] Social accounts error:",
+        if (socialAccountsResult.error) {
+          console.error(
+            "[v1/UserService/getAllInfluencers] Social accounts error:",
           socialAccountsResult.error
-        );
-      } else if (socialAccountsResult.data) {
-        // Group social accounts by user_id
-        socialAccountsResult.data.forEach((account) => {
-          if (!socialAccountsMap[account.user_id]) {
-            socialAccountsMap[account.user_id] = [];
-          }
+          );
+        } else if (socialAccountsResult.data) {
+          // Group social accounts by user_id
+          socialAccountsResult.data.forEach((account) => {
+            if (!socialAccountsMap[account.user_id]) {
+              socialAccountsMap[account.user_id] = [];
+            }
           socialAccountsMap[account.user_id].push({
             id: account.id,
             platform: account.platform,

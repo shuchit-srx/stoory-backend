@@ -662,7 +662,8 @@ class ApplicationService {
             platform,
             content_type,
             language,
-            brand_id
+            brand_id,
+            cover_image_url
           )
         `)
         .eq('influencer_id', influencerId)
@@ -726,6 +727,7 @@ class ApplicationService {
             id: campaign.id,
             title: campaign.title,
             description: campaign.description,
+            cover_image_url: campaign.cover_image_url,
             budget: campaign.budget,
             platform: campaign.platform,
             content_type: campaign.content_type,

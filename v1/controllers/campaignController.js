@@ -35,7 +35,7 @@ class CampaignController {
   }
   /**
    * Create a new campaign (Brand Owner only)
-   * POST /api/v1/campaigns
+   * POST /api/v1/campaigns/create
    */
   async createCampaign(req, res) {
     try {
@@ -127,7 +127,7 @@ class CampaignController {
 
   /**
    * Get all campaigns with filtering and pagination
-   * GET /api/v1/campaigns
+   * GET /api/v1/campaigns/all
    * - Influencers: See all campaigns
    * - Brand Owners: See all campaigns (can filter by brand_id)
    */

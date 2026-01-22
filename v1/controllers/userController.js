@@ -78,16 +78,16 @@ class UserController {
 
         const result = await UserService.getAllInfluencers(pagination);
 
-        if (!result.success) {
-          return res.status(500).json({
-            success: false,
-            message: result.message || "Failed to fetch influencers",
-            error: result.error,
-          });
-        }
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: result.message || "Failed to fetch influencers",
+          error: result.error,
+        });
+      }
 
-        return res.status(200).json({
-          success: true,
+      return res.status(200).json({
+        success: true,
           message: "Influencers fetched successfully",
           influencers: result.influencers,
           pagination: result.pagination,
