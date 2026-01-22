@@ -15,14 +15,37 @@ const ChatService = {
 
     // Check if payment is verified before creating chat
     // Chat should only be created after brand owner pays the platform
-    const { data: paymentOrder } = await supabaseAdmin
+    // Payment orders use payable_id and payable_type, not application_id
+    // Need to check both APPLICATION type (single) and CAMPAIGN type (bulk) payments
+    
+    // Check for single application payment (payable_type = 'APPLICATION')
+    const { data: singlePaymentOrder } = await supabaseAdmin
       .from('v1_payment_orders')
-      .select('status')
-      .eq('application_id', applicationId)
+      .select('id, status')
+      .eq('payable_type', 'APPLICATION')
+      .eq('payable_id', applicationId)
       .eq('status', 'VERIFIED')
       .maybeSingle();
 
-    if (!paymentOrder) {
+    // Check for bulk campaign payment (payable_type = 'CAMPAIGN')
+    // Applications are linked through v1_application_payments table
+    const { data: bulkPaymentOrder } = await supabaseAdmin
+      .from('v1_application_payments')
+      .select(`
+        payment_order_id,
+        v1_payment_orders!inner(
+          id,
+          status,
+          payable_type
+        )
+      `)
+      .eq('application_id', applicationId)
+      .eq('v1_payment_orders.payable_type', 'CAMPAIGN')
+      .eq('v1_payment_orders.status', 'VERIFIED')
+      .maybeSingle();
+
+    // Payment must be verified in either single or bulk payment
+    if (!singlePaymentOrder && !bulkPaymentOrder) {
       throw new Error('Payment must be verified before chat can be created');
     }
 
