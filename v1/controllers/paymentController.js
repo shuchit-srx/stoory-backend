@@ -94,7 +94,7 @@ class PaymentController {
   }
 
   /**
-   * Create bulk payment order for campaign (Brand pays admin for all accepted applications)
+   * Create bulk payment order for selected applications in a campaign
    * POST /api/v1/payments/campaigns/:campaignId/bulk
    */
   async createCampaignBulkPaymentOrder(req, res) {
@@ -106,8 +106,9 @@ class PaymentController {
 
       const campaignId = req.params.campaignId;
       const userId = req.user.id;
+      const { application_ids } = req.body;
 
-      const result = await PaymentService.createBulkPaymentOrderForCampaign(campaignId, userId);
+      const result = await PaymentService.createBulkPaymentOrderForCampaign(campaignId, userId, application_ids);
 
       if (!result.success) {
         const statusCode =
@@ -368,14 +369,28 @@ class PaymentController {
         });
       }
 
+      // Format transactions to remove v1_ prefixes
+      const formattedTransactions = (transactions || []).map(txn => {
+        const formatted = { ...txn };
+        if (txn.v1_applications) {
+          const { v1_campaigns, ...applicationData } = txn.v1_applications;
+          formatted.application = {
+            ...applicationData,
+            campaign: v1_campaigns || null,
+          };
+          delete formatted.v1_applications;
+        }
+        return formatted;
+      });
+
       return res.status(200).json({
         success: true,
         message: "Transactions fetched successfully",
-        transactions: transactions || [],
+        transactions: formattedTransactions,
         pagination: {
           limit: parseInt(limit),
           offset: parseInt(offset),
-          count: transactions?.length || 0,
+          count: formattedTransactions.length,
         },
       });
     } catch (err) {

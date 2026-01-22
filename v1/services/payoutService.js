@@ -105,7 +105,8 @@ class PayoutService {
       const { data: existingOrder } = await supabaseAdmin
         .from('v1_payment_orders')
         .select('id, status')
-        .eq('metadata->>payout_id', payoutId)
+        .eq('payable_type', 'PAYOUT')
+        .eq('payable_id', payoutId)
         .maybeSingle();
 
       if (existingOrder) {
@@ -149,13 +150,15 @@ class PayoutService {
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
         .from('v1_payment_orders')
         .insert({
-          application_id: payout.application_id, // Can be null for payout payments
+          payable_type: 'PAYOUT',
+          payable_id: payoutId,
           amount: amountRupees, // Stored in RUPEES
           currency: 'INR',
           status: 'CREATED',
           razorpay_order_id: razorpayOrder.id,
           metadata: {
             payout_id: payoutId,
+            application_id: payout.application_id,
             influencer_id: payout.influencer_id,
             payer_id: adminId,
             payment_type: 'payout_payment',
@@ -251,7 +254,7 @@ class PayoutService {
       }
 
       // Check if it's a payout payment
-      if (!paymentOrder.metadata || paymentOrder.metadata.payment_type !== 'payout_payment') {
+      if (paymentOrder.payable_type !== 'PAYOUT') {
         return {
           success: false,
           message: 'Invalid payment order type',
@@ -283,8 +286,8 @@ class PayoutService {
         };
       }
 
-      // Get payout_id from payment order metadata
-      const orderPayoutId = paymentOrder.metadata.payout_id;
+      // Get payout_id from payment order payable_id
+      const orderPayoutId = paymentOrder.payable_id;
 
       // Validate payout_id matches if provided
       if (payout_id && payout_id !== orderPayoutId) {
@@ -561,9 +564,10 @@ class PayoutService {
               adminMap[admin.id] = admin;
             });
 
-            // Attach admin data to each payout
+            // Attach admin data to each payout (rename v1_users to released_by)
             payouts.forEach(payout => {
-              payout.v1_users = payout.released_by_admin_id ? adminMap[payout.released_by_admin_id] || null : null;
+              payout.released_by = payout.released_by_admin_id ? adminMap[payout.released_by_admin_id] || null : null;
+              delete payout.v1_users; // Remove if exists
             });
           }
         }
@@ -794,9 +798,10 @@ class PayoutService {
               userMap[user.id] = user;
             });
 
-            // Attach user data to each payout
+            // Attach user data to each payout (rename v1_users to user)
             payouts.forEach(payout => {
-              payout.v1_users = userMap[payout.influencer_id] || null;
+              payout.user = userMap[payout.influencer_id] || null;
+              delete payout.v1_users; // Remove if exists
             });
           }
         }
