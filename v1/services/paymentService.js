@@ -70,16 +70,27 @@ class PaymentService {
    * Calculate commission and breakdown (all amounts in rupees)
    * @param {number} amount - Total amount to calculate commission for
    * @param {number} platformFeePercentage - Optional platform fee percentage from campaign/application
+   * @param {number} platformFeeAmount - Optional platform fee fixed amount from campaign/application
    */
-  async calculateCommissionBreakdown(amount, platformFeePercentage = null) {
+  async calculateCommissionBreakdown(amount, platformFeePercentage = null, platformFeeAmount = null) {
     try {
-      let commissionPercentage;
-      
-      if (platformFeePercentage !== null && platformFeePercentage !== undefined) {
-        // Use platform_fee_percentage from campaign/application
+      // All calculations in rupees
+      const totalAmount = parseFloat(amount);
+      let commissionAmount = 0;
+      let commissionPercentage = null;
+
+      // If platform_fee_amount is provided, use it directly (fixed amount)
+      if (platformFeeAmount !== null && platformFeeAmount !== undefined && platformFeeAmount > 0) {
+        commissionAmount = parseFloat(platformFeeAmount);
+        commissionPercentage = (commissionAmount / totalAmount) * 100; // Calculate percentage for reference
+      } 
+      // Otherwise, use platform_fee_percentage if provided
+      else if (platformFeePercentage !== null && platformFeePercentage !== undefined) {
         commissionPercentage = parseFloat(platformFeePercentage);
-      } else {
-        // Fallback: Get current admin settings (non-expired) - for backward compatibility
+        commissionAmount = (totalAmount * commissionPercentage) / 100;
+      } 
+      // Fallback: Get current admin settings (non-expired) - for backward compatibility
+      else {
         const { data: adminSettings, error: commError } = await supabaseAdmin
           .from("v1_admin_settings")
           .select("*")
@@ -92,11 +103,9 @@ class PaymentService {
         } else {
           commissionPercentage = adminSettings.commission_percentage;
         }
+        commissionAmount = (totalAmount * commissionPercentage) / 100;
       }
 
-      // All calculations in rupees
-      const totalAmount = parseFloat(amount);
-      const commissionAmount = (totalAmount * commissionPercentage) / 100;
       const netAmount = totalAmount - commissionAmount;
 
       return {
@@ -124,7 +133,7 @@ class PaymentService {
         };
       }
 
-      // Get application with campaign details including budget and platform_fee_percentage
+      // Get application with campaign details including budget, platform_fee_percentage, and platform_fee_amount
       const { data: application, error: applicationError } = await supabaseAdmin
         .from("v1_applications")
         .select(`
@@ -134,7 +143,9 @@ class PaymentService {
             brand_id,
             title,
             budget,
-            platform_fee_percentage
+            platform_fee_percentage,
+            platform_fee_amount,
+            net_amount
           )
         `)
         .eq("id", applicationId)
@@ -177,50 +188,29 @@ class PaymentService {
         };
       }
 
-      // Validate that campaign budget equals application budget_amount
-      const campaignBudget = application.v1_campaigns.budget;
+      // Get payment amount: use budget_amount from application first, fallback to campaign budget
       const applicationBudgetAmount = application.budget_amount;
+      const campaignBudget = application.v1_campaigns.budget;
       
-      if (campaignBudget === null || campaignBudget === undefined) {
+      // Determine payment amount: prefer application budget_amount, fallback to campaign budget
+      const paymentAmount = applicationBudgetAmount ?? campaignBudget;
+
+      if (paymentAmount === null || paymentAmount === undefined || paymentAmount <= 0) {
         return {
           success: false,
-          message: "Campaign does not have a valid budget",
+          message: "Application does not have a valid budget amount and campaign budget is also missing",
         };
       }
 
-      if (applicationBudgetAmount === null || applicationBudgetAmount === undefined) {
+      // Get platform fee from application first, fallback to campaign
+      // Prefer platform_fee_amount (fixed) over platform_fee_percentage if both exist
+      const platformFeeAmount = application.platform_fee_amount ?? application.v1_campaigns.platform_fee_amount ?? null;
+      const platformFeePercentage = application.platform_fee_percentage ?? application.v1_campaigns.platform_fee_percentage ?? null;
+
+      if (platformFeeAmount === null && platformFeePercentage === null) {
         return {
           success: false,
-          message: "Application does not have a valid budget amount",
-        };
-      }
-
-      // Validate budget matches (allow small floating point differences)
-      if (Math.abs(campaignBudget - applicationBudgetAmount) > 0.01) {
-        return {
-          success: false,
-          message: `Campaign budget (₹${campaignBudget}) does not match application budget amount (₹${applicationBudgetAmount}). Please contact support.`,
-        };
-      }
-
-      // Determine payment amount: use budget from campaign or budget_amount from application
-      // Both should be equal after validation above, but prefer campaign budget as source of truth
-      const paymentAmount = campaignBudget || applicationBudgetAmount;
-
-      if (!paymentAmount || paymentAmount <= 0) {
-        return {
-          success: false,
-          message: "Invalid payment amount. Budget must be greater than 0",
-        };
-      }
-
-      // Get platform_fee_percentage from application (which came from campaign)
-      const platformFeePercentage = application.platform_fee_percentage ?? application.v1_campaigns.platform_fee_percentage;
-
-      if (platformFeePercentage === null || platformFeePercentage === undefined) {
-        return {
-          success: false,
-          message: "Application does not have a valid platform fee percentage",
+          message: "Application and campaign do not have a valid platform fee (percentage or amount)",
         };
       }
 
@@ -248,8 +238,8 @@ class PaymentService {
         };
       }
 
-      // Calculate commission breakdown using payment amount (budget) and platform_fee_percentage from application
-      const breakdown = await this.calculateCommissionBreakdown(paymentAmount, platformFeePercentage);
+      // Calculate commission breakdown using payment amount and platform fee (amount or percentage)
+      const breakdown = await this.calculateCommissionBreakdown(paymentAmount, platformFeePercentage, platformFeeAmount);
 
       // Razorpay receipt must be <= 40 chars
       const rawReceipt = `app_${applicationId.substring(0, 20)}_${Date.now()}`;
@@ -361,10 +351,10 @@ class PaymentService {
         };
       }
 
-      // Get campaign with platform_fee_percentage
+      // Get campaign with platform_fee_percentage, platform_fee_amount, and net_amount
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, brand_id, title, platform_fee_percentage, requires_script")
+        .select("id, brand_id, title, platform_fee_percentage, platform_fee_amount, net_amount, requires_script")
         .eq("id", campaignId)
         .single();
 
@@ -400,7 +390,7 @@ class PaymentService {
       // Get selected applications and validate they belong to this campaign and are ACCEPTED
       const { data: applications, error: applicationsError } = await supabaseAdmin
         .from("v1_applications")
-        .select("id, budget_amount, agreed_amount, phase, campaign_id")
+        .select("id, budget_amount, agreed_amount, phase, campaign_id, platform_fee_percentage, platform_fee_amount")
         .in("id", applicationIds)
         .eq("campaign_id", campaignId)
         .eq("phase", "ACCEPTED");
@@ -498,30 +488,57 @@ class PaymentService {
       }
 
       // Aggregate budget_amount of all payable applications
+      // For each application: use budget_amount first, fallback to campaign budget
       const totalAmount = payableApplications.reduce((sum, app) => {
-        const amount = Number(app.budget_amount ?? app.agreed_amount ?? 0);
+        // Use application budget_amount first, fallback to campaign budget
+        const amount = Number(app.budget_amount ?? campaign.budget ?? 0);
         return sum + (isNaN(amount) ? 0 : amount);
       }, 0);
 
       if (!totalAmount || totalAmount <= 0) {
         return {
           success: false,
-          message: "Invalid total amount for bulk payment",
+          message: "Invalid total amount for bulk payment. Applications must have budget_amount or campaign must have budget",
         };
       }
 
-      // Get platform_fee_percentage from campaign
-      const platformFeePercentage = campaign.platform_fee_percentage;
+      // Get platform fee from applications first, fallback to campaign
+      // Check if any application has platform_fee_amount or platform_fee_percentage
+      let platformFeeAmount = null;
+      let platformFeePercentage = null;
+      
+      // Find first application with platform fee (prefer amount over percentage)
+      const appWithFeeAmount = payableApplications.find(app => 
+        app.platform_fee_amount !== null && app.platform_fee_amount !== undefined && app.platform_fee_amount > 0
+      );
+      
+      if (appWithFeeAmount) {
+        // Use fixed amount from application
+        platformFeeAmount = appWithFeeAmount.platform_fee_amount;
+      } else {
+        // Check for percentage in applications
+        const appWithFeePercentage = payableApplications.find(app => 
+          app.platform_fee_percentage !== null && app.platform_fee_percentage !== undefined
+        );
+        
+        if (appWithFeePercentage) {
+          platformFeePercentage = appWithFeePercentage.platform_fee_percentage;
+        } else {
+          // Fallback to campaign: prefer amount over percentage
+          platformFeeAmount = campaign.platform_fee_amount ?? null;
+          platformFeePercentage = campaign.platform_fee_percentage ?? null;
+        }
+      }
 
-      if (platformFeePercentage === null || platformFeePercentage === undefined) {
+      if (platformFeeAmount === null && platformFeePercentage === null) {
         return {
           success: false,
-          message: "Campaign does not have a valid platform fee percentage",
+          message: "Applications and campaign do not have a valid platform fee (percentage or amount)",
         };
       }
 
-      // Calculate commission breakdown using total amount and platform_fee_percentage
-      const breakdown = await this.calculateCommissionBreakdown(totalAmount, platformFeePercentage);
+      // Calculate commission breakdown using total amount and platform fee (amount or percentage)
+      const breakdown = await this.calculateCommissionBreakdown(totalAmount, platformFeePercentage, platformFeeAmount);
 
       // Razorpay receipt must be <= 40 chars
       const rawReceipt = `camp_${campaignId.substring(0, 20)}_${Date.now()}`;
