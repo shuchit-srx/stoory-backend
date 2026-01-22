@@ -398,6 +398,21 @@ class UserService {
         );
       }
 
+      // Fetch portfolio items with only required fields
+      const { data: portfolios, error: portfoliosError } = await supabaseAdmin
+        .from("v1_influencer_portfolio")
+        .select("id, thumbnail_url, media_url, media_type, description, duration_seconds, created_at")
+        .eq("user_id", influencerId)
+        .eq("is_deleted", false)
+        .order("created_at", { ascending: false });
+
+      if (portfoliosError) {
+        console.error(
+          "[v1/UserService/getInfluencerById] Portfolio error:",
+          portfoliosError
+        );
+      }
+
       // Structure the simplified response
       const influencerData = {
         id: influencer.id,
@@ -412,6 +427,15 @@ class UserService {
           profile_url: account.profile_url,
           follower_count: account.follower_count,
           engagement_rate: account.engagement_rate,
+        })),
+        portfolios: (portfolios || []).map((portfolio) => ({
+          id: portfolio.id,
+          thumbnail_url: portfolio.thumbnail_url,
+          media_url: portfolio.media_url,
+          media_type: portfolio.media_type,
+          description: portfolio.description,
+          duration: portfolio.duration_seconds,
+          created_at: portfolio.created_at,
         })),
       };
 
