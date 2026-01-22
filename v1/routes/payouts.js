@@ -8,12 +8,20 @@ const authMiddleware = require('../middleware/authMiddleware');
  * All routes require authentication
  */
 
+// Get all payouts for authenticated influencer - Must come before /pending route
+router.get(
+  '/my-payouts',
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole('INFLUENCER'),
+  PayoutController.getMyPayouts
+);
+
 // Get all pending payouts (Admin only) - Must come before /:payoutId route
 router.get(
-  '/pending',
+  '/all',
   authMiddleware.authenticateToken,
   authMiddleware.requireRole('ADMIN'),
-  PayoutController.getPendingPayouts
+  PayoutController.getAllPayouts
 );
 
 // Get payouts for an application - Must come before /:payoutId route
@@ -40,9 +48,11 @@ router.post(
 );
 
 // Get payout status - Must come last as it matches any string
+// Restricted to ADMIN and INFLUENCER roles only
 router.get(
   '/:payoutId',
   authMiddleware.authenticateToken,
+  authMiddleware.requireRole(['ADMIN', 'INFLUENCER']),
   PayoutController.getPayoutStatus
 );
 

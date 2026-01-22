@@ -69,14 +69,28 @@ class PayoutController {
   /**
    * Get payout status
    * GET /api/v1/payouts/:payoutId
+   * Restricted to ADMIN and INFLUENCER roles
+   * Influencers can only view their own payouts
    */
   async getPayoutStatus(req, res) {
     try {
       const { payoutId } = req.params;
+      const userId = req.user.id;
+      const userRole = req.user.role;
+
+      // Get payout status
       const result = await PayoutService.getPayoutStatus(payoutId);
 
       if (!result.success) {
         return res.status(404).json(result);
+      }
+
+      // Security check: If user is INFLUENCER, ensure they can only view their own payouts
+      if (userRole === 'INFLUENCER' && result.payout.influencer_id !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only view your own payouts',
+        });
       }
 
       res.json(result);
@@ -113,19 +127,23 @@ class PayoutController {
   }
 
   /**
-   * Get all pending payouts (Admin only)
-   * GET /api/v1/payouts/pending
+   * Get all payouts (Admin only)
+   * GET /api/v1/payouts/pending?status=PENDING
+   * Optional query parameter: status (PENDING, RELEASED, etc.)
    */
-  async getPendingPayouts(req, res) {
+  async getAllPayouts(req, res) {
     try {
       if (req.user.role !== 'ADMIN') {
         return res.status(403).json({
           success: false,
-          message: 'Only admins can view pending payouts',
+          message: 'Only admins can view payouts',
         });
       }
 
-      const result = await PayoutService.getPendingPayouts();
+      // Get optional status filter from query parameters
+      const status = req.query.status || null;
+
+      const result = await PayoutService.getPendingPayouts(status);
 
       if (!result.success) {
         return res.status(400).json(result);
@@ -136,7 +154,31 @@ class PayoutController {
       console.error('[PayoutController/getPendingPayouts] Exception:', err);
       res.status(500).json({
         success: false,
-        message: err.message || 'Failed to get pending payouts',
+        message: err.message || 'Failed to get payouts',
+      });
+    }
+  }
+
+  /**
+   * Get all payouts for the authenticated influencer
+   * GET /api/v1/payouts/my-payouts
+   */
+  async getMyPayouts(req, res) {
+    try {
+      const influencerId = req.user.id;
+
+      const result = await PayoutService.getInfluencerPayouts(influencerId);
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error('[PayoutController/getMyPayouts] Exception:', err);
+      res.status(500).json({
+        success: false,
+        message: err.message || 'Failed to get payouts',
       });
     }
   }
