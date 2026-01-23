@@ -32,24 +32,26 @@ class PanVerificationService {
 
         if (existingPAN) {
           // Check if this exact PAN is already verified
-          if (
-            existingPAN.pan_verified &&
-            existingPAN.pan_number === normalizedPAN
-          ) {
-            return {
-              success: true,
-              message: "PAN already verified",
-              result: {
-                user_full_name: existingPAN.pan_holder_name,
-                pan_status: "VALID",
-                status: "VALID",
-                already_verified: true,
-                verified_at: existingPAN.pan_verified_at,
-              },
-              verified: true,
+        if (
+          existingPAN.pan_verified &&
+          existingPAN.pan_number === normalizedPAN
+        ) {
+          return {
+            success: true,
+            message: "PAN already verified",
+            result: {
+              pan_number: existingPAN.pan_number,
+              pan_status: "VALID",
+              status: "VALID",
+              user_full_name: existingPAN.pan_holder_name,
               already_verified: true,
-            };
-          }
+              verified_at: existingPAN.pan_verified_at,
+            },
+            verified: true,
+            already_verified: true,
+            ...(existingPAN.pan_holder_name ? { holder_name: existingPAN.pan_holder_name } : {}),
+          };
+        }
 
           // Check if user has a different PAN that's already verified
           if (
@@ -127,7 +129,6 @@ class PanVerificationService {
         return {
           success: false,
           message: errorMessage,
-          vendor_error: data,
           error_type: "verification_failed",
         };
       }
@@ -155,14 +156,30 @@ class PanVerificationService {
         ""
       ).toUpperCase();
 
-      // Determine validity
-      isValid =
-        status === "VALID" ||
-        status === "SUCCESS" ||
-        data?.transaction_status === 1 ||
-        data?.status_code === 200 ||
-        (data?.response_code && String(data.response_code).startsWith("2")) ||
-        resultObj?.is_valid === true;
+      // Determine validity - prioritize pan_status field from result
+      // If pan_status is explicitly "VALID", consider it valid regardless of response_code format
+      const hasValidStatus = status === "VALID" || status === "SUCCESS";
+      const hasValidTransaction = data?.transaction_status === 1;
+      const hasValidStatusCode = data?.status_code === 200;
+      // Response codes starting with "2" are typically success, but don't rely solely on this
+      const hasValidResponseCode = data?.response_code && String(data.response_code).startsWith("2");
+      const hasExplicitValidFlag = resultObj?.is_valid === true;
+      
+      // Check for explicit invalid indicators
+      const hasInvalidStatus = status === "INVALID" || status === "FAILED" || status === "ERROR";
+      
+      // If pan_status is explicitly "VALID", it's valid regardless of response_code
+      if (status === "VALID" || resultObj?.pan_status === "VALID" || data?.pan_status === "VALID") {
+        isValid = true;
+      }
+      // If we have clear success indicators and no invalid status, consider valid
+      else if (hasValidStatus || hasValidTransaction || hasValidStatusCode || hasValidResponseCode || hasExplicitValidFlag) {
+        isValid = !hasInvalidStatus;
+      }
+      // If status is empty or unclear, and we don't have other positive indicators, consider invalid
+      else {
+        isValid = false;
+      }
 
       // Get response code
       responseCode =
@@ -171,8 +188,16 @@ class PanVerificationService {
         data?.status_code ??
         responseCode;
 
-      // If verification is successful and user is authenticated, update database
+      // IMPORTANT: Only save to database if PAN is verified as valid
+      // If verification failed or is invalid, do NOT save
       if (isValid && userId && userRole) {
+        console.log("[v1/PAN] Attempting to save PAN verification to database:", {
+          pan: normalizedPAN,
+          userId,
+          userRole,
+          holderName,
+        });
+        
         const updateResult = await this.updatePANVerificationStatus(
           userId,
           userRole,
@@ -181,12 +206,39 @@ class PanVerificationService {
         );
 
         if (!updateResult.success) {
+          console.error("[v1/PAN] Failed to save PAN verification:", {
+            error: updateResult.message,
+            error_type: updateResult.error_type,
+            pan: normalizedPAN,
+            userId,
+          });
           return {
             success: false,
             message: updateResult.message,
             error_type: updateResult.error_type || "database_error",
+            // Include verification result even though save failed
+            verified: isValid,
+            ...(holderName ? { holder_name: holderName } : {}),
           };
         }
+        
+        console.log("[v1/PAN] PAN verification saved successfully to database");
+      } else if (!isValid && userId && userRole) {
+        // Explicitly log when we're not saving an invalid PAN
+        console.log("[v1/PAN] PAN verification failed - not saving to database:", {
+          pan: normalizedPAN,
+          userId,
+          status,
+          responseCode,
+        });
+      } else if (isValid && (!userId || !userRole)) {
+        // Log when PAN is valid but user is not authenticated
+        console.log("[v1/PAN] PAN verification successful but not saving - user not authenticated:", {
+          pan: normalizedPAN,
+          userId: userId || "missing",
+          userRole: userRole || "missing",
+          message: "Authentication required to save PAN verification to profile",
+        });
       }
 
       // Return verification result
@@ -196,16 +248,7 @@ class PanVerificationService {
         verified: isValid,
         ...(holderName ? { holder_name: holderName } : {}),
         ...(responseCode ? { response_code: responseCode } : {}),
-        ...(userId && isValid ? { saved_to_profile: true } : {}),
       };
-
-      // If result is empty, include raw data for debugging
-      if (Object.keys(resultObj).length === 0) {
-        responsePayload.debug = {
-          raw_response: data,
-          message: "Zoop API returned empty result. Check raw_response for details.",
-        };
-      }
 
       return responsePayload;
     } catch (error) {
@@ -242,7 +285,6 @@ class PanVerificationService {
       return {
         success: false,
         message,
-        vendor_error: vendorError,
         error_type: "api_error",
         http_status: httpStatus === 200 ? 500 : httpStatus,
       };
@@ -280,6 +322,7 @@ class PanVerificationService {
 
   /**
    * Update PAN verification status in database
+   * Saves: pan_number, pan_verified, pan_verified_at, pan_holder_name
    */
   async updatePANVerificationStatus(userId, userRole, pan, holderName) {
     try {
@@ -288,7 +331,42 @@ class PanVerificationService {
           ? "v1_influencer_profiles"
           : "v1_brand_profiles";
 
-      // Check if another user already has this PAN
+      // First, check if the user's profile exists
+      const { data: userProfile, error: profileError } = await supabaseAdmin
+        .from(tableName)
+        .select("user_id, pan_number, pan_verified")
+        .eq("user_id", userId)
+        .eq("is_deleted", false)
+        .maybeSingle();
+
+      if (profileError) {
+        console.error("[v1/PAN] Error checking user profile:", {
+          error: profileError,
+          userId,
+          userRole,
+          tableName,
+        });
+        return {
+          success: false,
+          message: "User profile not found. Please complete your profile first.",
+          error_type: "profile_not_found",
+        };
+      }
+
+      if (!userProfile) {
+        console.error("[v1/PAN] User profile does not exist:", {
+          userId,
+          userRole,
+          tableName,
+        });
+        return {
+          success: false,
+          message: "User profile not found. Please complete your profile first.",
+          error_type: "profile_not_found",
+        };
+      }
+
+      // Check if another user already has this PAN (uniqueness across users)
       const { data: existingProfile, error: checkError } = await supabaseAdmin
         .from(tableName)
         .select("user_id")
@@ -298,20 +376,44 @@ class PanVerificationService {
         .maybeSingle();
 
       if (checkError) {
-        console.error("[v1/PAN] Error checking for duplicate PAN:", checkError);
+        console.error("[v1/PAN] Error checking for duplicate PAN:", {
+          error: checkError,
+          pan,
+          userId,
+        });
         return {
           success: false,
-          message: "Failed to verify PAN. Please try again.",
+          message: "Failed to verify PAN uniqueness. Please try again.",
           error_type: "database_error",
         };
       }
 
       if (existingProfile) {
+        console.log("[v1/PAN] Duplicate PAN detected:", {
+          pan,
+          existingUserId: existingProfile.user_id,
+          currentUserId: userId,
+        });
         return {
           success: false,
           message:
             "This PAN number is already registered with another account. Please contact support if this is your PAN.",
           error_type: "duplicate_pan",
+        };
+      }
+
+      // Check if current user already has a different PAN verified
+      // This ensures uniqueness per user (one PAN per user)
+      if (userProfile.pan_verified && userProfile.pan_number && userProfile.pan_number !== pan) {
+        console.log("[v1/PAN] User already has a different verified PAN:", {
+          existingPAN: userProfile.pan_number,
+          newPAN: pan,
+          userId,
+        });
+        return {
+          success: false,
+          message: `You already have a verified PAN: ${userProfile.pan_number}. Cannot verify a different PAN.`,
+          error_type: "different_pan_exists",
         };
       }
 
@@ -322,6 +424,14 @@ class PanVerificationService {
         pan_verified_at: new Date().toISOString(),
         pan_holder_name: holderName || null,
       };
+
+      console.log("[v1/PAN] Attempting to update PAN verification:", {
+        userId,
+        userRole,
+        tableName,
+        pan,
+        updateData,
+      });
 
       const { data: updatedProfile, error: updateError } = await supabaseAdmin
         .from(tableName)
@@ -334,14 +444,24 @@ class PanVerificationService {
       if (updateError) {
         console.error(
           "[v1/PAN] Failed to update PAN verification:",
-          updateError
+          {
+            error: updateError,
+            errorCode: updateError.code,
+            errorMessage: updateError.message,
+            errorDetails: updateError.details,
+            userId,
+            userRole,
+            tableName,
+            pan,
+          }
         );
 
         // Check for unique constraint violation
         if (
           updateError.code === "23505" ||
           updateError.message?.includes("unique") ||
-          updateError.message?.includes("duplicate")
+          updateError.message?.includes("duplicate") ||
+          updateError.message?.includes("violates unique constraint")
         ) {
           return {
             success: false,
@@ -351,24 +471,71 @@ class PanVerificationService {
           };
         }
 
+        // Check for foreign key or constraint violations
+        if (
+          updateError.code === "23503" ||
+          updateError.message?.includes("foreign key") ||
+          updateError.message?.includes("constraint")
+        ) {
+          return {
+            success: false,
+            message: "Database constraint violation. Please contact support.",
+            error_type: "constraint_violation",
+          };
+        }
+
+        // Check if row was not found (shouldn't happen since we checked above, but handle it)
+        if (updateError.code === "PGRST116" || updateError.message?.includes("No rows")) {
+          return {
+            success: false,
+            message: "User profile not found. Please complete your profile first.",
+            error_type: "profile_not_found",
+          };
+        }
+
         return {
           success: false,
-          message: "Failed to save PAN verification. Please try again.",
+          message: `Failed to save PAN verification: ${updateError.message || "Database error"}. Please try again.`,
           error_type: "database_error",
         };
       }
 
-      console.log("[v1/PAN] PAN verification updated:", {
+      if (!updatedProfile) {
+        console.error("[v1/PAN] Update succeeded but no profile returned:", {
+          userId,
+          userRole,
+          tableName,
+          pan,
+        });
+        return {
+          success: false,
+          message: "PAN verification update completed but could not retrieve updated profile. Please verify your profile.",
+          error_type: "database_error",
+        };
+      }
+
+      console.log("[v1/PAN] PAN verification updated successfully:", {
         pan_number: updatedProfile?.pan_number,
         pan_verified: updatedProfile?.pan_verified,
+        pan_verified_at: updatedProfile?.pan_verified_at,
+        pan_holder_name: updatedProfile?.pan_holder_name,
+        userId,
+        userRole,
       });
 
       return { success: true, profile: updatedProfile };
     } catch (err) {
-      console.error("[v1/PAN] Exception updating PAN verification:", err);
+      console.error("[v1/PAN] Exception updating PAN verification:", {
+        error: err,
+        message: err.message,
+        stack: err.stack,
+        userId,
+        userRole,
+        pan,
+      });
       return {
         success: false,
-        message: "Failed to update PAN verification",
+        message: `Failed to update PAN verification: ${err.message || "Unexpected error"}`,
         error_type: "database_error",
       };
     }

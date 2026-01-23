@@ -65,4 +65,8 @@ router.use('/portfolios', portfolioRoutes); // → /api/v1/portfolios/*
 const payoutRoutes = require('./payouts');
 router.use('/payouts', payoutRoutes); // → /api/v1/payouts/*
 
+// Mount v1 transaction routes
+const transactionRoutes = require('./transactions');
+router.use('/transactions', transactionRoutes); // → /api/v1/transactions/*
+
 module.exports = router;

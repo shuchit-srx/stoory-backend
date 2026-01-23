@@ -75,14 +75,13 @@ router.post(
 );
 
 // ============================================
-// PAN VERIFICATION (Public - Optional Auth)
+// PAN VERIFICATION (Requires Authentication)
 // ============================================
-// PAN verification (works with or without authentication)
-// If authenticated: checks if already verified, saves verification status to profile
-// If not authenticated: just returns verification result
+// PAN verification requires authentication
+// Checks if already verified, saves verification status to profile
 router.post(
   "/verify-pan",
-  authMiddleware.authenticateTokenOptional,
+  authMiddleware.authenticateToken,
   validateVerifyPAN,
   AuthController.verifyPAN
 );

@@ -35,7 +35,7 @@ class CampaignController {
   }
   /**
    * Create a new campaign (Brand Owner only)
-   * POST /api/v1/campaigns
+   * POST /api/v1/campaigns/create
    */
   async createCampaign(req, res) {
     try {
@@ -127,7 +127,7 @@ class CampaignController {
 
   /**
    * Get all campaigns with filtering and pagination
-   * GET /api/v1/campaigns
+   * GET /api/v1/campaigns/all
    * - Influencers: See all campaigns
    * - Brand Owners: See all campaigns (can filter by brand_id)
    */
@@ -160,10 +160,28 @@ class CampaignController {
         (key) => filters[key] === undefined && delete filters[key]
       );
 
-      // Extract pagination
+      // Extract pagination with validation and limits - Using offset + limit for infinite scroll
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100
+      const offset = parseInt(req.query.offset) || 0;
+      
+      // Validate pagination
+      if (isNaN(limit) || limit < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid limit. Must be >= 1",
+        });
+      }
+      
+      if (isNaN(offset) || offset < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offset. Must be >= 0",
+        });
+      }
+
       const pagination = {
-        page: req.query.page ? parseInt(req.query.page) : 1,
-        limit: req.query.limit ? parseInt(req.query.limit) : 20,
+        limit,
+        offset,
       };
 
       const result = await CampaignService.getCampaigns(filters, pagination);
@@ -250,10 +268,28 @@ class CampaignController {
         (key) => filters[key] === undefined && delete filters[key]
       );
 
-      // Extract pagination
+      // Extract pagination with validation and limits - Using offset + limit for infinite scroll
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100
+      const offset = parseInt(req.query.offset) || 0;
+      
+      // Validate pagination
+      if (isNaN(limit) || limit < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid limit. Must be >= 1",
+        });
+      }
+      
+      if (isNaN(offset) || offset < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offset. Must be >= 0",
+        });
+      }
+
       const pagination = {
-        page: req.query.page ? parseInt(req.query.page) : 1,
-        limit: req.query.limit ? parseInt(req.query.limit) : 20,
+        limit,
+        offset,
       };
 
       const result = await CampaignService.getBrandCampaigns(
@@ -265,7 +301,12 @@ class CampaignController {
       if (result.success) {
         return res.json({
           success: true,
+          message: "Campaigns fetched successfully",
           campaigns: result.campaigns,
+          count_total_campaigns: result.count_total_campaigns,
+          count_live_campaigns: result.count_live_campaigns,
+          count_active_campaigns: result.count_active_campaigns,
+          count_completed_campaigns: result.count_completed_campaigns,
           pagination: result.pagination,
         });
       }

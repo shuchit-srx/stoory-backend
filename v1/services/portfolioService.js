@@ -215,15 +215,13 @@ class PortfolioService {
         }
       }
 
-      // Apply pagination
-      const page = pagination.page || 1;
-      const limit = pagination.limit || 20;
-      const from = (page - 1) * limit;
-      const to = from + limit - 1;
+      // Apply pagination - Using offset + limit for infinite scroll
+      const limit = Math.min(parseInt(pagination.limit) || 20, 100);
+      const offset = Math.max(0, parseInt(pagination.offset) || 0);
 
       query = query
         .order("created_at", { ascending: false })
-        .range(from, to);
+        .range(offset, offset + limit - 1);
 
       const { data, error, count } = await query;
 
@@ -236,18 +234,17 @@ class PortfolioService {
         };
       }
 
-      const totalPages = Math.ceil((count || 0) / limit);
+      const hasMore = (offset + limit) < (count || 0);
 
       return {
         success: true,
         portfolios: data || [],
         pagination: {
-          page,
           limit,
+          offset,
+          count: (data || []).length,
           total: count || 0,
-          totalPages,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1,
+          hasMore,
         },
       };
     } catch (err) {

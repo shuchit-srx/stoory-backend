@@ -76,11 +76,11 @@ class PayoutService {
         };
       }
 
-      // Check if application is completed
-      if (payout.v1_applications.phase !== 'COMPLETED') {
+      // Check if application is in PAYOUT phase (required before payout can be released)
+      if (payout.v1_applications.phase !== 'PAYOUT') {
         return {
           success: false,
-          message: 'Application must be completed before paying payout',
+          message: 'Application must be in PAYOUT phase before payout can be released',
         };
       }
 
@@ -105,7 +105,8 @@ class PayoutService {
       const { data: existingOrder } = await supabaseAdmin
         .from('v1_payment_orders')
         .select('id, status')
-        .eq('metadata->>payout_id', payoutId)
+        .eq('payable_type', 'PAYOUT')
+        .eq('payable_id', payoutId)
         .maybeSingle();
 
       if (existingOrder) {
@@ -149,13 +150,15 @@ class PayoutService {
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
         .from('v1_payment_orders')
         .insert({
-          application_id: payout.application_id, // Can be null for payout payments
+          payable_type: 'PAYOUT',
+          payable_id: payoutId,
           amount: amountRupees, // Stored in RUPEES
           currency: 'INR',
           status: 'CREATED',
           razorpay_order_id: razorpayOrder.id,
           metadata: {
             payout_id: payoutId,
+            application_id: payout.application_id,
             influencer_id: payout.influencer_id,
             payer_id: adminId,
             payment_type: 'payout_payment',
@@ -251,7 +254,7 @@ class PayoutService {
       }
 
       // Check if it's a payout payment
-      if (!paymentOrder.metadata || paymentOrder.metadata.payment_type !== 'payout_payment') {
+      if (paymentOrder.payable_type !== 'PAYOUT') {
         return {
           success: false,
           message: 'Invalid payment order type',
@@ -283,8 +286,8 @@ class PayoutService {
         };
       }
 
-      // Get payout_id from payment order metadata
-      const orderPayoutId = paymentOrder.metadata.payout_id;
+      // Get payout_id from payment order payable_id
+      const orderPayoutId = paymentOrder.payable_id;
 
       // Validate payout_id matches if provided
       if (payout_id && payout_id !== orderPayoutId) {
@@ -294,10 +297,16 @@ class PayoutService {
         };
       }
 
-      // Get payout details
+      // Get payout details with application
       const { data: payout, error: payoutError } = await supabaseAdmin
         .from('v1_payouts')
-        .select('*')
+        .select(`
+          *,
+          v1_applications!inner(
+            id,
+            phase
+          )
+        `)
         .eq('id', orderPayoutId)
         .maybeSingle();
 
@@ -305,6 +314,14 @@ class PayoutService {
         return {
           success: false,
           message: 'Payout not found',
+        };
+      }
+
+      // Check if application is in PAYOUT phase (required for payout release)
+      if (payout.v1_applications.phase !== 'PAYOUT') {
+        return {
+          success: false,
+          message: 'Application must be in PAYOUT phase before payout can be released',
         };
       }
 
@@ -355,6 +372,17 @@ class PayoutService {
           message: 'Payment verified but failed to update payout',
           error: payoutUpdateError.message,
         };
+      }
+
+      // Move application from PAYOUT to COMPLETED phase after payout is released
+      const { error: phaseUpdateError } = await supabaseAdmin
+        .from('v1_applications')
+        .update({ phase: 'COMPLETED' })
+        .eq('id', payout.application_id);
+
+      if (phaseUpdateError) {
+        console.error('[PayoutService/verifyPayoutPayment] Phase update error:', phaseUpdateError);
+        // Log but don't fail payout verification if phase update fails
       }
 
       // Create transaction record (all amounts in RUPEES)
@@ -536,9 +564,10 @@ class PayoutService {
               adminMap[admin.id] = admin;
             });
 
-            // Attach admin data to each payout
+            // Attach admin data to each payout (rename v1_users to released_by)
             payouts.forEach(payout => {
-              payout.v1_users = payout.released_by_admin_id ? adminMap[payout.released_by_admin_id] || null : null;
+              payout.released_by = payout.released_by_admin_id ? adminMap[payout.released_by_admin_id] || null : null;
+              delete payout.v1_users; // Remove if exists
             });
           }
         }
@@ -566,11 +595,154 @@ class PayoutService {
   }
 
   /**
-   * Get all pending payouts (Admin only)
+   * Get all payouts for an influencer
+   * @param {string} influencerId - Influencer user ID
    */
-  async getPendingPayouts() {
+  async getInfluencerPayouts(influencerId) {
     try {
+      // Get all payouts for this influencer with nested application and campaign data
       const { data: payouts, error } = await supabaseAdmin
+        .from('v1_payouts')
+        .select(`
+          id,
+          application_id,
+          amount,
+          status,
+          created_at,
+          released_at,
+          released_by_admin_id,
+          v1_applications(
+            id,
+            phase,
+            campaign_id,
+            v1_campaigns(
+              id,
+              title,
+              description,
+              brand_id
+            )
+          )
+        `)
+        .eq('influencer_id', influencerId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('[PayoutService/getInfluencerPayouts] Error:', error);
+        return {
+          success: false,
+          message: 'Failed to fetch payouts',
+          error: error.message,
+        };
+      }
+
+      if (!payouts || payouts.length === 0) {
+        return {
+          success: true,
+          payouts: [],
+        };
+      }
+
+      // Get unique brand IDs from campaigns
+      const brandIds = [...new Set(
+        payouts
+          .map(p => p.v1_applications?.v1_campaigns?.brand_id)
+          .filter(Boolean)
+      )];
+
+      // Fetch brand profiles
+      let brandMap = {};
+      if (brandIds.length > 0) {
+        const { data: brandProfiles, error: brandError } = await supabaseAdmin
+          .from('v1_brand_profiles')
+          .select('user_id, brand_name')
+          .in('user_id', brandIds)
+          .eq('is_deleted', false);
+
+        if (brandError) {
+          console.error('[PayoutService/getInfluencerPayouts] Brand fetch error:', brandError);
+        } else if (brandProfiles) {
+          brandProfiles.forEach(profile => {
+            brandMap[profile.user_id] = {
+              id: profile.user_id,
+              brand_name: profile.brand_name,
+            };
+          });
+        }
+      }
+
+      // Get admin user data if payouts have released_by_admin_id
+      const adminIds = [...new Set(payouts.map(p => p.released_by_admin_id).filter(Boolean))];
+      let adminMap = {};
+      if (adminIds.length > 0) {
+        const { data: admins, error: adminsError } = await supabaseAdmin
+          .from('v1_users')
+          .select('id, name, email')
+          .in('id', adminIds)
+          .eq('is_deleted', false);
+
+        if (adminsError) {
+          console.error('[PayoutService/getInfluencerPayouts] Admins fetch error:', adminsError);
+        } else if (admins) {
+          admins.forEach(admin => {
+            adminMap[admin.id] = admin;
+          });
+        }
+      }
+
+      // Format response
+      const formattedPayouts = payouts.map(payout => {
+        const application = payout.v1_applications || null;
+        const campaign = application?.v1_campaigns || null;
+        const brandId = campaign?.brand_id;
+        const brand = brandId ? brandMap[brandId] || null : null;
+        const admin = payout.released_by_admin_id ? adminMap[payout.released_by_admin_id] || null : null;
+
+        return {
+          id: payout.id,
+          application_id: payout.application_id,
+          amount: payout.amount,
+          status: payout.status,
+          created_at: this.toISO(payout.created_at),
+          released_at: payout.released_at ? this.toISO(payout.released_at) : null,
+          released_by: admin ? {
+            id: admin.id,
+            name: admin.name,
+            email: admin.email,
+          } : null,
+          application: application ? {
+            id: application.id,
+            phase: application.phase,
+            campaign: campaign ? {
+              id: campaign.id,
+              title: campaign.title,
+              description: campaign.description,
+              brand: brand,
+            } : null,
+          } : null,
+        };
+      });
+
+      return {
+        success: true,
+        payouts: formattedPayouts,
+      };
+    } catch (err) {
+      console.error('[PayoutService/getInfluencerPayouts] Exception:', err);
+      return {
+        success: false,
+        message: 'Failed to fetch payouts',
+        error: err.message,
+      };
+    }
+  }
+
+  /**
+   * Get all payouts (Admin only)
+   * @param {string} status - Optional status filter (PENDING, RELEASED, etc.)
+   */
+  async getAllPayouts(status = null) {
+    try {
+      let query = supabaseAdmin
         .from('v1_payouts')
         .select(`
           *,
@@ -587,15 +759,21 @@ class PayoutService {
             user_id,
             profile_photo_url
           )
-        `)
-        .eq('status', 'PENDING')
+        `);
+
+      // Apply status filter if provided
+      if (status) {
+        query = query.eq('status', status.toUpperCase());
+      }
+
+      const { data: payouts, error } = await query
         .order('created_at', { ascending: true });
 
       if (error) {
         console.error('[PayoutService/getPendingPayouts] Error:', error);
         return {
           success: false,
-          message: 'Failed to fetch pending payouts',
+          message: 'Failed to fetch payouts',
           error: error.message,
         };
       }
@@ -620,9 +798,10 @@ class PayoutService {
               userMap[user.id] = user;
             });
 
-            // Attach user data to each payout
+            // Attach user data to each payout (rename v1_users to user)
             payouts.forEach(payout => {
-              payout.v1_users = userMap[payout.influencer_id] || null;
+              payout.user = userMap[payout.influencer_id] || null;
+              delete payout.v1_users; // Remove if exists
             });
           }
         }
@@ -638,12 +817,13 @@ class PayoutService {
       return {
         success: true,
         payouts: payouts || [],
+        ...(status && { filtered_by_status: status.toUpperCase() }),
       };
     } catch (err) {
       console.error('[PayoutService/getPendingPayouts] Exception:', err);
       return {
         success: false,
-        message: 'Failed to fetch pending payouts',
+        message: 'Failed to fetch payouts',
         error: err.message,
       };
     }

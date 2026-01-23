@@ -547,29 +547,36 @@ class SubmissionService {
           // Log but don't fail
         }
       } else if (status === 'ACCEPTED') {
-        // Move application to COMPLETED phase
+        // Move application to PAYOUT phase (not COMPLETED)
         const { error: phaseError } = await supabaseAdmin
           .from('v1_applications')
-          .update({ phase: 'COMPLETED' })
+          .update({ phase: 'PAYOUT' })
           .eq('id', application.id);
 
         if (phaseError) {
           console.error('[SubmissionService/reviewWork] Phase update error:', phaseError);
           // Log but don't fail
         } else {
-          // Create payout entry when work is accepted and application is completed
+          // Create payout entry when work is accepted and application moves to PAYOUT phase
           // Get application details to calculate payout amount
+          // Use agreed_amount from application first, fallback to campaign net_amount
           const { data: applicationDetails, error: appError } = await supabaseAdmin
             .from('v1_applications')
-            .select('agreed_amount, influencer_id')
+            .select(`
+              agreed_amount, 
+              influencer_id,
+              v1_campaigns!inner(
+                net_amount
+              )
+            `)
             .eq('id', application.id)
             .maybeSingle();
 
           if (appError) {
             console.error('[SubmissionService/reviewWork] Application fetch error:', appError);
           } else if (applicationDetails) {
-            // Amount is the agreed_amount (full amount to influencer)
-            const payoutAmount = applicationDetails.agreed_amount;
+            // Use agreed_amount from application first, fallback to campaign net_amount
+            const payoutAmount = applicationDetails.agreed_amount ?? applicationDetails.v1_campaigns?.net_amount ?? null;
 
             if (payoutAmount && payoutAmount > 0) {
               // Check if payout already exists for this application

@@ -19,11 +19,11 @@ router.use(authMiddleware.authenticateToken);
 
 /**
  * Create a new campaign (Brand Owner only)
- * POST /api/v1/campaigns
+ * POST /api/v1/campaigns/create
  * Accepts multipart/form-data with optional 'coverImage' file field
  */
 router.post(
-  "/",
+  "/create",
   authMiddleware.requireRole(["BRAND_OWNER"]),
   normalizeEnums,
   (req, res, next) => {
@@ -49,12 +49,12 @@ router.post(
 
 /**
  * Get all campaigns with filtering and pagination
- * GET /api/v1/campaigns
+ * GET /api/v1/campaigns/all
  * - Influencers: See all campaigns
  * - Brand Owners: See all campaigns
  */
 router.get(
-  "/",
+  "/all",
   normalizeEnums,
   validateCampaignFilters,
   CampaignController.getCampaigns

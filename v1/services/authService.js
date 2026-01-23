@@ -44,7 +44,13 @@ class AuthService {
 
   async verifyStoredOTP(phone, otp) {
     try {
-      // Bypass OTP for test number only
+      // Bypass OTP for mock users (only if enabled)
+      const mockUsersService = require("./mockUsersService");
+      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone) && otp === "123456") {
+        return { success: true };
+      }
+
+      // Bypass OTP for legacy test number
       if (phone === "+919876543210" && otp === "123456") {
         return { success: true };
       }
@@ -127,7 +133,16 @@ class AuthService {
         };
       }
 
-      // Bypass for test phone number
+      // Bypass for mock users (only if enabled)
+      const mockUsersService = require("./mockUsersService");
+      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone)) {
+        return {
+          success: true,
+          message: "OTP sent successfully",
+        };
+      }
+
+      // Bypass for legacy test phone number
       if (phone === "+919876543210") {
         return {
           success: true,
@@ -204,7 +219,16 @@ class AuthService {
         };
       }
 
-      // Bypass for test phone number
+      // Bypass for mock users (only if enabled)
+      const mockUsersService = require("./mockUsersService");
+      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone)) {
+        return {
+          success: true,
+          message: "OTP sent successfully",
+        };
+      }
+
+      // Bypass for legacy test phone number
       if (phone === "+919876543210") {
         return {
           success: true,

@@ -7,13 +7,31 @@ class NotificationController {
   async getNotifications(req, res) {
     try {
       const userId = req.user.id;
-      const limit = parseInt(req.query.limit, 10) || 50;
-      const offset = parseInt(req.query.offset, 10) || 0;
+      
+      // Standardized pagination - Default limit 20, max 100
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+      const offset = parseInt(req.query.offset) || 0;
       const unreadOnly = req.query.unreadOnly === 'true';
 
+      // Validate pagination
+      if (isNaN(limit) || limit < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid limit. Must be >= 1",
+        });
+      }
+
+      if (isNaN(offset) || offset < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offset. Must be >= 0",
+        });
+      }
+
+      // Build data query with count
       let query = supabaseAdmin
         .from('v1_notifications')
-        .select('*')
+        .select('*', { count: 'exact' })
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .range(offset, offset + limit - 1);
@@ -22,16 +40,28 @@ class NotificationController {
         query = query.eq('read', false);
       }
 
-      const { data, error } = await query;
+      const { data, error, count } = await query;
 
       if (error) {
         return res.status(500).json({ success: false, message: 'Failed to fetch notifications', error: error.message });
       }
 
+      if (error) {
+        return res.status(500).json({ success: false, message: 'Failed to fetch notifications', error: error.message });
+      }
+
+      const hasMore = (offset + limit) < (count || 0);
+
       res.json({
         success: true,
         data: data || [],
-        pagination: { limit, offset, count: data?.length || 0 },
+        pagination: {
+          limit,
+          offset,
+          count: (data || []).length,
+          total: count || 0,
+          hasMore,
+        },
       });
     } catch (error) {
       console.error('[v1/NotificationController] getNotifications error:', error);

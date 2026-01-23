@@ -94,6 +94,28 @@ class ProfileController {
       });
     }
   }
+
+  async getProfileCompletionSteps(req, res) {
+    try {
+      const userId = req.user.id;
+      const result = await ProfileService.getProfileCompletionSteps(userId);
+
+      if (result.success) {
+        return res.json(result);
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+      });
+    } catch (err) {
+      console.error("[v1/getProfileCompletionSteps] error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
 }
 
 module.exports = {

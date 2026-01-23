@@ -251,7 +251,7 @@ class ProfileService {
         }
       }
 
-      // 2) Update v1_users table (editable fields: name, email, phone_number, dob)
+      // 2) Update v1_users table (editable fields: name, email, phone_number, dob, upi_id)
       const userUpdate = {};
       if (profileData.name !== undefined) {
         const nameValue = profileData.name !== null && profileData.name !== undefined
@@ -283,9 +283,35 @@ class ProfileService {
           : null;
       }
       if (profileData.dob !== undefined) {
-        userUpdate.dob = profileData.dob !== null && profileData.dob !== undefined
-          ? profileData.dob
-          : null;
+        // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+        if (profileData.dob !== null && profileData.dob !== undefined && profileData.dob !== "") {
+          // Validate it's a valid date string and normalize to ISO format
+          const dobDate = new Date(profileData.dob);
+          if (!isNaN(dobDate.getTime())) {
+            // Always convert to ISO format to ensure consistency
+            // This handles both date-only (YYYY-MM-DD) and full ISO (YYYY-MM-DDTHH:mm:ss.sssZ) formats
+            userUpdate.dob = dobDate.toISOString();
+          } else {
+            // Invalid date format, skip update
+            console.warn("[v1/updateInfluencerProfile] Invalid dob format:", profileData.dob);
+          }
+        } else {
+          userUpdate.dob = null;
+        }
+      }
+      if (profileData.upi_id !== undefined) {
+        // Handle upi_id - validate format and save
+        if (profileData.upi_id !== null && profileData.upi_id !== undefined && profileData.upi_id !== "") {
+          const upiIdValue = String(profileData.upi_id).trim();
+          // Validate UPI ID format: username@provider
+          if (/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+$/.test(upiIdValue)) {
+            userUpdate.upi_id = upiIdValue;
+          } else {
+            return { success: false, message: "Invalid UPI ID format. Must be in format: username@provider" };
+          }
+        } else {
+          userUpdate.upi_id = null;
+        }
       }
 
       if (Object.keys(userUpdate).length > 0) {
@@ -406,7 +432,11 @@ class ProfileService {
 
       // Handle gender
       if (profileData.gender !== undefined) {
-        profileUpdate.gender = this.normalizeGender(profileData.gender);
+        const normalizedGender = this.normalizeGender(profileData.gender);
+        // Only add to update if normalization succeeded (not null)
+        if (normalizedGender !== null) {
+          profileUpdate.gender = normalizedGender;
+        }
       }
 
       // Handle tier
@@ -622,7 +652,7 @@ class ProfileService {
         }
       }
 
-      // 2) Update v1_users table (editable fields: name, email, phone_number, dob)
+      // 2) Update v1_users table (editable fields: name, email, phone_number, dob, upi_id)
       const userUpdate = {};
       if (profileData.name !== undefined) {
         const nameValue = profileData.name !== null && profileData.name !== undefined
@@ -654,9 +684,35 @@ class ProfileService {
           : null;
       }
       if (profileData.dob !== undefined) {
-        userUpdate.dob = profileData.dob !== null && profileData.dob !== undefined
-          ? profileData.dob
-          : null;
+        // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+        if (profileData.dob !== null && profileData.dob !== undefined && profileData.dob !== "") {
+          // Validate it's a valid date string and normalize to ISO format
+          const dobDate = new Date(profileData.dob);
+          if (!isNaN(dobDate.getTime())) {
+            // Always convert to ISO format to ensure consistency
+            // This handles both date-only (YYYY-MM-DD) and full ISO (YYYY-MM-DDTHH:mm:ss.sssZ) formats
+            userUpdate.dob = dobDate.toISOString();
+          } else {
+            // Invalid date format, skip update
+            console.warn("[v1/updateBrandProfile] Invalid dob format:", profileData.dob);
+          }
+        } else {
+          userUpdate.dob = null;
+        }
+      }
+      if (profileData.upi_id !== undefined) {
+        // Handle upi_id - validate format and save
+        if (profileData.upi_id !== null && profileData.upi_id !== undefined && profileData.upi_id !== "") {
+          const upiIdValue = String(profileData.upi_id).trim();
+          // Validate UPI ID format: username@provider
+          if (/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+$/.test(upiIdValue)) {
+            userUpdate.upi_id = upiIdValue;
+          } else {
+            return { success: false, message: "Invalid UPI ID format. Must be in format: username@provider" };
+          }
+        } else {
+          userUpdate.upi_id = null;
+        }
       }
 
       if (Object.keys(userUpdate).length > 0) {
@@ -762,7 +818,11 @@ class ProfileService {
 
       // Update gender if provided
       if (profileData.gender !== undefined) {
-        profileUpdate.gender = this.normalizeGender(profileData.gender);
+        const normalizedGender = this.normalizeGender(profileData.gender);
+        // Only add to update if normalization succeeded (not null)
+        if (normalizedGender !== null) {
+          profileUpdate.gender = normalizedGender;
+        }
       }
 
       // Update brand_logo_url if provided (required field - NOT NULL in schema)
@@ -967,6 +1027,260 @@ class ProfileService {
     } catch (err) {
       console.error("[v1/createBrandProfile] Exception:", err);
       return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Get profile completion steps and progress
+   * @param {string} userId - User ID
+   * @returns {Promise<Object>} - Completion steps data
+   */
+  async getProfileCompletionSteps(userId) {
+    try {
+      // Fetch user data
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("*")
+        .eq("id", userId)
+        .eq("is_deleted", false)
+        .single();
+
+      if (userError || !user) {
+        return {
+          success: false,
+          message: "User not found",
+        };
+      }
+
+      const role = user.role;
+      const completedSteps = [];
+      const pendingSteps = [];
+      let nextStep = null;
+
+      if (role === "INFLUENCER") {
+        // Fetch influencer profile
+        const { data: profile } = await supabaseAdmin
+          .from("v1_influencer_profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .maybeSingle();
+
+        // 1. Role Selection - v1_users.role
+        if (user.role && user.role === "INFLUENCER") {
+          completedSteps.push("role_selection");
+        } else {
+          pendingSteps.push("role_selection");
+        }
+
+        // 2. Gender Selection - v1_influencer_profiles.gender
+        if (profile?.gender) {
+          completedSteps.push("gender_selection");
+        } else {
+          pendingSteps.push("gender_selection");
+        }
+
+        // 3. User Details - v1_users.name, email, phone_number
+        if (user.name && user.email && user.phone_number) {
+          completedSteps.push("user_details");
+        } else {
+          pendingSteps.push("user_details");
+        }
+
+        // 4. Email Verification - v1_users.email_verified
+        if (user.email_verified === true) {
+          completedSteps.push("email_verification");
+        } else {
+          pendingSteps.push("email_verification");
+        }
+
+        // 5. Date of Birth - v1_users.dob
+        if (user.dob) {
+          completedSteps.push("date_of_birth");
+        } else {
+          pendingSteps.push("date_of_birth");
+        }
+
+        // 6. Image Upload - v1_influencer_profiles.profile_photo_url (not placeholder)
+        const placeholderImageUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
+        if (profile?.profile_photo_url && profile.profile_photo_url !== placeholderImageUrl) {
+          completedSteps.push("image_upload");
+        } else {
+          pendingSteps.push("image_upload");
+        }
+
+        // 7. KYC PAN - v1_influencer_profiles.pan_number AND pan_verified = true
+        if (profile?.pan_number && profile.pan_verified === true) {
+          completedSteps.push("kyc_pan");
+        } else {
+          pendingSteps.push("kyc_pan");
+        }
+
+        // 8. UPI ID - v1_users.upi_id
+        if (user.upi_id) {
+          completedSteps.push("upi");
+        } else {
+          pendingSteps.push("upi");
+        }
+
+        // 9. Profile Details - v1_influencer_profiles.bio
+        if (profile?.bio && profile.bio.trim().length > 0) {
+          completedSteps.push("profile_details");
+        } else {
+          pendingSteps.push("profile_details");
+        }
+
+        // 10. Social Media - At least one entry in v1_influencer_social_accounts
+        const { data: socialAccounts } = await supabaseAdmin
+          .from("v1_influencer_social_accounts")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .limit(1);
+
+        if (socialAccounts && socialAccounts.length > 0) {
+          completedSteps.push("social_media");
+        } else {
+          pendingSteps.push("social_media");
+        }
+
+        // 11. Portfolio - At least one entry in v1_influencer_portfolio
+        const { data: portfolioItems } = await supabaseAdmin
+          .from("v1_influencer_portfolio")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .limit(1);
+
+        if (portfolioItems && portfolioItems.length > 0) {
+          completedSteps.push("portfolio");
+        } else {
+          pendingSteps.push("portfolio");
+        }
+
+        // Find next step (first pending step)
+        nextStep = pendingSteps.length > 0 ? pendingSteps[0] : null;
+
+      } else if (role === "BRAND_OWNER") {
+        // Fetch brand profile
+        const { data: profile } = await supabaseAdmin
+          .from("v1_brand_profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .maybeSingle();
+
+        // 1. Role Selection - v1_users.role
+        if (user.role && user.role === "BRAND_OWNER") {
+          completedSteps.push("role_selection");
+        } else {
+          pendingSteps.push("role_selection");
+        }
+
+        // 2. Gender Selection - v1_brand_profiles.gender
+        if (profile?.gender) {
+          completedSteps.push("gender_selection");
+        } else {
+          pendingSteps.push("gender_selection");
+        }
+
+        // 3. User Details - v1_users.name, email, phone_number
+        if (user.name && user.email && user.phone_number) {
+          completedSteps.push("user_details");
+        } else {
+          pendingSteps.push("user_details");
+        }
+
+        // 4. Email Verification - v1_users.email_verified
+        if (user.email_verified === true) {
+          completedSteps.push("email_verification");
+        } else {
+          pendingSteps.push("email_verification");
+        }
+
+        // 5. Date of Birth - v1_users.dob
+        if (user.dob) {
+          completedSteps.push("date_of_birth");
+        } else {
+          pendingSteps.push("date_of_birth");
+        }
+
+        // 6. KYC PAN - v1_brand_profiles.pan_number AND pan_verified = true
+        if (profile?.pan_number && profile.pan_verified === true) {
+          completedSteps.push("kyc_pan");
+        } else {
+          pendingSteps.push("kyc_pan");
+        }
+
+        // 7. UPI ID - v1_users.upi_id
+        if (user.upi_id) {
+          completedSteps.push("upi");
+        } else {
+          pendingSteps.push("upi");
+        }
+
+        // 8. Brand Business Details - v1_brand_profiles.brand_name AND brand_logo_url (not placeholder)
+        const placeholderLogoUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
+        if (
+          profile?.brand_name &&
+          profile.brand_logo_url &&
+          profile.brand_logo_url !== placeholderLogoUrl
+        ) {
+          completedSteps.push("brand_business_details");
+        } else {
+          pendingSteps.push("brand_business_details");
+        }
+
+        // 9. Brand Details - v1_brand_profiles.brand_description
+        if (profile?.brand_description && profile.brand_description.trim().length > 0) {
+          completedSteps.push("brand_details");
+        } else {
+          pendingSteps.push("brand_details");
+        }
+
+        // Find next step
+        nextStep = pendingSteps.length > 0 ? pendingSteps[0] : null;
+      } else {
+        return {
+          success: false,
+          message: "Profile completion not supported for this role",
+        };
+      }
+
+      // Calculate progress percentage
+      const totalSteps = completedSteps.length + pendingSteps.length;
+      const progressPercentage = totalSteps > 0
+        ? Math.round((completedSteps.length / totalSteps) * 100)
+        : 0;
+
+      // Update profile_completion_pct in database
+      const profileTable = role === "INFLUENCER" 
+        ? "v1_influencer_profiles" 
+        : "v1_brand_profiles";
+      
+      await supabaseAdmin
+        .from(profileTable)
+        .update({ profile_completion_pct: progressPercentage })
+        .eq("user_id", userId)
+        .eq("is_deleted", false);
+
+      return {
+        success: true,
+        data: {
+          role: role.toLowerCase(),
+          is_complete: pendingSteps.length === 0,
+          progress_percentage: progressPercentage,
+          completed_steps: completedSteps,
+          pending_steps: pendingSteps,
+          next_step: nextStep,
+        },
+      };
+    } catch (err) {
+      console.error("[v1/getProfileCompletionSteps] Exception:", err);
+      return {
+        success: false,
+        message: err.message || "Internal server error",
+      };
     }
   }
 }

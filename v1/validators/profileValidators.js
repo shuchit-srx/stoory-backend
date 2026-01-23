@@ -19,6 +19,11 @@ const validateCompleteProfile = [
     .optional()
     .isISO8601()
     .withMessage("Date of birth must be a valid ISO8601 date"),
+  body("upi_id")
+    .optional()
+    .isString()
+    .matches(/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+$/)
+    .withMessage("UPI ID must be in format: username@provider"),
   
   // Common fields - profile tables
   body("pan_number")

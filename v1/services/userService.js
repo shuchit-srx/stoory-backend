@@ -205,18 +205,27 @@ class UserService {
   }
 
   /**
-   * Get all influencers from v1_users table
-   * Returns all users with role INFLUENCER with their profiles, social accounts, and categories
+   * Get all influencers from v1_users table with pagination
+   * Returns simplified influencer data with profiles, social accounts, and categories
+   * @param {Object} pagination - Pagination parameters { page, limit }
    */
-  async getAllInfluencers() {
+  async getAllInfluencers(pagination = {}) {
     try {
-      // Get all influencer users
-      const { data: influencers, error: influencersError } = await supabaseAdmin
+      // Accept offset + limit for infinite scroll support
+      const { limit = 20, offset = 0 } = pagination;
+      
+      // Validate pagination parameters
+      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items
+      const validatedOffset = Math.max(0, parseInt(offset) || 0);
+
+      // Get all influencer users with pagination
+      const { data: influencers, error: influencersError, count } = await supabaseAdmin
         .from("v1_users")
-        .select("*")
+        .select("id, name", { count: "exact" })
         .eq("role", "INFLUENCER")
         .eq("is_deleted", false)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range(validatedOffset, validatedOffset + validatedLimit - 1);
 
       if (influencersError) {
         console.error(
@@ -230,36 +239,51 @@ class UserService {
         };
       }
 
-      // Get influencer profiles for all influencers
-      const userIds = (influencers || []).map((inf) => inf.id);
-      let influencerProfiles = [];
-      let profilesError = null;
-      let socialAccountsMap = {};
-      let socialAccountsError = null;
+      if (!influencers || influencers.length === 0) {
+        return {
+          success: true,
+          influencers: [],
+          pagination: {
+            limit: validatedLimit,
+            offset: validatedOffset,
+            count: 0,
+            total: 0,
+            hasMore: false,
+          },
+        };
+      }
 
-      if (userIds.length > 0) {
+      // Get influencer profiles for all influencers
+      const userIds = influencers.map((inf) => inf.id);
+      
+      // Fetch profiles with only required fields
         const profilesResult = await supabaseAdmin
           .from("v1_influencer_profiles")
-          .select("*")
+        .select("user_id, categories, profile_photo_url, languages")
           .in("user_id", userIds)
           .eq("is_deleted", false);
         
-        influencerProfiles = profilesResult.data || [];
-        profilesError = profilesResult.error;
+      const influencerProfiles = profilesResult.data || [];
+      if (profilesResult.error) {
+        console.error(
+          "[v1/UserService/getAllInfluencers] Profiles error:",
+          profilesResult.error
+        );
+      }
 
-        // Fetch social accounts for all influencers
+      // Fetch social accounts for all influencers with only required fields
         const socialAccountsResult = await supabaseAdmin
           .from("v1_influencer_social_accounts")
-          .select("*")
+        .select("id, user_id, platform, username, profile_url, follower_count, engagement_rate")
           .in("user_id", userIds)
           .eq("is_deleted", false)
           .order("created_at", { ascending: false });
 
+      let socialAccountsMap = {};
         if (socialAccountsResult.error) {
-          socialAccountsError = socialAccountsResult.error;
           console.error(
             "[v1/UserService/getAllInfluencers] Social accounts error:",
-            socialAccountsError
+          socialAccountsResult.error
           );
         } else if (socialAccountsResult.data) {
           // Group social accounts by user_id
@@ -267,50 +291,49 @@ class UserService {
             if (!socialAccountsMap[account.user_id]) {
               socialAccountsMap[account.user_id] = [];
             }
-            socialAccountsMap[account.user_id].push(account);
+          socialAccountsMap[account.user_id].push({
+            id: account.id,
+            platform: account.platform,
+            username: account.username,
+            profile_url: account.profile_url,
+            follower_count: account.follower_count,
+            engagement_rate: account.engagement_rate,
           });
-        }
-      }
-
-      if (profilesError) {
-        console.error(
-          "[v1/UserService/getAllInfluencers] Profiles error:",
-          profilesError
-        );
+        });
       }
 
       // Map profiles to users
       const profileMap = {};
-      (influencerProfiles || []).forEach((profile) => {
+      influencerProfiles.forEach((profile) => {
         profileMap[profile.user_id] = profile;
       });
 
-      // Combine user data with profiles, social accounts, and categories
-      // Structure the response to include all requested data
-      const influencersWithProfiles = (influencers || []).map((influencer) => {
+      // Structure the simplified response
+      const influencersWithProfiles = influencers.map((influencer) => {
         const profile = profileMap[influencer.id] || null;
         
-        // Filter out sensitive fields from user data
-        const { password_hash, password_reset_token, password_reset_token_expires_at, is_deleted, ...userDetails } = influencer;
-        
         return {
-          // User details
-          ...userDetails,
-          // Profile details (includes all profile fields including portfolio if it exists)
-          profile: profile || null,
-          // Portfolio (if it exists as a field in profile, otherwise null)
-          portfolio: profile?.portfolio || profile?.portfolio_links || null,
-          // Social accounts
-          social_accounts: socialAccountsMap[influencer.id] || [],
-          // Categories (from profile, fallback to empty array for easy access)
+          id: influencer.id,
+          name: influencer.name,
           categories: profile?.categories || [],
+          profile_photo_url: profile?.profile_photo_url || null,
+          languages: profile?.languages || [],
+          social_accounts: socialAccountsMap[influencer.id] || [],
         };
       });
+
+      const hasMore = (validatedOffset + validatedLimit) < (count || 0);
 
       return {
         success: true,
         influencers: influencersWithProfiles,
-        total: influencersWithProfiles.length,
+        pagination: {
+          limit: validatedLimit,
+          offset: validatedOffset,
+          count: influencersWithProfiles.length,
+          total: count || 0,
+          hasMore,
+        },
       };
     } catch (err) {
       console.error(
@@ -320,6 +343,118 @@ class UserService {
       return {
         success: false,
         message: "Failed to fetch influencers",
+        error: err.message,
+      };
+    }
+  }
+
+  /**
+   * Get a single influencer by ID
+   * Returns simplified influencer data with profile, social accounts, and categories
+   * @param {string} influencerId - The influencer user ID
+   */
+  async getInfluencerById(influencerId) {
+    try {
+      // Get influencer user
+      const { data: influencer, error: influencerError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, name")
+        .eq("id", influencerId)
+        .eq("role", "INFLUENCER")
+        .eq("is_deleted", false)
+        .single();
+
+      if (influencerError || !influencer) {
+        return {
+          success: false,
+          message: "Influencer not found",
+          error: influencerError?.message || "Influencer not found",
+        };
+      }
+
+      // Fetch profile with only required fields
+      const { data: profile, error: profileError } = await supabaseAdmin
+        .from("v1_influencer_profiles")
+        .select("user_id, categories, profile_photo_url, languages")
+        .eq("user_id", influencerId)
+        .eq("is_deleted", false)
+        .maybeSingle();
+
+      if (profileError) {
+        console.error(
+          "[v1/UserService/getInfluencerById] Profile error:",
+          profileError
+        );
+      }
+
+      // Fetch social accounts with only required fields
+      const { data: socialAccounts, error: socialAccountsError } = await supabaseAdmin
+        .from("v1_influencer_social_accounts")
+        .select("id, platform, username, profile_url, follower_count, engagement_rate")
+        .eq("user_id", influencerId)
+        .eq("is_deleted", false)
+        .order("created_at", { ascending: false });
+
+      if (socialAccountsError) {
+        console.error(
+          "[v1/UserService/getInfluencerById] Social accounts error:",
+          socialAccountsError
+        );
+      }
+
+      // Fetch portfolio items with only required fields
+      const { data: portfolios, error: portfoliosError } = await supabaseAdmin
+        .from("v1_influencer_portfolio")
+        .select("id, thumbnail_url, media_url, media_type, description, duration_seconds, created_at")
+        .eq("user_id", influencerId)
+        .eq("is_deleted", false)
+        .order("created_at", { ascending: false });
+
+      if (portfoliosError) {
+        console.error(
+          "[v1/UserService/getInfluencerById] Portfolio error:",
+          portfoliosError
+        );
+      }
+
+      // Structure the simplified response
+      const influencerData = {
+        id: influencer.id,
+        name: influencer.name,
+        categories: profile?.categories || [],
+        profile_photo_url: profile?.profile_photo_url || null,
+        languages: profile?.languages || [],
+        social_accounts: (socialAccounts || []).map((account) => ({
+          id: account.id,
+          platform: account.platform,
+          username: account.username,
+          profile_url: account.profile_url,
+          follower_count: account.follower_count,
+          engagement_rate: account.engagement_rate,
+        })),
+        portfolios: (portfolios || []).map((portfolio) => ({
+          id: portfolio.id,
+          thumbnail_url: portfolio.thumbnail_url,
+          media_url: portfolio.media_url,
+          media_type: portfolio.media_type,
+          description: portfolio.description,
+          duration: portfolio.duration_seconds,
+          created_at: portfolio.created_at,
+        })),
+      };
+
+      return {
+        success: true,
+        influencer: influencerData,
+      };
+    } catch (err) {
+      console.error(
+        "[v1/UserService/getInfluencerById] Exception:",
+        err
+      );
+      return {
+        success: false,
+        message: "Failed to fetch influencer",
         error: err.message,
       };
     }

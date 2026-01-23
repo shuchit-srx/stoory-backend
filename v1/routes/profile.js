@@ -44,4 +44,14 @@ router.put(
   ProfileController.updateProfile
 );
 
+/**
+ * Get profile completion steps
+ * GET /api/v1/profile/completion-steps
+ */
+router.get(
+  "/completion-steps",
+  authMiddleware.authenticateToken,
+  ProfileController.getProfileCompletionSteps
+);
+
 module.exports = router;

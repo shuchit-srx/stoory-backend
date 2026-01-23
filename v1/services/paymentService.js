@@ -70,16 +70,27 @@ class PaymentService {
    * Calculate commission and breakdown (all amounts in rupees)
    * @param {number} amount - Total amount to calculate commission for
    * @param {number} platformFeePercentage - Optional platform fee percentage from campaign/application
+   * @param {number} platformFeeAmount - Optional platform fee fixed amount from campaign/application
    */
-  async calculateCommissionBreakdown(amount, platformFeePercentage = null) {
+  async calculateCommissionBreakdown(amount, platformFeePercentage = null, platformFeeAmount = null) {
     try {
-      let commissionPercentage;
-      
-      if (platformFeePercentage !== null && platformFeePercentage !== undefined) {
-        // Use platform_fee_percentage from campaign/application
+      // All calculations in rupees
+      const totalAmount = parseFloat(amount);
+      let commissionAmount = 0;
+      let commissionPercentage = null;
+
+      // If platform_fee_amount is provided, use it directly (fixed amount)
+      if (platformFeeAmount !== null && platformFeeAmount !== undefined && platformFeeAmount > 0) {
+        commissionAmount = parseFloat(platformFeeAmount);
+        commissionPercentage = (commissionAmount / totalAmount) * 100; // Calculate percentage for reference
+      } 
+      // Otherwise, use platform_fee_percentage if provided
+      else if (platformFeePercentage !== null && platformFeePercentage !== undefined) {
         commissionPercentage = parseFloat(platformFeePercentage);
-      } else {
-        // Fallback: Get current admin settings (non-expired) - for backward compatibility
+        commissionAmount = (totalAmount * commissionPercentage) / 100;
+      } 
+      // Fallback: Get current admin settings (non-expired) - for backward compatibility
+      else {
         const { data: adminSettings, error: commError } = await supabaseAdmin
           .from("v1_admin_settings")
           .select("*")
@@ -92,11 +103,9 @@ class PaymentService {
         } else {
           commissionPercentage = adminSettings.commission_percentage;
         }
+        commissionAmount = (totalAmount * commissionPercentage) / 100;
       }
 
-      // All calculations in rupees
-      const totalAmount = parseFloat(amount);
-      const commissionAmount = (totalAmount * commissionPercentage) / 100;
       const netAmount = totalAmount - commissionAmount;
 
       return {
@@ -124,7 +133,7 @@ class PaymentService {
         };
       }
 
-      // Get application with campaign details including budget and platform_fee_percentage
+      // Get application with campaign details including budget, platform_fee_percentage, and platform_fee_amount
       const { data: application, error: applicationError } = await supabaseAdmin
         .from("v1_applications")
         .select(`
@@ -134,7 +143,9 @@ class PaymentService {
             brand_id,
             title,
             budget,
-            platform_fee_percentage
+            platform_fee_percentage,
+            platform_fee_amount,
+            net_amount
           )
         `)
         .eq("id", applicationId)
@@ -177,50 +188,29 @@ class PaymentService {
         };
       }
 
-      // Validate that campaign budget equals application budget_amount
-      const campaignBudget = application.v1_campaigns.budget;
+      // Get payment amount: use budget_amount from application first, fallback to campaign budget
       const applicationBudgetAmount = application.budget_amount;
+      const campaignBudget = application.v1_campaigns.budget;
       
-      if (campaignBudget === null || campaignBudget === undefined) {
+      // Determine payment amount: prefer application budget_amount, fallback to campaign budget
+      const paymentAmount = applicationBudgetAmount ?? campaignBudget;
+
+      if (paymentAmount === null || paymentAmount === undefined || paymentAmount <= 0) {
         return {
           success: false,
-          message: "Campaign does not have a valid budget",
+          message: "Application does not have a valid budget amount and campaign budget is also missing",
         };
       }
 
-      if (applicationBudgetAmount === null || applicationBudgetAmount === undefined) {
+      // Get platform fee from application first, fallback to campaign
+      // Prefer platform_fee_amount (fixed) over platform_fee_percentage if both exist
+      const platformFeeAmount = application.platform_fee_amount ?? application.v1_campaigns.platform_fee_amount ?? null;
+      const platformFeePercentage = application.platform_fee_percentage ?? application.v1_campaigns.platform_fee_percentage ?? null;
+
+      if (platformFeeAmount === null && platformFeePercentage === null) {
         return {
           success: false,
-          message: "Application does not have a valid budget amount",
-        };
-      }
-
-      // Validate budget matches (allow small floating point differences)
-      if (Math.abs(campaignBudget - applicationBudgetAmount) > 0.01) {
-        return {
-          success: false,
-          message: `Campaign budget (₹${campaignBudget}) does not match application budget amount (₹${applicationBudgetAmount}). Please contact support.`,
-        };
-      }
-
-      // Determine payment amount: use budget from campaign or budget_amount from application
-      // Both should be equal after validation above, but prefer campaign budget as source of truth
-      const paymentAmount = campaignBudget || applicationBudgetAmount;
-
-      if (!paymentAmount || paymentAmount <= 0) {
-        return {
-          success: false,
-          message: "Invalid payment amount. Budget must be greater than 0",
-        };
-      }
-
-      // Get platform_fee_percentage from application (which came from campaign)
-      const platformFeePercentage = application.platform_fee_percentage ?? application.v1_campaigns.platform_fee_percentage;
-
-      if (platformFeePercentage === null || platformFeePercentage === undefined) {
-        return {
-          success: false,
-          message: "Application does not have a valid platform fee percentage",
+          message: "Application and campaign do not have a valid platform fee (percentage or amount)",
         };
       }
 
@@ -248,8 +238,8 @@ class PaymentService {
         };
       }
 
-      // Calculate commission breakdown using payment amount (budget) and platform_fee_percentage from application
-      const breakdown = await this.calculateCommissionBreakdown(paymentAmount, platformFeePercentage);
+      // Calculate commission breakdown using payment amount and platform fee (amount or percentage)
+      const breakdown = await this.calculateCommissionBreakdown(paymentAmount, platformFeePercentage, platformFeeAmount);
 
       // Razorpay receipt must be <= 40 chars
       const rawReceipt = `app_${applicationId.substring(0, 20)}_${Date.now()}`;
@@ -337,11 +327,14 @@ class PaymentService {
   }
 
   /**
-   * Create bulk payment order for campaign (Brand pays admin for all accepted applications)
-   * Aggregates budget_amount of all ACCEPTED applications for the campaign
-   * Only allowed when campaign has accepted applications
+   * Create bulk payment order for selected applications in a campaign
+   * Each application can only be in one payment order
+   * Multiple payment orders can exist for different groups of applications
+   * @param {string} campaignId - Campaign ID
+   * @param {string} userId - User ID
+   * @param {string[]} applicationIds - Array of application IDs to include in payment
    */
-  async createBulkPaymentOrderForCampaign(campaignId, userId) {
+  async createBulkPaymentOrderForCampaign(campaignId, userId, applicationIds = []) {
     try {
       if (!razorpay) {
         return {
@@ -350,10 +343,18 @@ class PaymentService {
         };
       }
 
-      // Get campaign with platform_fee_percentage
+      // Validate application_ids
+      if (!Array.isArray(applicationIds) || applicationIds.length === 0) {
+        return {
+          success: false,
+          message: "application_ids array is required and must not be empty",
+        };
+      }
+
+      // Get campaign with platform_fee_percentage, platform_fee_amount, and net_amount
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, brand_id, title, platform_fee_percentage")
+        .select("id, brand_id, title, platform_fee_percentage, platform_fee_amount, net_amount, requires_script")
         .eq("id", campaignId)
         .single();
 
@@ -386,10 +387,11 @@ class PaymentService {
         };
       }
 
-      // Get all ACCEPTED applications for this campaign
+      // Get selected applications and validate they belong to this campaign and are ACCEPTED
       const { data: applications, error: applicationsError } = await supabaseAdmin
         .from("v1_applications")
-        .select("id, budget_amount, agreed_amount, phase")
+        .select("id, budget_amount, agreed_amount, phase, campaign_id, platform_fee_percentage, platform_fee_amount")
+        .in("id", applicationIds)
         .eq("campaign_id", campaignId)
         .eq("phase", "ACCEPTED");
 
@@ -404,89 +406,139 @@ class PaymentService {
       if (!applications || applications.length === 0) {
         return {
           success: false,
-          message: "No accepted applications found for this campaign",
+          message: "No accepted applications found for the selected IDs in this campaign",
         };
       }
 
-      const applicationIds = applications.map(a => a.id);
+      // Check if all requested applications were found
+      if (applications.length !== applicationIds.length) {
+        const foundIds = new Set(applications.map(a => a.id));
+        const missingIds = applicationIds.filter(id => !foundIds.has(id));
+        return {
+          success: false,
+          message: `Some applications not found or not in ACCEPTED phase: ${missingIds.join(", ")}`,
+        };
+      }
 
-      // Check which applications already have verified payments
-      const { data: existingPayments, error: existingPaymentsError } = await supabaseAdmin
+      // Check which applications already have verified payments (APPLICATION type)
+      const { data: existingApplicationPayments, error: existingAppPaymentsError } = await supabaseAdmin
         .from("v1_payment_orders")
         .select("payable_type, payable_id, status")
         .eq("payable_type", "APPLICATION")
         .in("payable_id", applicationIds);
 
-      if (existingPaymentsError) {
-        console.error("[v1/PaymentService/createBulkPaymentOrderForCampaign] Error checking existing payments:", existingPaymentsError);
+      if (existingAppPaymentsError) {
+        console.error("[v1/PaymentService/createBulkPaymentOrderForCampaign] Error checking existing application payments:", existingAppPaymentsError);
       }
 
-      // Filter out applications that already have verified payments
-      const paidAppIds = new Set(
-        (existingPayments || [])
-          .filter(p => {
-            const normalizedStatus = this.normalizeStatus(p.status) || p.status;
-            return normalizedStatus === "VERIFIED";
-          })
-          .map(p => p.payable_id)
-      );
+      // Check which applications are already in CAMPAIGN payment orders via v1_application_payments
+      const { data: existingBulkPayments, error: existingBulkPaymentsError } = await supabaseAdmin
+        .from("v1_application_payments")
+        .select(`
+          application_id,
+          payment_order_id,
+          v1_payment_orders!inner(
+            id,
+            status,
+            payable_type
+          )
+        `)
+        .in("application_id", applicationIds)
+        .eq("v1_payment_orders.payable_type", "CAMPAIGN");
 
+      if (existingBulkPaymentsError) {
+        console.error("[v1/PaymentService/createBulkPaymentOrderForCampaign] Error checking existing bulk payments:", existingBulkPaymentsError);
+      }
+
+      // Collect all paid application IDs
+      const paidAppIds = new Set();
+
+      // Add applications with verified APPLICATION payments
+      (existingApplicationPayments || []).forEach(p => {
+        const normalizedStatus = this.normalizeStatus(p.status) || p.status;
+        if (normalizedStatus === "VERIFIED") {
+          paidAppIds.add(p.payable_id);
+        }
+      });
+
+      // Add applications in verified CAMPAIGN payment orders
+      (existingBulkPayments || []).forEach(bp => {
+        const normalizedStatus = this.normalizeStatus(bp.v1_payment_orders.status) || bp.v1_payment_orders.status;
+        if (normalizedStatus === "VERIFIED") {
+          paidAppIds.add(bp.application_id);
+        }
+      });
+
+      // Filter out already paid applications
       const payableApplications = applications.filter(a => !paidAppIds.has(a.id));
 
       if (payableApplications.length === 0) {
         return {
           success: false,
-          message: "All accepted applications are already paid",
+          message: "All selected applications are already paid",
+        };
+      }
+
+      if (payableApplications.length !== applicationIds.length) {
+        const alreadyPaidIds = applicationIds.filter(id => paidAppIds.has(id));
+        return {
+          success: false,
+          message: `Some applications are already paid: ${alreadyPaidIds.join(", ")}`,
         };
       }
 
       // Aggregate budget_amount of all payable applications
+      // For each application: use budget_amount first, fallback to campaign budget
       const totalAmount = payableApplications.reduce((sum, app) => {
-        const amount = Number(app.budget_amount ?? app.agreed_amount ?? 0);
+        // Use application budget_amount first, fallback to campaign budget
+        const amount = Number(app.budget_amount ?? campaign.budget ?? 0);
         return sum + (isNaN(amount) ? 0 : amount);
       }, 0);
 
       if (!totalAmount || totalAmount <= 0) {
         return {
           success: false,
-          message: "Invalid total amount for bulk payment",
+          message: "Invalid total amount for bulk payment. Applications must have budget_amount or campaign must have budget",
         };
       }
 
-      // Get platform_fee_percentage from campaign
-      const platformFeePercentage = campaign.platform_fee_percentage;
-
-      if (platformFeePercentage === null || platformFeePercentage === undefined) {
-        return {
-          success: false,
-          message: "Campaign does not have a valid platform fee percentage",
-        };
-      }
-
-      // Check if bulk payment order already exists for this campaign
-      const { data: existingBulkPayment } = await supabaseAdmin
-        .from("v1_payment_orders")
-        .select("id, status")
-        .eq("payable_type", "CAMPAIGN")
-        .eq("payable_id", campaignId)
-        .maybeSingle();
-
-      if (existingBulkPayment) {
-        const normalizedStatus = this.normalizeStatus(existingBulkPayment.status) || existingBulkPayment.status;
-        if (normalizedStatus === "VERIFIED") {
-          return {
-            success: false,
-            message: "Bulk payment already completed for this campaign",
-          };
+      // Get platform fee from applications first, fallback to campaign
+      // Check if any application has platform_fee_amount or platform_fee_percentage
+      let platformFeeAmount = null;
+      let platformFeePercentage = null;
+      
+      // Find first application with platform fee (prefer amount over percentage)
+      const appWithFeeAmount = payableApplications.find(app => 
+        app.platform_fee_amount !== null && app.platform_fee_amount !== undefined && app.platform_fee_amount > 0
+      );
+      
+      if (appWithFeeAmount) {
+        // Use fixed amount from application
+        platformFeeAmount = appWithFeeAmount.platform_fee_amount;
+      } else {
+        // Check for percentage in applications
+        const appWithFeePercentage = payableApplications.find(app => 
+          app.platform_fee_percentage !== null && app.platform_fee_percentage !== undefined
+        );
+        
+        if (appWithFeePercentage) {
+          platformFeePercentage = appWithFeePercentage.platform_fee_percentage;
+        } else {
+          // Fallback to campaign: prefer amount over percentage
+          platformFeeAmount = campaign.platform_fee_amount ?? null;
+          platformFeePercentage = campaign.platform_fee_percentage ?? null;
         }
+      }
+
+      if (platformFeeAmount === null && platformFeePercentage === null) {
         return {
           success: false,
-          message: "Bulk payment order already exists for this campaign",
+          message: "Applications and campaign do not have a valid platform fee (percentage or amount)",
         };
       }
 
-      // Calculate commission breakdown using total amount and platform_fee_percentage
-      const breakdown = await this.calculateCommissionBreakdown(totalAmount, platformFeePercentage);
+      // Calculate commission breakdown using total amount and platform fee (amount or percentage)
+      const breakdown = await this.calculateCommissionBreakdown(totalAmount, platformFeePercentage, platformFeeAmount);
 
       // Razorpay receipt must be <= 40 chars
       const rawReceipt = `camp_${campaignId.substring(0, 20)}_${Date.now()}`;
@@ -549,6 +601,33 @@ class PaymentService {
           success: false,
           message: "Failed to create payment order",
           error: orderError.message,
+        };
+      }
+
+      // Create entries in v1_application_payments table
+      const applicationPaymentEntries = payableApplications.map(app => ({
+        payment_order_id: paymentOrder.id,
+        application_id: app.id,
+      }));
+
+      const { error: applicationPaymentsError } = await supabaseAdmin
+        .from("v1_application_payments")
+        .insert(applicationPaymentEntries);
+
+      if (applicationPaymentsError) {
+        console.error(
+          "[v1/PaymentService/createBulkPaymentOrderForCampaign] Error creating application payments:",
+          applicationPaymentsError
+        );
+        // Rollback payment order creation
+        await supabaseAdmin
+          .from("v1_payment_orders")
+          .delete()
+          .eq("id", paymentOrder.id);
+        return {
+          success: false,
+          message: "Failed to create application payment records",
+          error: applicationPaymentsError.message,
         };
       }
 
@@ -646,22 +725,23 @@ class PaymentService {
         };
       }
 
-      // Get application_id from payment order metadata or payable_id
-      const orderApplicationId = paymentOrder.payable_type === "APPLICATION" 
-        ? paymentOrder.payable_id 
-        : paymentOrder.metadata?.application_id;
+      // Handle different payment types
+      let applicationsToUpdate = [];
+      let campaignData = null;
 
-      // If application_id is provided in request, validate it matches the payment order
-      if (application_id && application_id !== orderApplicationId) {
-        return {
-          success: false,
-          message: "Application ID mismatch with payment order",
-        };
-      }
+      if (paymentOrder.payable_type === "APPLICATION") {
+        // Single application payment
+        const orderApplicationId = paymentOrder.payable_id;
 
-      // Verify application exists and is ACCEPTED, then transition phase after payment
-      let application = null;
-      if (orderApplicationId) {
+        // If application_id is provided in request, validate it matches
+        if (application_id && application_id !== orderApplicationId) {
+          return {
+            success: false,
+            message: "Application ID mismatch with payment order",
+          };
+        }
+
+        // Get application
         const { data: appData, error: applicationError } = await supabaseAdmin
           .from("v1_applications")
           .select(`
@@ -683,20 +763,74 @@ class PaymentService {
           };
         }
 
-        application = appData;
-
-        if (application.phase !== "ACCEPTED") {
+        if (appData.phase !== "ACCEPTED") {
           return {
             success: false,
             message: "Application must be accepted before payment",
           };
         }
 
-        // Fetch campaign to check requires_script
+        applicationsToUpdate = [appData];
+        campaignData = appData.v1_campaigns;
+
+      } else if (paymentOrder.payable_type === "CAMPAIGN") {
+        // Bulk campaign payment - get all applications from v1_application_payments
+        const { data: applicationPayments, error: appPaymentsError } = await supabaseAdmin
+          .from("v1_application_payments")
+          .select(`
+            application_id,
+            v1_applications!inner(
+              id,
+              phase,
+              campaign_id,
+              v1_campaigns!inner(
+                id,
+                brand_id
+              )
+            )
+          `)
+          .eq("payment_order_id", paymentOrder.id);
+
+        if (appPaymentsError) {
+          return {
+            success: false,
+            message: "Failed to load applications for bulk payment",
+            error: appPaymentsError.message,
+          };
+        }
+
+        if (!applicationPayments || applicationPayments.length === 0) {
+          return {
+            success: false,
+            message: "No applications found for this bulk payment order",
+          };
+        }
+
+        // Validate all applications are in ACCEPTED phase
+        const invalidApplications = applicationPayments.filter(
+          ap => ap.v1_applications.phase !== "ACCEPTED"
+        );
+
+        if (invalidApplications.length > 0) {
+          return {
+            success: false,
+            message: `Some applications are not in ACCEPTED phase: ${invalidApplications.map(ap => ap.application_id).join(", ")}`,
+          };
+        }
+
+        applicationsToUpdate = applicationPayments.map(ap => ap.v1_applications);
+        if (applicationsToUpdate.length > 0) {
+          campaignData = applicationsToUpdate[0].v1_campaigns;
+        }
+      }
+
+      // Update application phases if we have applications
+      if (applicationsToUpdate.length > 0 && campaignData) {
+        // Get campaign to check requires_script
         const { data: campaign, error: campaignError } = await supabaseAdmin
           .from("v1_campaigns")
           .select("requires_script")
-          .eq("id", application.campaign_id)
+          .eq("id", campaignData.id)
           .maybeSingle();
 
         if (campaignError) {
@@ -706,13 +840,14 @@ class PaymentService {
         // Determine next phase based on requires_script
         const nextPhase = campaign?.requires_script === true ? 'SCRIPT' : 'WORK';
 
-        // Update application phase after payment verification
+        // Update all application phases
+        const applicationIds = applicationsToUpdate.map(app => app.id);
         const { error: phaseUpdateError } = await supabaseAdmin
           .from("v1_applications")
           .update({
             phase: nextPhase
           })
-          .eq("id", orderApplicationId);
+          .in("id", applicationIds);
 
         if (phaseUpdateError) {
           console.error("[v1/PaymentService/verifyPayment] Phase update error:", phaseUpdateError);
@@ -744,10 +879,10 @@ class PaymentService {
         };
       }
 
-      // Insert transaction record into v1_transactions after payment verification
-      if (application && application.v1_campaigns) {
+      // Insert transaction records into v1_transactions after payment verification
+      if (applicationsToUpdate.length > 0 && campaignData) {
         try {
-          const brandOwnerId = application.v1_campaigns.brand_id;
+          const brandOwnerId = campaignData.brand_id;
           
           // Get admin user ID (first admin user found, or use system admin)
           const { data: adminUser } = await supabaseAdmin
@@ -761,31 +896,86 @@ class PaymentService {
           // If no admin user found, use system admin ID
           const adminUserId = adminUser?.id || process.env.SYSTEM_ADMIN_USER_ID || "00000000-0000-0000-0000-000000000000";
 
-          // Calculate amounts from payment order metadata
-          const grossAmount = paymentOrder.amount || paymentOrder.metadata?.budget_amount || 0;
-          const platformFee = paymentOrder.metadata?.commission_amount || 0;
-          const netAmount = paymentOrder.metadata?.net_amount || (grossAmount - platformFee);
+          if (paymentOrder.payable_type === "APPLICATION") {
+            // Single application - one transaction
+            const application = applicationsToUpdate[0];
+            const grossAmount = paymentOrder.amount || paymentOrder.metadata?.budget_amount || 0;
+            const platformFee = paymentOrder.metadata?.commission_amount || 0;
+            const netAmount = paymentOrder.metadata?.net_amount || (grossAmount - platformFee);
 
-          // Insert transaction record
-          const { error: transactionError } = await supabaseAdmin
-            .from("v1_transactions")
-            .insert({
-              application_id: orderApplicationId,
-              type: "BRAND_PAYMENT",
-              from_entity: brandOwnerId,
-              to_entity: adminUserId,
-              gross_amount: grossAmount,
-              platform_fee: platformFee,
-              net_amount: netAmount,
-              status: "COMPLETED",
+            const { error: transactionError } = await supabaseAdmin
+              .from("v1_transactions")
+              .insert({
+                application_id: application.id,
+                type: "BRAND_PAYMENT",
+                from_entity: brandOwnerId,
+                to_entity: adminUserId,
+                gross_amount: grossAmount,
+                platform_fee: platformFee,
+                net_amount: netAmount,
+                status: "COMPLETED",
+              });
+
+            if (transactionError) {
+              console.error(
+                "[v1/PaymentService/verifyPayment] Transaction insert error:",
+                transactionError
+              );
+            }
+          } else if (paymentOrder.payable_type === "CAMPAIGN") {
+            // Bulk campaign - one transaction per application
+            // Calculate per-application amounts
+            const totalGrossAmount = paymentOrder.amount || paymentOrder.metadata?.total_budget_amount || 0;
+            const totalPlatformFee = paymentOrder.metadata?.commission_amount || 0;
+            const totalNetAmount = paymentOrder.metadata?.net_amount || (totalGrossAmount - totalPlatformFee);
+
+            // Get individual application amounts from metadata or calculate proportionally
+            const applicationIds = applicationsToUpdate.map(app => app.id);
+            const applicationAmounts = paymentOrder.metadata?.application_ids 
+              ? await Promise.all(
+                  applicationIds.map(async (appId) => {
+                    const { data: app } = await supabaseAdmin
+                      .from("v1_applications")
+                      .select("budget_amount, agreed_amount")
+                      .eq("id", appId)
+                      .maybeSingle();
+                    return {
+                      application_id: appId,
+                      amount: app?.budget_amount || app?.agreed_amount || 0,
+                    };
+                  })
+                )
+              : [];
+
+            // Calculate per-application fees proportionally
+            const totalAppAmount = applicationAmounts.reduce((sum, a) => sum + a.amount, 0);
+            
+            const transactionRecords = applicationsToUpdate.map((application) => {
+              const appAmount = applicationAmounts.find(a => a.application_id === application.id)?.amount || 0;
+              const proportion = totalAppAmount > 0 ? appAmount / totalAppAmount : 1 / applicationsToUpdate.length;
+              
+              return {
+                application_id: application.id,
+                type: "BRAND_PAYMENT",
+                from_entity: brandOwnerId,
+                to_entity: adminUserId,
+                gross_amount: appAmount || (totalGrossAmount * proportion),
+                platform_fee: totalPlatformFee * proportion,
+                net_amount: (appAmount || (totalGrossAmount * proportion)) - (totalPlatformFee * proportion),
+                status: "COMPLETED",
+              };
             });
 
-          if (transactionError) {
-            console.error(
-              "[v1/PaymentService/verifyPayment] Transaction insert error:",
-              transactionError
-            );
-            // Don't fail payment verification if transaction record fails, but log it
+            const { error: transactionError } = await supabaseAdmin
+              .from("v1_transactions")
+              .insert(transactionRecords);
+
+            if (transactionError) {
+              console.error(
+                "[v1/PaymentService/verifyPayment] Transaction insert error:",
+                transactionError
+              );
+            }
           }
         } catch (txnErr) {
           console.error(
@@ -803,6 +993,9 @@ class PaymentService {
         success: true,
         payment_order: updatedOrder,
         message: "Payment verified successfully",
+        ...(paymentOrder.payable_type === "CAMPAIGN" && {
+          applications_updated: applicationsToUpdate.length,
+        }),
       };
     } catch (err) {
       console.error("[v1/PaymentService/verifyPayment] Exception:", err);

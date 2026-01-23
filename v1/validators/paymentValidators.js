@@ -49,9 +49,22 @@ const validateVerifyPayment = [
     .withMessage('application_id must be a valid UUID'),
 ];
 
+// Validate bulk payment request body
+const validateBulkPayment = [
+  body('application_ids')
+    .notEmpty()
+    .withMessage('application_ids is required')
+    .isArray({ min: 1 })
+    .withMessage('application_ids must be a non-empty array'),
+  body('application_ids.*')
+    .isUUID()
+    .withMessage('Each application_id must be a valid UUID'),
+];
+
 module.exports = {
   validateApplicationIdParam,
   validateVerifyPayment,
   validateCampaignIdParam,
+  validateBulkPayment,
 };
 

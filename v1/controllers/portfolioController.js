@@ -82,10 +82,28 @@ class PortfolioController {
         (key) => filters[key] === undefined && delete filters[key]
       );
 
-      // Extract pagination
+      // Extract pagination - Using offset + limit for infinite scroll
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100
+      const offset = parseInt(req.query.offset) || 0;
+
+      // Validate pagination
+      if (isNaN(limit) || limit < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid limit. Must be >= 1",
+        });
+      }
+
+      if (isNaN(offset) || offset < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offset. Must be >= 0",
+        });
+      }
+
       const pagination = {
-        page: req.query.page ? parseInt(req.query.page) : 1,
-        limit: req.query.limit ? parseInt(req.query.limit) : 20,
+        limit,
+        offset,
       };
 
       const requesterRole = req.user.role;

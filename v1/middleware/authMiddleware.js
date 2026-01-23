@@ -13,8 +13,21 @@ class AuthMiddleware {
   verifyToken(token) {
     try {
       const decoded = jwt.verify(token, this.jwtSecret);
+      // Ensure decoded token has the expected structure
+      // Token should contain: { id, phone, role } (from authService.generateToken)
+      console.log("[v1/authMiddleware] Token decoded successfully:", {
+        hasId: !!decoded.id,
+        hasRole: !!decoded.role,
+        hasPhone: !!decoded.phone,
+        allFields: Object.keys(decoded),
+      });
       return { success: true, user: decoded };
     } catch (error) {
+      console.log("[v1/authMiddleware] Token verification error:", {
+        error: error.message,
+        errorName: error.name,
+        tokenPrefix: token ? token.substring(0, 20) + "..." : "no token",
+      });
       return { success: false, message: error.message };
     }
   }
@@ -23,7 +36,8 @@ class AuthMiddleware {
    * Middleware to authenticate requests using JWT token
    */
   authenticateToken = (req, res, next) => {
-    const authHeader = req.headers["authorization"];
+    // Check for Authorization header (case-insensitive)
+    const authHeader = req.headers["authorization"] || req.headers["Authorization"];
     const token = authHeader && authHeader.split(" ")[1];
 
     if (!token) {
@@ -46,11 +60,28 @@ class AuthMiddleware {
    * Sets req.user if valid token is present, otherwise continues without req.user
    */
   authenticateTokenOptional = (req, res, next) => {
-    const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1];
+    // Check for Authorization header (Express normalizes to lowercase)
+    const authHeader = req.headers["authorization"] || req.headers["Authorization"];
+    
+    // Extract token - handle "Bearer <token>" or just "<token>"
+    let token = null;
+    if (authHeader) {
+      const parts = authHeader.trim().split(" ");
+      token = parts.length > 1 ? parts[1] : (parts[0].toLowerCase() === "bearer" ? null : parts[0]);
+    }
+
+    console.log("[v1/authMiddleware] authenticateTokenOptional:", {
+      hasAuthHeader: !!authHeader,
+      authHeaderPrefix: authHeader?.substring(0, 30) || "none",
+      hasToken: !!token,
+      tokenLength: token ? token.length : 0,
+      tokenPrefix: token ? token.substring(0, 20) + "..." : "none",
+      allHeaders: Object.keys(req.headers).filter(h => h.toLowerCase().includes("auth")),
+    });
 
     if (!token) {
       // No token provided - continue without authentication
+      console.log("[v1/authMiddleware] No token provided - continuing without auth");
       req.user = undefined;
       return next();
     }
@@ -59,11 +90,21 @@ class AuthMiddleware {
     const result = this.verifyToken(token);
     if (!result.success) {
       // Invalid token - continue without authentication
+      console.log("[v1/authMiddleware] Token verification failed:", {
+        error: result.message,
+        tokenPrefix: token.substring(0, 20) + "...",
+      });
       req.user = undefined;
       return next();
     }
 
     // Valid token - set user
+    console.log("[v1/authMiddleware] Token verified successfully:", {
+      userId: result.user?.id,
+      userRole: result.user?.role,
+      userPhone: result.user?.phone,
+      allFields: Object.keys(result.user || {}),
+    });
     req.user = result.user;
     next();
   };

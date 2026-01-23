@@ -26,20 +26,37 @@ const getHistory = async (req, res) => {
       });
     }
 
-    // Get pagination params
-    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    // Get pagination params - Standardized pagination
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Default 20, max 100
     const offset = parseInt(req.query.offset) || 0;
 
+    // Validate pagination
+    if (isNaN(limit) || limit < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid limit. Must be >= 1",
+      });
+    }
+
+    if (isNaN(offset) || offset < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid offset. Must be >= 0",
+      });
+    }
+
     // Get chat history
-    const messages = await ChatService.getChatHistory(applicationId, limit, offset);
+    const result = await ChatService.getChatHistory(applicationId, limit, offset);
 
     res.json({ 
       success: true, 
-      data: messages,
-      pagination: {
+      data: result.messages || [],
+      pagination: result.pagination || {
         limit,
         offset,
-        count: messages.length
+        count: (result.messages || []).length,
+        total: result.total || 0,
+        hasMore: result.hasMore || false,
       }
     });
   } catch (error) {

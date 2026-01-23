@@ -15,14 +15,37 @@ const ChatService = {
 
     // Check if payment is verified before creating chat
     // Chat should only be created after brand owner pays the platform
-    const { data: paymentOrder } = await supabaseAdmin
+    // Payment orders use payable_id and payable_type, not application_id
+    // Need to check both APPLICATION type (single) and CAMPAIGN type (bulk) payments
+    
+    // Check for single application payment (payable_type = 'APPLICATION')
+    const { data: singlePaymentOrder } = await supabaseAdmin
       .from('v1_payment_orders')
-      .select('status')
-      .eq('application_id', applicationId)
+      .select('id, status')
+      .eq('payable_type', 'APPLICATION')
+      .eq('payable_id', applicationId)
       .eq('status', 'VERIFIED')
       .maybeSingle();
 
-    if (!paymentOrder) {
+    // Check for bulk campaign payment (payable_type = 'CAMPAIGN')
+    // Applications are linked through v1_application_payments table
+    const { data: bulkPaymentOrder } = await supabaseAdmin
+      .from('v1_application_payments')
+      .select(`
+        payment_order_id,
+        v1_payment_orders!inner(
+          id,
+          status,
+          payable_type
+        )
+      `)
+      .eq('application_id', applicationId)
+      .eq('v1_payment_orders.payable_type', 'CAMPAIGN')
+      .eq('v1_payment_orders.status', 'VERIFIED')
+      .maybeSingle();
+
+    // Payment must be verified in either single or bulk payment
+    if (!singlePaymentOrder && !bulkPaymentOrder) {
       throw new Error('Payment must be verified before chat can be created');
     }
 
@@ -227,14 +250,14 @@ const ChatService = {
    * @param {number} offset - Offset for pagination
    * @returns {Promise<Array>} - Array of messages
    */
-  async getChatHistory(applicationId, limit = 50, offset = 0) {
+  async getChatHistory(applicationId, limit = 20, offset = 0) {
     if (!applicationId) {
       throw new Error('applicationId is required');
     }
 
-    if (limit > 100) {
-      limit = 100; // Cap at 100 messages per request
-    }
+    // Cap at 100 messages per request
+    const validatedLimit = Math.min(limit, 100);
+    const validatedOffset = Math.max(0, offset);
 
     const { data: chat, error: chatError } = await supabaseAdmin
       .from('v1_chats')
@@ -248,22 +271,52 @@ const ChatService = {
     }
 
     if (!chat) {
-      return [];
+      return {
+        messages: [],
+        pagination: {
+          limit: validatedLimit,
+          offset: validatedOffset,
+          count: 0,
+          total: 0,
+          hasMore: false,
+        }
+      };
     }
 
+    // Get total count
+    const { count: totalCount } = await supabaseAdmin
+      .from('v1_chat_messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('chat_id', chat.id);
+
+    // Get messages
     const { data, error } = await supabaseAdmin
       .from('v1_chat_messages')
       .select('*')
       .eq('chat_id', chat.id)
       .order('created_at', { ascending: true })
-      .range(offset, offset + limit - 1);
+      .range(validatedOffset, validatedOffset + validatedLimit - 1);
 
     if (error) {
       console.error('Error getting chat history:', error);
       throw new Error(`Failed to get chat history: ${error.message}`);
     }
 
-    return data || [];
+    const messages = data || [];
+    const hasMore = (validatedOffset + validatedLimit) < (totalCount || 0);
+
+    return {
+      messages,
+      total: totalCount || 0,
+      hasMore,
+      pagination: {
+        limit: validatedLimit,
+        offset: validatedOffset,
+        count: messages.length,
+        total: totalCount || 0,
+        hasMore,
+      }
+    };
   },
 
   /**

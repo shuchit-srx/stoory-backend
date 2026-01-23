@@ -377,24 +377,13 @@ class MOUService {
       const platformFeeAmount = application.platform_fee_amount || campaign.platform_fee_amount || 0;
       const agreedAmount = application.agreed_amount || campaign.net_amount || 0;
       const requiresScript = campaign.requires_script || false;
-      const startDeadline = campaign.start_deadline || null;
-      const bufferDays = campaign.buffer_days || 3; // Default to 3 days if not specified
+      const bufferDays = campaign.buffer_days || 0;
 
-      // Calculate script deadline (if script is required, set it to 3 days before work deadline)
-      let scriptDeadline = null;
-      let workDeadline = null;
-      let bufferDeadline = null;
-      
-      if (startDeadline) {
-        workDeadline = new Date(startDeadline);
-        if (requiresScript) {
-          scriptDeadline = new Date(workDeadline);
-          scriptDeadline.setDate(scriptDeadline.getDate() - 3); // 3 days before work deadline
-        }
-        // Calculate buffer deadline (work deadline + buffer days)
-        bufferDeadline = new Date(workDeadline);
-        bufferDeadline.setDate(bufferDeadline.getDate() + bufferDays);
-      }
+      // Get deadlines directly from campaign (all values come from user, no calculations)
+      const scriptDeadline = campaign.script_deadline ? new Date(campaign.script_deadline) : null;
+      const workDeadline = campaign.work_deadline ? new Date(campaign.work_deadline) : null;
+      // Note: buffer_deadline is not in the schema, so it's not used
+      const bufferDeadline = null;
 
       // Format dates
       const formatDate = (date) => {

@@ -7,6 +7,7 @@ const {
   validateApplicationIdParam,
   validateVerifyPayment,
   validateCampaignIdParam,
+  validateBulkPayment,
 } = require("../validators/paymentValidators");
 
 /**
@@ -30,12 +31,13 @@ router.post(
   PaymentController.createApplicationPaymentOrder
 );
 
-// Create bulk payment order for campaign (Brand pays admin for all accepted applications)
+// Create bulk payment order for campaign (Brand pays admin for selected accepted applications)
 router.post(
   "/campaigns/:campaignId/bulk",
   authMiddleware.authenticateToken,
   authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
   validateCampaignIdParam,
+  validateBulkPayment,
   PaymentController.createCampaignBulkPaymentOrder
 );
 
