@@ -194,13 +194,29 @@ const initSocket = (server) => {
         );
 
         // Broadcast to room (including sender)
-        io.to(`app_${applicationId}`).emit('receive_message', {
+        // IMPORTANT: chat_id must be applicationId (not chat.id) to match frontend expectations
+        const roomName = `app_${applicationId}`;
+        const emitPayload = {
           ...savedMessage,
+          chat_id: applicationId, // Override chat_id to be applicationId for frontend
+          sender_id: savedMessage.sender_id, // Ensure sender_id is present
           sender: {
             id: socket.user.id,
             // Add other user info if needed
           }
+        };
+        
+        // Log for debugging
+        const roomSockets = await io.in(roomName).fetchSockets();
+        console.log(`[Socket] Emitting receive_message to room ${roomName}`, {
+          messageId: savedMessage.id,
+          chat_id: applicationId,
+          sender_id: socket.user.id,
+          roomClients: roomSockets.map(s => s.userId),
+          roomClientCount: roomSockets.length
         });
+        
+        io.to(roomName).emit('receive_message', emitPayload);
 
         // Acknowledge to sender
         if (callback) {
