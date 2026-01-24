@@ -374,13 +374,20 @@ const ChatService = {
 
         if (recipientId) {
           const NotificationService = require('./notificationService');
-          // Send notification (socket will handle if online, FCM if offline)
-          await NotificationService.notifyChatMessage(
-            applicationId,
-            userId,
-            recipientId,
-            safeMessage
-          );
+          // Skip notification if recipient is actively viewing the chat
+          const isViewingChat = NotificationService.isUserInChatRoom(recipientId, applicationId);
+          
+          if (!isViewingChat) {
+            // Send notification (socket will handle if online, FCM if offline)
+            await NotificationService.notifyChatMessage(
+              applicationId,
+              userId,
+              recipientId,
+              safeMessage
+            );
+          } else {
+            console.log(`[ChatService/saveMessage] Skipping notification - user ${recipientId} is viewing chat for application ${applicationId}`);
+          }
         }
       }
     } catch (notifError) {
@@ -483,7 +490,7 @@ const ChatService = {
     // Get application details to find participants
     const { data: application } = await supabaseAdmin
       .from('v1_applications')
-      .select('influencer_id, brand_id')
+      .select('influencer_id, v1_campaigns!inner(brand_id)')
       .eq('id', applicationId)
       .single();
 
@@ -501,8 +508,9 @@ const ChatService = {
     if (application) {
       try {
         const NotificationService = require('./notificationService');
+        const brandId = application.v1_campaigns?.brand_id;
         const otherUserId = closedById === application.influencer_id 
-          ? application.brand_id 
+          ? brandId 
           : application.influencer_id;
         
         if (otherUserId) {

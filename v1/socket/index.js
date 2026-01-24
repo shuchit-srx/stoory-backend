@@ -3,16 +3,25 @@ const jwt = require('jsonwebtoken');
 const { ChatService, NotificationService } = require('../services');
 const { supabaseAdmin } = require('../db/config');
 
-// Rate limiting configuration
+// Rate limiting configuration - Per-room rate limiting
+// Structure: Map<userId, Map<roomName, {count, resetTime}>>
 const messageRateLimits = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_MESSAGES_PER_WINDOW = 30; // Max 30 messages per minute
+const MAX_MESSAGES_PER_WINDOW = 30; // Max 30 messages per minute per room
+
+// Track user's active rooms for reconnection
+const userActiveRooms = new Map(); // Map<userId, Set<roomName>>
 
 // Cleanup expired rate limit entries to prevent memory leaks
 setInterval(() => {
   const now = Date.now();
-  for (const [userId, limits] of messageRateLimits.entries()) {
-    if (now > limits.resetTime) {
+  for (const [userId, roomLimits] of messageRateLimits.entries()) {
+    for (const [roomName, limits] of roomLimits.entries()) {
+      if (now > limits.resetTime) {
+        roomLimits.delete(roomName);
+      }
+    }
+    if (roomLimits.size === 0) {
       messageRateLimits.delete(userId);
     }
   }
@@ -65,6 +74,18 @@ const initSocket = (server) => {
     socket.currentRoom = null;
     socket.userId = socket.user.id;
 
+    // Restore room membership on reconnection
+    const userRooms = userActiveRooms.get(socket.user.id);
+    if (userRooms && userRooms.size > 0) {
+      // Rejoin all previous rooms
+      userRooms.forEach((roomName) => {
+        socket.join(roomName);
+        console.log(`User ${socket.user.id} rejoined room ${roomName} on reconnection`);
+      });
+      // Set current room to the first one (or most recent)
+      socket.currentRoom = Array.from(userRooms)[0];
+    }
+
     // Handle joining a chat room
     socket.on('join_chat', async ({ applicationId }) => {
       try {
@@ -111,6 +132,12 @@ const initSocket = (server) => {
         // Join new room
         socket.join(roomName);
         socket.currentRoom = roomName;
+
+        // Track room membership for reconnection
+        if (!userActiveRooms.has(socket.user.id)) {
+          userActiveRooms.set(socket.user.id, new Set());
+        }
+        userActiveRooms.get(socket.user.id).add(roomName);
 
         console.log(`User ${socket.user.id} joined room ${roomName}`);
 
@@ -159,35 +186,42 @@ const initSocket = (server) => {
           });
         }
 
-        // Check rate limits
+        const roomName = `app_${applicationId}`;
+
+        // Verify user is in room (check before processing)
+        if (!socket.rooms.has(roomName)) {
+          return socket.emit('error', {
+            message: 'You must join the chat room first'
+          });
+        }
+
+        // Per-room rate limiting
         const now = Date.now();
-        const userLimits = messageRateLimits.get(socket.userId) || {
+        if (!messageRateLimits.has(socket.userId)) {
+          messageRateLimits.set(socket.userId, new Map());
+        }
+        const userRoomLimits = messageRateLimits.get(socket.userId);
+        const roomLimits = userRoomLimits.get(roomName) || {
           count: 0,
           resetTime: now + RATE_LIMIT_WINDOW
         };
 
         // Reset window if expired
-        if (now > userLimits.resetTime) {
-          userLimits.count = 0;
-          userLimits.resetTime = now + RATE_LIMIT_WINDOW;
+        if (now > roomLimits.resetTime) {
+          roomLimits.count = 0;
+          roomLimits.resetTime = now + RATE_LIMIT_WINDOW;
         }
 
         // Enforce rate limit
-        if (userLimits.count >= MAX_MESSAGES_PER_WINDOW) {
+        if (roomLimits.count >= MAX_MESSAGES_PER_WINDOW) {
           return socket.emit('error', {
             message: 'Rate limit exceeded. Please wait before sending more messages.'
           });
         }
 
-        userLimits.count++;
-        messageRateLimits.set(socket.userId, userLimits);
-
-        // Verify user is in room
-        if (!socket.rooms.has(`app_${applicationId}`)) {
-          return socket.emit('error', {
-            message: 'You must join the chat room first'
-          });
-        }
+        roomLimits.count++;
+        userRoomLimits.set(roomName, roomLimits);
+        messageRateLimits.set(socket.userId, userRoomLimits);
 
         // Save message to database
         const savedMessage = await ChatService.saveMessage(
@@ -197,8 +231,14 @@ const initSocket = (server) => {
           attachmentUrl
         );
 
+        // Validate room membership again right before broadcast (prevent race condition)
+        if (!socket.rooms.has(roomName)) {
+          return socket.emit('error', {
+            message: 'You left the chat room. Please rejoin to send messages.'
+          });
+        }
+
         // Prepare payload for broadcast (chat_id must be applicationId for frontend)
-        const roomName = `app_${applicationId}`;
         const emitPayload = {
           ...savedMessage,
           chat_id: applicationId,
@@ -248,9 +288,11 @@ const initSocket = (server) => {
         return;
       }
 
-      // Broadcast typing status to other users in room
-      if (socket.currentRoom && socket.currentRoom === `app_${applicationId}`) {
-        socket.to(socket.currentRoom).emit('user_typing', {
+      const roomName = `app_${applicationId}`;
+
+      // Validate user is in room before broadcasting typing status
+      if (socket.rooms.has(roomName)) {
+        socket.to(roomName).emit('user_typing', {
           userId: socket.user.id,
           isTyping: Boolean(isTyping),
           timestamp: new Date().toISOString()
@@ -321,14 +363,28 @@ const initSocket = (server) => {
     });
 
     // Handle leaving chat room
-    socket.on('leave_chat', () => {
-      if (socket.currentRoom) {
-        socket.to(socket.currentRoom).emit('user_left', {
+    socket.on('leave_chat', ({ applicationId }) => {
+      const roomName = applicationId ? `app_${applicationId}` : socket.currentRoom;
+      
+      if (roomName && socket.rooms.has(roomName)) {
+        socket.to(roomName).emit('user_left', {
           userId: socket.user.id,
           timestamp: new Date().toISOString()
         });
-        socket.leave(socket.currentRoom);
-        socket.currentRoom = null;
+        socket.leave(roomName);
+        
+        // Remove from tracked rooms
+        const userRooms = userActiveRooms.get(socket.user.id);
+        if (userRooms) {
+          userRooms.delete(roomName);
+          if (userRooms.size === 0) {
+            userActiveRooms.delete(socket.user.id);
+          }
+        }
+        
+        if (socket.currentRoom === roomName) {
+          socket.currentRoom = null;
+        }
       }
     });
 
@@ -347,6 +403,9 @@ const initSocket = (server) => {
 
       // Cleanup rate limit data
       messageRateLimits.delete(socket.userId);
+      
+      // Cleanup room tracking
+      userActiveRooms.delete(socket.user.id);
     });
   });
 

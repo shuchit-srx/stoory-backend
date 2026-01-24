@@ -58,6 +58,14 @@ class FCMService {
         return { success: false, error: 'FCM not initialized' };
       }
 
+      // Check if token already exists for this user (token refresh scenario)
+      const { data: existingToken } = await supabaseAdmin
+        .from('v1_fcm_tokens')
+        .select('token, user_id')
+        .eq('user_id', userId)
+        .eq('token', token)
+        .maybeSingle();
+
       const { data, error } = await supabaseAdmin
         .from('v1_fcm_tokens')
         .upsert(
@@ -79,7 +87,7 @@ class FCMService {
         return { success: false, error: error.message };
       }
 
-      // Deactivate other tokens
+      // Deactivate other tokens (single active device policy)
       const { error: deactivateError } = await supabaseAdmin
         .from('v1_fcm_tokens')
         .update({ is_active: false })
@@ -88,6 +96,11 @@ class FCMService {
 
       if (deactivateError) {
         console.warn('⚠️ [v1/FCM] Deactivate old tokens failed:', deactivateError);
+      }
+
+      // If token was updated (not new), log it for monitoring
+      if (existingToken) {
+        console.log(`✅ [v1/FCM] Token updated for user ${userId}`);
       }
 
       return { success: true, data };
@@ -218,17 +231,23 @@ class FCMService {
     const failed = [];
     const failedDetails = [];
 
-    for (let i = 0; i < tokens.length; i++) {
+    // Use batch sending for multiple tokens (more efficient)
+    if (tokens.length === 0) {
+      return { successful, failed, failedDetails };
+    }
+
+    if (tokens.length === 1) {
+      // Single token - use regular send
       try {
         await this.app.messaging().send({
-          token: tokens[i],
+          token: tokens[0],
           ...message,
         });
-        successful.push(tokens[i]);
+        successful.push(tokens[0]);
       } catch (error) {
-        failed.push(tokens[i]);
+        failed.push(tokens[0]);
         failedDetails.push({
-          token: tokens[i],
+          token: tokens[0],
           errorCode: error?.code || null,
           message: error?.message || 'send failed',
         });
@@ -237,7 +256,66 @@ class FCMService {
           error?.code === 'messaging/invalid-registration-token' ||
           error?.code === 'messaging/registration-token-not-registered'
         ) {
-          await this.removeInvalidToken(tokens[i]);
+          await this.removeInvalidToken(tokens[0]);
+        }
+      }
+    } else {
+      // Multiple tokens - use multicast for batch sending
+      try {
+        const multicastMessage = {
+          ...message,
+          tokens: tokens,
+        };
+
+        const response = await this.app.messaging().sendMulticast(multicastMessage);
+
+        // Process responses
+        response.responses.forEach((result, index) => {
+          if (result.success) {
+            successful.push(tokens[index]);
+          } else {
+            failed.push(tokens[index]);
+            failedDetails.push({
+              token: tokens[index],
+              errorCode: result.error?.code || null,
+              message: result.error?.message || 'send failed',
+            });
+
+            // Remove invalid tokens
+            if (
+              result.error?.code === 'messaging/invalid-registration-token' ||
+              result.error?.code === 'messaging/registration-token-not-registered'
+            ) {
+              this.removeInvalidToken(tokens[index]);
+            }
+          }
+        });
+      } catch (error) {
+        // If multicast fails, fallback to individual sends
+        console.warn('[v1/FCM] Multicast failed, falling back to individual sends:', error.message);
+        
+        for (let i = 0; i < tokens.length; i++) {
+          try {
+            await this.app.messaging().send({
+              token: tokens[i],
+              ...message,
+            });
+            successful.push(tokens[i]);
+          } catch (err) {
+            failed.push(tokens[i]);
+            failedDetails.push({
+              token: tokens[i],
+              errorCode: err?.code || null,
+              message: err?.message || 'send failed',
+            });
+
+            if (
+              err?.code === 'messaging/invalid-registration-token' ||
+              err?.code === 'messaging/registration-token-not-registered'
+            ) {
+              await this.removeInvalidToken(tokens[i]);
+            }
+          }
         }
       }
     }

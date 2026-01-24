@@ -31,6 +31,32 @@ class NotificationService {
     return this.onlineUsers.has(userId) && this.onlineUsers.get(userId).size > 0;
   }
 
+  isUserInChatRoom(userId, applicationId) {
+    if (!this.io || !this.isUserOnline(userId)) {
+      return false;
+    }
+
+    const roomName = `app_${applicationId}`;
+    const room = this.io.sockets.adapter.rooms.get(roomName);
+    if (!room || room.size === 0) {
+      return false;
+    }
+
+    // Check if any of user's sockets are in the room
+    const userSockets = this.onlineUsers.get(userId);
+    if (!userSockets || userSockets.size === 0) {
+      return false;
+    }
+
+    for (const socketId of userSockets) {
+      if (room.has(socketId)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   async logDeliveryAttempt(notificationId, method, success, details = {}) {
     try {
       const { error } = await supabaseAdmin.from('v1_notification_delivery_attempts').insert({
@@ -124,6 +150,9 @@ class NotificationService {
       if (deliveryResult.sent) {
         return { success: true, method, deliveryResult };
       }
+
+      // Fallback to FCM if socket send failed
+      console.log(`[v1/Notification] Socket send failed for user ${userId}, falling back to FCM`);
     }
 
     method = 'fcm';
@@ -143,6 +172,27 @@ class NotificationService {
 
   async storeNotification(notificationData) {
     try {
+      // Deduplication: Check for recent duplicate notifications (within 5 seconds)
+      // Prevents duplicate notifications from being created due to retries or race conditions
+      if (notificationData.type === 'CHAT_MESSAGE' && notificationData.data?.applicationId) {
+        const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
+        const { data: existing } = await supabaseAdmin
+          .from('v1_notifications')
+          .select('id')
+          .eq('user_id', notificationData.userId)
+          .eq('type', notificationData.type)
+          .eq('data->>applicationId', notificationData.data.applicationId)
+          .gte('created_at', fiveSecondsAgo)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (existing) {
+          console.log(`[v1/Notification] Duplicate notification detected (applicationId: ${notificationData.data.applicationId}), skipping`);
+          return { success: true, notification: existing, duplicate: true };
+        }
+      }
+
       const { data, error } = await supabaseAdmin
         .from('v1_notifications')
         .insert({
