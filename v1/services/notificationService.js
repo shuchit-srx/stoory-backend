@@ -5,6 +5,19 @@ class NotificationService {
   constructor() {
     this.onlineUsers = new Map(); // Map<userId, Set<socketId>>
     this.io = null;
+    
+    // Notification batching
+    this.notificationQueue = new Map(); // Map<userId, Array<notificationData>>
+    this.batchTimer = null;
+    this.BATCH_WINDOW = 5000; // 5 seconds
+    this.MAX_BATCH_SIZE = 10; // Max notifications per batch
+    
+    // Retry queue with exponential backoff
+    this.retryQueue = new Map(); // Map<notificationId, {attempts, nextRetry, data}>
+    this.retryTimer = null;
+    this.MAX_RETRIES = 5;
+    this.INITIAL_RETRY_DELAY = 2000; // 2 seconds
+    this.MAX_RETRY_DELAY = 30000; // 30 seconds
   }
 
   setSocketIO(io) {
@@ -76,7 +89,12 @@ class NotificationService {
   }
 
   sendSocketNotification(userId, notificationData) {
-    if (!this.io || !this.isUserOnline(userId)) {
+    if (!this.io) {
+      console.warn('[v1/Notification] Socket.IO not initialized');
+      return { sent: false, reason: 'not_initialized' };
+    }
+
+    if (!this.isUserOnline(userId)) {
       return { sent: false, reason: 'offline' };
     }
 
@@ -123,6 +141,11 @@ class NotificationService {
         badge: notificationData.badge || 1,
       });
 
+      // Add reason for clarity
+      if (result.success && result.sent === 0) {
+        result.reason = 'no_tokens';
+      }
+
       return result;
     } catch (error) {
       console.error('[v1/Notification] FCM send error:', error);
@@ -134,6 +157,8 @@ class NotificationService {
     const online = this.isUserOnline(userId);
     let deliveryResult = null;
     let method = null;
+
+    console.log(`[v1/Notification] Sending notification to user ${userId} (online: ${online})`);
 
     if (online) {
       method = 'socket';
@@ -148,6 +173,7 @@ class NotificationService {
       }
 
       if (deliveryResult.sent) {
+        console.log(`[v1/Notification] Socket notification sent successfully to user ${userId}`);
         return { success: true, method, deliveryResult };
       }
 
@@ -158,16 +184,25 @@ class NotificationService {
     method = 'fcm';
     deliveryResult = await this.sendFCMNotification(userId, notificationData);
 
+    // Improved success condition: success=true with sent=0 is valid (no tokens, not an error)
+    const fcmSuccess = deliveryResult.success && (
+      deliveryResult.sent > 0 || 
+      (deliveryResult.sent === 0 && deliveryResult.reason === 'no_tokens' && !deliveryResult.error)
+    );
+
     if (notificationId) {
-      await this.logDeliveryAttempt(notificationId, method, deliveryResult.success && deliveryResult.sent > 0, {
+      await this.logDeliveryAttempt(notificationId, method, fcmSuccess, {
         sent: deliveryResult.sent || 0,
         failed: deliveryResult.failed || 0,
         error: deliveryResult.error || null,
+        reason: deliveryResult.reason || null,
         details: deliveryResult.details || null,
       });
     }
 
-    return { success: deliveryResult.success && deliveryResult.sent > 0, method, deliveryResult };
+    console.log(`[v1/Notification] FCM notification result for user ${userId}: success=${fcmSuccess}, sent=${deliveryResult.sent || 0}`);
+
+    return { success: fcmSuccess, method, deliveryResult };
   }
 
   async storeNotification(notificationData) {
@@ -246,6 +281,13 @@ class NotificationService {
   }
 
   async sendAndStoreNotification(userId, notificationData) {
+    // Check if notification should be batched
+    const shouldBatch = this.shouldBatchNotification(notificationData.type);
+    
+    if (shouldBatch) {
+      return await this.batchNotification(userId, notificationData);
+    }
+
     const storeResult = await this.storeNotification({ ...notificationData, userId });
     if (!storeResult.success) {
       return { stored: false, sent: false, error: storeResult.error };
@@ -258,6 +300,15 @@ class NotificationService {
       await this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
     } else {
       await this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
+      
+      // Schedule retry for failed FCM notifications
+      if (sendResult.method === 'fcm' && sendResult.deliveryResult?.error) {
+        await this.scheduleRetry(notificationId, {
+          userId,
+          notificationData,
+          attempts: 0
+        });
+      }
     }
 
     return {
@@ -269,52 +320,212 @@ class NotificationService {
     };
   }
 
-  async retryNotification(notificationId, maxRetries = 3) {
-    try {
-      const { data: notification, error: fetchError } = await supabaseAdmin
-        .from('v1_notifications')
-        .select('*')
-        .eq('id', notificationId)
-        .single();
+  shouldBatchNotification(type) {
+    // Batch notifications that can be grouped together
+    return ['CHAT_MESSAGE', 'APPLICATION_CREATED'].includes(type);
+  }
 
-      if (fetchError || !notification) {
-        return { success: false, error: 'Notification not found' };
+  async batchNotification(userId, notificationData) {
+    // Add to queue
+    if (!this.notificationQueue.has(userId)) {
+      this.notificationQueue.set(userId, []);
+    }
+    this.notificationQueue.get(userId).push(notificationData);
+
+    // Start batch timer if not already running
+    if (!this.batchTimer) {
+      this.batchTimer = setTimeout(() => {
+        this.flushAllBatches();
+      }, this.BATCH_WINDOW);
+    }
+
+    // Flush if batch size reached
+    const userQueue = this.notificationQueue.get(userId);
+    if (userQueue.length >= this.MAX_BATCH_SIZE) {
+      await this.flushBatchForUser(userId);
+    }
+
+    return { stored: true, sent: true, batched: true };
+  }
+
+  async flushBatchForUser(userId) {
+    const queue = this.notificationQueue.get(userId);
+    if (!queue || queue.length === 0) {
+      return;
+    }
+
+    this.notificationQueue.delete(userId);
+
+    // Create batched notification
+    const batchedData = this.createBatchedNotification(queue);
+    
+    // Store and send batched notification
+    const storeResult = await this.storeNotification({ ...batchedData, userId });
+    if (!storeResult.success) {
+      console.error('[v1/Notification] Failed to store batched notification:', storeResult.error);
+      return;
+    }
+
+    const notificationId = storeResult.notification.id;
+    const sendResult = await this.sendNotification(userId, batchedData, notificationId);
+
+    if (sendResult.success) {
+      await this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
+    } else {
+      await this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
+      
+      if (sendResult.method === 'fcm' && sendResult.deliveryResult?.error) {
+        await this.scheduleRetry(notificationId, {
+          userId,
+          notificationData: batchedData,
+          attempts: 0
+        });
       }
-
-      const { data: attempts } = await supabaseAdmin
-        .from('v1_notification_delivery_attempts')
-        .select('id')
-        .eq('notification_id', notificationId)
-        .eq('method', 'fcm');
-
-      const retryCount = attempts?.length || 0;
-      if (retryCount >= maxRetries) {
-        return { success: false, error: 'Max retries exceeded' };
-      }
-
-      const sendResult = await this.sendNotification(
-        notification.user_id,
-        {
-          type: notification.type,
-          title: notification.title,
-          body: notification.body,
-          clickAction: notification.data?.clickAction,
-          data: notification.data,
-          badge: notification.data?.badge,
-        },
-        notificationId,
-      );
-
-      if (sendResult.success) {
-        await this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
-      }
-
-      return { success: sendResult.success, retryCount: retryCount + 1, deliveryResult: sendResult.deliveryResult };
-    } catch (error) {
-      console.error('[v1/Notification] Retry error:', error);
-      return { success: false, error: error.message };
     }
   }
+
+  async flushAllBatches() {
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
+
+    const userIds = Array.from(this.notificationQueue.keys());
+    for (const userId of userIds) {
+      await this.flushBatchForUser(userId);
+    }
+  }
+
+  createBatchedNotification(notifications) {
+    if (notifications.length === 0) {
+      return null;
+    }
+
+    const firstNotification = notifications[0];
+    const type = firstNotification.type;
+
+    if (type === 'CHAT_MESSAGE') {
+      const count = notifications.length;
+      const lastNotification = notifications[notifications.length - 1];
+      return {
+        type: 'CHAT_MESSAGE',
+        title: count === 1 ? 'New Message' : `${count} New Messages`,
+        body: count === 1 
+          ? firstNotification.body 
+          : `You have ${count} new messages`,
+        clickAction: firstNotification.clickAction,
+        data: {
+          ...firstNotification.data,
+          batchCount: count,
+          batched: true
+        }
+      };
+    } else if (type === 'APPLICATION_CREATED') {
+      const count = notifications.length;
+      return {
+        type: 'APPLICATION_CREATED',
+        title: count === 1 ? 'New Application' : `${count} New Applications`,
+        body: count === 1 
+          ? firstNotification.body 
+          : `You have ${count} new applications`,
+        clickAction: '/applications',
+        data: {
+          batchCount: count,
+          batched: true,
+          applicationIds: notifications.map(n => n.data?.applicationId).filter(Boolean)
+        }
+      };
+    }
+
+    return firstNotification;
+  }
+
+  async scheduleRetry(notificationId, retryData) {
+    const attempts = retryData.attempts || 0;
+    
+    if (attempts >= this.MAX_RETRIES) {
+      console.log(`[v1/Notification] Max retries reached for notification ${notificationId}`);
+      return;
+    }
+
+    // Calculate delay with exponential backoff
+    const delay = Math.min(
+      this.INITIAL_RETRY_DELAY * Math.pow(2, attempts),
+      this.MAX_RETRY_DELAY
+    );
+
+    const nextRetry = Date.now() + delay;
+
+    this.retryQueue.set(notificationId, {
+      ...retryData,
+      attempts: attempts + 1,
+      nextRetry
+    });
+
+    // Start retry timer if not running
+    if (!this.retryTimer) {
+      this.startRetryProcessor();
+    }
+
+    console.log(`[v1/Notification] Scheduled retry ${attempts + 1}/${this.MAX_RETRIES} for notification ${notificationId} in ${delay}ms`);
+  }
+
+  startRetryProcessor() {
+    if (this.retryTimer) {
+      return;
+    }
+
+    this.retryTimer = setInterval(async () => {
+      await this.processRetryQueue();
+    }, 1000); // Check every second
+  }
+
+  async processRetryQueue() {
+    const now = Date.now();
+    const readyToRetry = [];
+
+    for (const [notificationId, retryData] of this.retryQueue.entries()) {
+      if (now >= retryData.nextRetry) {
+        readyToRetry.push({ notificationId, retryData });
+      }
+    }
+
+    for (const { notificationId, retryData } of readyToRetry) {
+      this.retryQueue.delete(notificationId);
+      await this.retryNotification(notificationId, retryData);
+    }
+
+    // Stop timer if queue is empty
+    if (this.retryQueue.size === 0 && this.retryTimer) {
+      clearInterval(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  async retryNotification(notificationId, retryData) {
+    console.log(`[v1/Notification] Retrying notification ${notificationId} (attempt ${retryData.attempts})`);
+    
+    const sendResult = await this.sendNotification(
+      retryData.userId,
+      retryData.notificationData,
+      notificationId
+    );
+
+    if (sendResult.success) {
+      await this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
+      console.log(`[v1/Notification] Retry successful for notification ${notificationId}`);
+    } else {
+      await this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
+      
+      // Schedule another retry if not at max
+      if (sendResult.method === 'fcm' && retryData.attempts < this.MAX_RETRIES) {
+        await this.scheduleRetry(notificationId, retryData);
+      } else {
+        console.log(`[v1/Notification] Retry failed for notification ${notificationId}, max attempts reached`);
+      }
+    }
+  }
+
 
   async getDeliveryStats(notificationId) {
     try {

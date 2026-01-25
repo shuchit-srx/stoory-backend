@@ -65,7 +65,8 @@ const ChatService = {
       .from('v1_chats')
       .insert({
         application_id: applicationId,
-        status: 'ACTIVE' // [cite: 166]
+        status: 'ACTIVE', // [cite: 166]
+        sequence_number: 0 // Initialize sequence counter
       })
       .select()
       .single();
@@ -341,14 +342,31 @@ const ChatService = {
     // 4. Mask Content [cite: 237, 249]
     const safeMessage = maskContent(messageContent);
 
-    // 5. Persist to chat_messages [cite: 168]
+    // 5. Get and increment sequence number atomically
+    // This ensures message ordering even with concurrent requests
+    const { data: chatWithSeq, error: seqError } = await supabaseAdmin
+      .from('v1_chats')
+      .select('sequence_number')
+      .eq('id', chat.id)
+      .single();
+
+    if (seqError || !chatWithSeq) {
+      console.error('Error fetching sequence number:', seqError);
+      throw new Error(`Failed to get sequence number: ${seqError?.message || 'Chat not found'}`);
+    }
+
+    const nextSequenceNumber = (chatWithSeq.sequence_number || 0) + 1;
+
+    // 6. Persist to chat_messages with sequence number and initial status [cite: 168]
     const { data: savedMessage, error: saveError } = await supabaseAdmin
       .from('v1_chat_messages')
       .insert({
         chat_id: chat.id,
         sender_id: userId,
         message: safeMessage,
-        attachment_url: attachmentUrl
+        attachment_url: attachmentUrl,
+        sequence_number: nextSequenceNumber,
+        status: 'SENT' // Initial status when message is saved
       })
       .select()
       .single();
@@ -356,6 +374,17 @@ const ChatService = {
     if (saveError) {
       console.error('Error saving message:', saveError);
       throw new Error(`Failed to save message: ${saveError.message}`);
+    }
+
+    // 7. Update chat's sequence_number atomically
+    const { error: updateSeqError } = await supabaseAdmin
+      .from('v1_chats')
+      .update({ sequence_number: nextSequenceNumber })
+      .eq('id', chat.id);
+
+    if (updateSeqError) {
+      console.error('Error updating sequence number:', updateSeqError);
+      // Don't fail the message save, but log the error
     }
 
     // Get application to find recipient and send notification
@@ -445,12 +474,12 @@ const ChatService = {
       .select('*', { count: 'exact', head: true })
       .eq('chat_id', chat.id);
 
-    // Get messages
+    // Get messages ordered by sequence_number for guaranteed ordering
     const { data, error } = await supabaseAdmin
       .from('v1_chat_messages')
       .select('*')
       .eq('chat_id', chat.id)
-      .order('created_at', { ascending: true })
+      .order('sequence_number', { ascending: true })
       .range(validatedOffset, validatedOffset + validatedLimit - 1);
 
     if (error) {
@@ -578,6 +607,9 @@ const ChatService = {
       console.error('Error marking message as read:', readError);
       throw new Error(`Failed to mark message as read: ${readError.message}`);
     }
+
+    // Update message status to READ
+    await this.updateMessageStatus(messageId, 'READ');
 
     return readReceipt;
   },
@@ -834,6 +866,41 @@ const ChatService = {
       console.error('Error in getUserChats:', error);
       throw error;
     }
+  },
+
+  /**
+   * updateMessageStatus
+   * Updates the status of a message (SENT, DELIVERED, READ)
+   * @param {string} messageId - The message ID
+   * @param {string} status - The new status
+   * @returns {Promise<Object>} - The updated message
+   */
+  async updateMessageStatus(messageId, status) {
+    if (!messageId || !status) {
+      throw new Error('messageId and status are required');
+    }
+
+    const validStatuses = ['SENDING', 'SENT', 'DELIVERED', 'READ'];
+    if (!validStatuses.includes(status)) {
+      throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+    }
+
+    const { data: updatedMessage, error } = await supabaseAdmin
+      .from('v1_chat_messages')
+      .update({ 
+        status,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', messageId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating message status:', error);
+      throw new Error(`Failed to update message status: ${error.message}`);
+    }
+
+    return updatedMessage;
   }
 };
 

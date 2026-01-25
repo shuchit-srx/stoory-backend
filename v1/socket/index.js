@@ -250,22 +250,36 @@ const initSocket = (server) => {
 
         // Broadcast message to all users in room
         const roomSockets = await io.in(roomName).fetchSockets();
+        const recipientSockets = roomSockets.filter(s => s.userId !== socket.user.id);
+        
         console.log(`[Socket] Emitting receive_message to room ${roomName}`, {
           messageId: savedMessage.id,
           chat_id: applicationId,
           sender_id: socket.user.id,
           roomClients: roomSockets.map(s => s.userId),
-          roomClientCount: roomSockets.length
+          roomClientCount: roomSockets.length,
+          recipientCount: recipientSockets.length
         });
 
         io.to(roomName).emit('receive_message', emitPayload);
+
+        // Update message status to DELIVERED for all recipients in the room
+        if (recipientSockets.length > 0) {
+          try {
+            await ChatService.updateMessageStatus(savedMessage.id, 'DELIVERED');
+            console.log(`[Socket] Message ${savedMessage.id} marked as DELIVERED to ${recipientSockets.length} recipients`);
+          } catch (statusError) {
+            console.error('[Socket] Failed to update message status to DELIVERED:', statusError);
+          }
+        }
 
         // Acknowledge to sender
         if (callback) {
           callback({
             success: true,
             messageId: savedMessage.id,
-            timestamp: savedMessage.created_at
+            timestamp: savedMessage.created_at,
+            status: 'SENT'
           });
         }
       } catch (error) {
@@ -322,7 +336,7 @@ const initSocket = (server) => {
           });
         }
 
-        // Mark message as read
+        // Mark message as read (this also updates status to READ)
         const readReceipt = await ChatService.markMessageAsRead(
           messageId,
           socket.user.id
@@ -337,6 +351,7 @@ const initSocket = (server) => {
             messageId,
             userId: socket.user.id,
             readAt: readReceipt.read_at || new Date().toISOString(),
+            status: 'READ',
             timestamp: new Date().toISOString()
           });
         }
