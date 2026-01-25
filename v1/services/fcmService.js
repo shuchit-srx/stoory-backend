@@ -305,8 +305,9 @@ class FCMService {
 
         const response = await this.app.messaging().sendMulticast(multicastMessage);
 
-        // Process responses
-        response.responses.forEach((result, index) => {
+        // Process responses (use for...of to properly await async operations)
+        for (let index = 0; index < response.responses.length; index++) {
+          const result = response.responses[index];
           if (result.success) {
             successful.push(tokens[index]);
           } else {
@@ -317,15 +318,15 @@ class FCMService {
               message: result.error?.message || 'send failed',
             });
 
-            // Remove invalid tokens
+            // Remove invalid tokens (await to ensure database operation completes)
             if (
               result.error?.code === 'messaging/invalid-registration-token' ||
               result.error?.code === 'messaging/registration-token-not-registered'
             ) {
-              this.removeInvalidToken(tokens[index]);
+              await this.removeInvalidToken(tokens[index]);
             }
           }
-        });
+        }
       } catch (error) {
         // If multicast fails, fallback to individual sends
         console.warn('[v1/FCM] Multicast failed, falling back to individual sends:', error.message);

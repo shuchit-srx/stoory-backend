@@ -334,8 +334,8 @@ class NotificationService {
 
     // Start batch timer if not already running
     if (!this.batchTimer) {
-      this.batchTimer = setTimeout(() => {
-        this.flushAllBatches();
+      this.batchTimer = setTimeout(async () => {
+        await this.flushAllBatches();
       }, this.BATCH_WINDOW);
     }
 
