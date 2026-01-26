@@ -190,6 +190,20 @@ class ApplicationService {
       return { success: false, message: insertError.message || 'Failed to apply to campaign' };
     }
 
+    // Send notification to brand owner
+    try {
+      const NotificationService = require('./notificationService');
+      await NotificationService.notifyApplicationCreated(
+        app.id,
+        campaignId,
+        influencerId,
+        campaign.brand_id
+      );
+    } catch (notifError) {
+      console.error('[ApplicationService/apply] Failed to send notification:', notifError);
+      // Don't fail the operation if notification fails
+    }
+
     return {
       success: true,
       message: 'Application submitted successfully',
@@ -498,6 +512,27 @@ class ApplicationService {
         }
       }
 
+      // Send notification to influencer
+      try {
+        const NotificationService = require('./notificationService');
+        // Use notifyApplicationApproved for consistency with legacy
+        await NotificationService.notifyApplicationApproved(
+          applicationId,
+          app.influencer_id,
+          brandId
+        );
+        // Also send flow state notification
+        await NotificationService.notifyFlowStateChange(
+          applicationId,
+          'ACCEPTED',
+          app.influencer_id,
+          'Your application has been accepted! You can now proceed with payment.'
+        );
+      } catch (notifError) {
+        console.error('[ApplicationService/accept] Failed to send notification:', notifError);
+        // Don't fail the operation if notification fails
+      }
+
       return {
         success: true,
         message: 'Application accepted successfully and MOU generated',
@@ -555,6 +590,34 @@ class ApplicationService {
           success: false,
           message: updateError.message || 'Failed to cancel application',
         };
+      }
+
+      // Determine who to notify (the other party)
+      try {
+        const { data: applicationData } = await supabaseAdmin
+          .from('v1_applications')
+          .select('influencer_id, v1_campaigns!inner(brand_id)')
+          .eq('id', applicationId)
+          .single();
+
+        if (applicationData) {
+          const otherUserId = app.influencer_id === user.id 
+            ? applicationData.v1_campaigns?.brand_id 
+            : app.influencer_id;
+
+          if (otherUserId) {
+            const NotificationService = require('./notificationService');
+            await NotificationService.notifyApplicationCancelled(
+              applicationId,
+              user.id,
+              otherUserId,
+              null
+            );
+          }
+        }
+      } catch (notifError) {
+        console.error('[ApplicationService/cancel] Failed to send notification:', notifError);
+        // Don't fail the operation if notification fails
       }
 
       return {
@@ -621,7 +684,7 @@ class ApplicationService {
       // Chat should only close when admin completes, not when work is completed
       try {
         const ChatService = require('./chatService');
-        await ChatService.closeChat(applicationId);
+        await ChatService.closeChat(applicationId, 'system'); // System/admin closes chat
         console.log(`[ApplicationService/complete] Chat closed for application ${applicationId}`);
       } catch (chatError) {
         console.error(`[ApplicationService/complete] Failed to close chat:`, chatError);

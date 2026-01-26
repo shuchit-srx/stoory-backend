@@ -4,7 +4,9 @@ const { supabaseAdmin } = require('../db/config');
 class FCMService {
   constructor() {
     this.initialized = false;
+    this.tokenRefreshTimer = null;
     this.initializeFirebase();
+    this.startTokenRefreshMonitor();
   }
 
   initializeFirebase() {
@@ -58,6 +60,27 @@ class FCMService {
         return { success: false, error: 'FCM not initialized' };
       }
 
+      // Validate token with a dry-run send before saving
+      try {
+        await this.app.messaging().send({
+          token,
+          data: { test: 'validation' },
+          apns: { headers: { 'apns-priority': '5' } },
+          android: { priority: 'normal' }
+        }, true); // dryRun = true
+      } catch (validationError) {
+        console.error(`❌ [v1/FCM] Token validation failed for user ${userId}:`, validationError.message);
+        return { success: false, error: `Invalid FCM token: ${validationError.message}` };
+      }
+
+      // Check if token already exists for this user (token refresh scenario)
+      const { data: existingToken } = await supabaseAdmin
+        .from('v1_fcm_tokens')
+        .select('token, user_id')
+        .eq('user_id', userId)
+        .eq('token', token)
+        .maybeSingle();
+
       const { data, error } = await supabaseAdmin
         .from('v1_fcm_tokens')
         .upsert(
@@ -79,7 +102,7 @@ class FCMService {
         return { success: false, error: error.message };
       }
 
-      // Deactivate other tokens
+      // Deactivate other tokens (single active device policy)
       const { error: deactivateError } = await supabaseAdmin
         .from('v1_fcm_tokens')
         .update({ is_active: false })
@@ -88,6 +111,13 @@ class FCMService {
 
       if (deactivateError) {
         console.warn('⚠️ [v1/FCM] Deactivate old tokens failed:', deactivateError);
+      }
+
+      // If token was updated (not new), log it for monitoring
+      if (existingToken) {
+        console.log(`✅ [v1/FCM] Token updated for user ${userId}`);
+      } else {
+        console.log(`✅ [v1/FCM] New token registered for user ${userId}`);
       }
 
       return { success: true, data };
@@ -141,16 +171,35 @@ class FCMService {
   async sendNotificationToUser(userId, notification) {
     try {
       if (!this.initialized) {
+        console.warn('[v1/FCM] FCM not initialized, cannot send notification');
         return { success: false, error: 'FCM not initialized' };
       }
 
       const tokensResult = await this.getUserTokens(userId);
-      if (!tokensResult.success || !tokensResult.tokens.length) {
-        return { success: true, sent: 0, failed: 0 };
+      if (!tokensResult.success) {
+        console.warn(`[v1/FCM] Failed to get tokens for user ${userId}`);
+        return { success: false, error: tokensResult.error || 'Failed to get tokens' };
+      }
+
+      if (!tokensResult.tokens || tokensResult.tokens.length === 0) {
+        console.log(`[v1/FCM] No active tokens found for user ${userId}`);
+        return { success: true, sent: 0, failed: 0, reason: 'no_tokens' };
       }
 
       const tokens = tokensResult.tokens.map((t) => t.token);
       const results = await this.sendToTokens(tokens, notification);
+
+      // Update last_used_at for successfully sent tokens
+      if (results.successful.length > 0) {
+        const { error: updateError } = await supabaseAdmin
+          .from('v1_fcm_tokens')
+          .update({ last_used_at: new Date().toISOString() })
+          .in('token', results.successful);
+
+        if (updateError) {
+          console.warn('[v1/FCM] Failed to update last_used_at:', updateError);
+        }
+      }
 
       return {
         success: true,
@@ -218,17 +267,23 @@ class FCMService {
     const failed = [];
     const failedDetails = [];
 
-    for (let i = 0; i < tokens.length; i++) {
+    // Use batch sending for multiple tokens (more efficient)
+    if (tokens.length === 0) {
+      return { successful, failed, failedDetails };
+    }
+
+    if (tokens.length === 1) {
+      // Single token - use regular send
       try {
         await this.app.messaging().send({
-          token: tokens[i],
+          token: tokens[0],
           ...message,
         });
-        successful.push(tokens[i]);
+        successful.push(tokens[0]);
       } catch (error) {
-        failed.push(tokens[i]);
+        failed.push(tokens[0]);
         failedDetails.push({
-          token: tokens[i],
+          token: tokens[0],
           errorCode: error?.code || null,
           message: error?.message || 'send failed',
         });
@@ -237,7 +292,67 @@ class FCMService {
           error?.code === 'messaging/invalid-registration-token' ||
           error?.code === 'messaging/registration-token-not-registered'
         ) {
-          await this.removeInvalidToken(tokens[i]);
+          await this.removeInvalidToken(tokens[0]);
+        }
+      }
+    } else {
+      // Multiple tokens - use multicast for batch sending
+      try {
+        const multicastMessage = {
+          ...message,
+          tokens: tokens,
+        };
+
+        const response = await this.app.messaging().sendMulticast(multicastMessage);
+
+        // Process responses (use for...of to properly await async operations)
+        for (let index = 0; index < response.responses.length; index++) {
+          const result = response.responses[index];
+          if (result.success) {
+            successful.push(tokens[index]);
+          } else {
+            failed.push(tokens[index]);
+            failedDetails.push({
+              token: tokens[index],
+              errorCode: result.error?.code || null,
+              message: result.error?.message || 'send failed',
+            });
+
+            // Remove invalid tokens (await to ensure database operation completes)
+            if (
+              result.error?.code === 'messaging/invalid-registration-token' ||
+              result.error?.code === 'messaging/registration-token-not-registered'
+            ) {
+              await this.removeInvalidToken(tokens[index]);
+            }
+          }
+        }
+      } catch (error) {
+        // If multicast fails, fallback to individual sends
+        console.warn('[v1/FCM] Multicast failed, falling back to individual sends:', error.message);
+        
+        for (let i = 0; i < tokens.length; i++) {
+          try {
+            await this.app.messaging().send({
+              token: tokens[i],
+              ...message,
+            });
+            successful.push(tokens[i]);
+          } catch (err) {
+            failed.push(tokens[i]);
+            failedDetails.push({
+              token: tokens[i],
+              errorCode: err?.code || null,
+              message: err?.message || 'send failed',
+            });
+
+            if (
+              err?.code === 'messaging/invalid-registration-token' ||
+              err?.code === 'messaging/registration-token-not-registered'
+            ) {
+              await this.removeInvalidToken(tokens[i]);
+            }
+          }
         }
       }
     }
@@ -250,9 +365,116 @@ class FCMService {
       const { error } = await supabaseAdmin.from('v1_fcm_tokens').delete().eq('token', token);
       if (error) {
         console.error('❌ [v1/FCM] Remove invalid token failed:', error);
+      } else {
+        console.log(`✅ [v1/FCM] Removed invalid token: ${token.substring(0, 20)}...`);
       }
     } catch (error) {
       console.error('❌ [v1/FCM] Remove invalid token error:', error);
+    }
+  }
+
+  startTokenRefreshMonitor() {
+    // Check and refresh tokens every hour
+    const REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
+
+    this.tokenRefreshTimer = setInterval(async () => {
+      await this.checkAndRefreshTokens();
+    }, REFRESH_INTERVAL);
+
+    // Run immediately on startup (after a short delay)
+    setTimeout(() => {
+      this.checkAndRefreshTokens();
+    }, 5000); // 5 seconds after startup
+  }
+
+  async checkAndRefreshTokens() {
+    if (!this.initialized) {
+      return;
+    }
+
+    try {
+      console.log('[v1/FCM] Starting token refresh check...');
+
+      // Get tokens that haven't been used in 7 days (potential stale tokens)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const { data: staleTokens, error: fetchError } = await supabaseAdmin
+        .from('v1_fcm_tokens')
+        .select('token, user_id, last_used_at')
+        .eq('is_active', true)
+        .lt('last_used_at', sevenDaysAgo.toISOString())
+        .limit(100); // Process in batches
+
+      if (fetchError) {
+        console.error('[v1/FCM] Error fetching stale tokens:', fetchError);
+        return;
+      }
+
+      if (!staleTokens || staleTokens.length === 0) {
+        console.log('[v1/FCM] No stale tokens found');
+        return;
+      }
+
+      console.log(`[v1/FCM] Checking ${staleTokens.length} potentially stale tokens...`);
+
+      const invalidTokens = [];
+      const validTokens = [];
+
+      // Validate each token with a dry-run send
+      for (const tokenData of staleTokens) {
+        try {
+          await this.app.messaging().send({
+            token: tokenData.token,
+            data: { test: 'validation' },
+            apns: { headers: { 'apns-priority': '5' } },
+            android: { priority: 'normal' }
+          }, true); // dryRun = true
+
+          // Token is valid, update last_used_at
+          validTokens.push(tokenData.token);
+        } catch (error) {
+          // Token is invalid
+          if (
+            error?.code === 'messaging/invalid-registration-token' ||
+            error?.code === 'messaging/registration-token-not-registered'
+          ) {
+            invalidTokens.push(tokenData.token);
+          }
+        }
+      }
+
+      // Remove invalid tokens
+      if (invalidTokens.length > 0) {
+        const { error: deleteError } = await supabaseAdmin
+          .from('v1_fcm_tokens')
+          .delete()
+          .in('token', invalidTokens);
+
+        if (deleteError) {
+          console.error('[v1/FCM] Error removing invalid tokens:', deleteError);
+        } else {
+          console.log(`✅ [v1/FCM] Removed ${invalidTokens.length} invalid tokens`);
+        }
+      }
+
+      // Update last_used_at for valid tokens
+      if (validTokens.length > 0) {
+        const { error: updateError } = await supabaseAdmin
+          .from('v1_fcm_tokens')
+          .update({ last_used_at: new Date().toISOString() })
+          .in('token', validTokens);
+
+        if (updateError) {
+          console.error('[v1/FCM] Error updating valid tokens:', updateError);
+        } else {
+          console.log(`✅ [v1/FCM] Updated ${validTokens.length} valid tokens`);
+        }
+      }
+
+      console.log(`[v1/FCM] Token refresh check completed: ${validTokens.length} valid, ${invalidTokens.length} invalid`);
+    } catch (error) {
+      console.error('[v1/FCM] Token refresh check error:', error);
     }
   }
 

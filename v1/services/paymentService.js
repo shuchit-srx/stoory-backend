@@ -989,6 +989,25 @@ class PaymentService {
       // Chat creation is now handled via endpoint only: POST /api/v1/chat/:applicationId
       // Chat should be created explicitly by calling the endpoint after payment verification
 
+      // Send notifications for each application
+      if (applicationsToUpdate.length > 0 && campaignData) {
+        try {
+          const NotificationService = require('./notificationService');
+          for (const app of applicationsToUpdate) {
+            if (campaignData.brand_id && app.influencer_id) {
+              await NotificationService.notifyPaymentCompleted(
+                app.id,
+                campaignData.brand_id,
+                app.influencer_id
+              );
+            }
+          }
+        } catch (notifError) {
+          console.error('[v1/PaymentService/verifyPayment] Failed to send notifications:', notifError);
+          // Don't fail payment verification if notifications fail
+        }
+      }
+
       return {
         success: true,
         payment_order: updatedOrder,

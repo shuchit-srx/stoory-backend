@@ -171,6 +171,22 @@ class AuthController {
       );
 
       if (result.success) {
+        // Register FCM token if provided
+        if (req.body.fcm_token && result.user) {
+          try {
+            const fcmService = require('../services/fcmService');
+            await fcmService.registerToken(
+              result.user.id,
+              req.body.fcm_token,
+              req.body.device_type || 'unknown',
+              req.body.device_id || null
+            );
+          } catch (fcmError) {
+            console.error('[v1/registerBrandOwner] Failed to register FCM token:', fcmError);
+            // Don't fail registration if FCM registration fails
+          }
+        }
+
         return res.status(201).json({
           success: true,
           user: result.user,
@@ -208,6 +224,22 @@ class AuthController {
       const result = await AuthService.loginBrandOwner(email, password);
 
       if (result.success) {
+        // Register FCM token if provided
+        if (req.body.fcm_token) {
+          try {
+            const fcmService = require('../services/fcmService');
+            await fcmService.registerToken(
+              result.user.id,
+              req.body.fcm_token,
+              req.body.device_type || 'unknown',
+              req.body.device_id || null
+            );
+          } catch (fcmError) {
+            console.error('[v1/loginBrandOwner] Failed to register FCM token:', fcmError);
+            // Don't fail authentication if FCM registration fails
+          }
+        }
+
         return res.json({
           success: true,
           user: result.user,

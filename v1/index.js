@@ -1,6 +1,7 @@
 const express = require("express");
 const http = require('http');
 const cors = require('cors');
+const path = require('path');
 require('dotenv').config();
 
 // Root router for all /api/v1 APIs
@@ -63,6 +64,9 @@ const corsOptions = {
 // Middleware
 app.use(cors(corsOptions));
 app.use(express.json());
+
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, '../public')));
 
 // Health check endpoint (must be before /api/v1 routes)
 app.get("/health", (req, res) => {

@@ -89,7 +89,7 @@ const createChat = async (req, res) => {
     if (!hasAccess) {
       return res.status(403).json({ 
         success: false, 
-        message: 'Access denied to this application' 
+        message: 'Access denied to this application. Invalid user access' 
       });
     }
 
@@ -111,37 +111,28 @@ const createChat = async (req, res) => {
 };
 
 /**
- * Get chat details for an application
- * GET /api/v1/chat/:applicationId
+ * Get chat details by chat ID
+ * GET /api/v1/chat/:chatId
  */
 const getChat = async (req, res) => {
   try {
-    const { applicationId } = req.params;
+    const { chatId } = req.params;
     const userId = req.user.id;
 
-    if (!applicationId) {
+    if (!chatId) {
       return res.status(400).json({ 
         success: false, 
-        message: 'applicationId is required' 
+        message: 'chatId is required' 
       });
     }
 
-    // Validate user access
-    const hasAccess = await ChatService.validateUserAccess(userId, applicationId);
-    if (!hasAccess) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Access denied to this application' 
-      });
-    }
-
-    // Get chat
-    const chat = await ChatService.getChatByApplication(applicationId);
+    // Get chat (access validation is done inside getChatById)
+    const chat = await ChatService.getChatById(chatId, userId);
 
     if (!chat) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Chat not found for this application' 
+        message: 'Chat not found' 
       });
     }
 
@@ -151,6 +142,12 @@ const getChat = async (req, res) => {
     });
   } catch (error) {
     console.error('Get chat error:', error);
+    if (error.message === 'Access denied to this chat') {
+      return res.status(403).json({ 
+        success: false, 
+        message: error.message 
+      });
+    }
     res.status(500).json({ 
       success: false, 
       message: error.message || 'Failed to get chat' 

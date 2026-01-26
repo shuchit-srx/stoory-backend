@@ -65,7 +65,8 @@ const ChatService = {
       .from('v1_chats')
       .insert({
         application_id: applicationId,
-        status: 'ACTIVE' // [cite: 166]
+        status: 'ACTIVE', // [cite: 166]
+        sequence_number: 0 // Initialize sequence counter
       })
       .select()
       .single();
@@ -128,8 +129,137 @@ const ChatService = {
   },
 
   /**
+   * getChatById
+   * Gets chat by chat ID with related data and validates user access
+   * @param {string} chatId - The chat ID
+   * @param {string} userId - The user ID for access validation
+   * @returns {Promise<Object|null>} - The chat object with campaign, brand, influencer, created_at, updated_at or null
+   */
+  async getChatById(chatId, userId) {
+    if (!chatId) {
+      return null;
+    }
+
+    if (!userId) {
+      throw new Error('userId is required for access validation');
+    }
+
+    // Fetch chat with application data
+    const { data: chat, error: chatError } = await supabaseAdmin
+      .from('v1_chats')
+      .select(`
+        id,
+        status,
+        application_id,
+        created_at,
+        updated_at,
+        v1_applications!inner(
+          influencer_id,
+          campaign_id,
+          v1_campaigns!inner(
+            id,
+            title,
+            brand_id,
+            cover_image_url
+          )
+        )
+      `)
+      .eq('id', chatId)
+      .single();
+
+    if (chatError) {
+      if (chatError.code === 'PGRST116') {
+        // Not found
+        return null;
+      }
+      console.error('Error getting chat:', chatError);
+      throw new Error(`Failed to get chat: ${chatError.message}`);
+    }
+
+    if (!chat || !chat.v1_applications) {
+      return null;
+    }
+
+    // Validate user access
+    const applicationId = chat.application_id;
+    const hasAccess = await this.validateUserAccess(userId, applicationId);
+    if (!hasAccess) {
+      throw new Error('Access denied to this chat');
+    }
+
+    const application = chat.v1_applications;
+    const campaign = application.v1_campaigns;
+    const influencerId = application.influencer_id;
+    const brandId = campaign?.brand_id;
+
+    // Fetch brand profile if brand_id exists
+    let brand = null;
+    if (brandId) {
+      const { data: brandProfile, error: brandError } = await supabaseAdmin
+        .from('v1_brand_profiles')
+        .select('user_id, brand_name, brand_logo_url')
+        .eq('user_id', brandId)
+        .eq('is_deleted', false)
+        .maybeSingle();
+
+      if (!brandError && brandProfile) {
+        brand = {
+          id: brandProfile.user_id,
+          brand_name: brandProfile.brand_name,
+          brand_logo_url: brandProfile.brand_logo_url
+        };
+      }
+    }
+
+    // Fetch influencer user data and profile
+    let influencer = null;
+    if (influencerId) {
+      const { data: influencerUser, error: influencerError } = await supabaseAdmin
+        .from('v1_users')
+        .select('id, name')
+        .eq('id', influencerId)
+        .eq('is_deleted', false)
+        .maybeSingle();
+
+      if (!influencerError && influencerUser) {
+        // Fetch influencer profile for profile_photo_url
+        const { data: influencerProfile, error: profileError } = await supabaseAdmin
+          .from('v1_influencer_profiles')
+          .select('profile_photo_url')
+          .eq('user_id', influencerId)
+          .eq('is_deleted', false)
+          .maybeSingle();
+
+        influencer = {
+          id: influencerUser.id,
+          name: influencerUser.name,
+          profile_photo_url: influencerProfile?.profile_photo_url || null
+        };
+      }
+    }
+
+    // Format the response
+    const formattedChat = {
+      id: chat.id,
+      status: chat.status,
+      application_id: chat.application_id,
+      created_at: chat.created_at,
+      updated_at: chat.updated_at,
+      campaign: campaign ? {
+        id: campaign.id,
+        title: campaign.title,
+        cover_image_url: campaign.cover_image_url
+      } : null,
+      brand: brand,
+      influencer: influencer
+    };
+
+    return formattedChat;
+  },
+
+  /**
    * getChatByApplication
-   * Gets chat by application ID
+   * Gets chat by application ID (used by socket for validation)
    * @param {string} applicationId - The application ID
    * @returns {Promise<Object|null>} - The chat object or null
    */
@@ -138,25 +268,15 @@ const ChatService = {
       return null;
     }
 
-    // Note: Using .single() because there should be exactly one chat per application
     const { data: chat, error } = await supabaseAdmin
       .from('v1_chats')
       .select('id, status, application_id')
       .eq('application_id', applicationId)
-      .single();
+      .maybeSingle();
 
     if (error) {
-      if (error.code === 'PGRST116') {
-        // Not found - this is expected if chat doesn't exist yet
-        return null;
-      }
-      // Handle case where multiple chats exist (data integrity issue)
-      if (error.message?.includes('More than one row')) {
-        console.error(`Data integrity issue: Multiple chats found for application ${applicationId}`);
-        throw new Error("Multiple chats found for this application. Please contact support.");
-      }
-      console.error('Error getting chat:', error);
-      throw new Error(`Failed to get chat: ${error.message}`);
+      console.error('Error getting chat by application:', error);
+      return null;
     }
 
     return chat;
@@ -222,14 +342,31 @@ const ChatService = {
     // 4. Mask Content [cite: 237, 249]
     const safeMessage = maskContent(messageContent);
 
-    // 5. Persist to chat_messages [cite: 168]
+    // 5. Get and increment sequence number atomically
+    // This ensures message ordering even with concurrent requests
+    const { data: chatWithSeq, error: seqError } = await supabaseAdmin
+      .from('v1_chats')
+      .select('sequence_number')
+      .eq('id', chat.id)
+      .single();
+
+    if (seqError || !chatWithSeq) {
+      console.error('Error fetching sequence number:', seqError);
+      throw new Error(`Failed to get sequence number: ${seqError?.message || 'Chat not found'}`);
+    }
+
+    const nextSequenceNumber = (chatWithSeq.sequence_number || 0) + 1;
+
+    // 6. Persist to chat_messages with sequence number and initial status [cite: 168]
     const { data: savedMessage, error: saveError } = await supabaseAdmin
       .from('v1_chat_messages')
       .insert({
         chat_id: chat.id,
         sender_id: userId,
         message: safeMessage,
-        attachment_url: attachmentUrl
+        attachment_url: attachmentUrl,
+        sequence_number: nextSequenceNumber,
+        status: 'SENT' // Initial status when message is saved
       })
       .select()
       .single();
@@ -237,6 +374,54 @@ const ChatService = {
     if (saveError) {
       console.error('Error saving message:', saveError);
       throw new Error(`Failed to save message: ${saveError.message}`);
+    }
+
+    // 7. Update chat's sequence_number atomically
+    const { error: updateSeqError } = await supabaseAdmin
+      .from('v1_chats')
+      .update({ sequence_number: nextSequenceNumber })
+      .eq('id', chat.id);
+
+    if (updateSeqError) {
+      console.error('Error updating sequence number:', updateSeqError);
+      // Don't fail the message save, but log the error
+    }
+
+    // Get application to find recipient and send notification
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('influencer_id, v1_campaigns!inner(brand_id)')
+        .eq('id', applicationId)
+        .single();
+
+      if (application) {
+        // Determine recipient (the other party)
+        const recipientId = userId === application.influencer_id 
+          ? application.v1_campaigns?.brand_id 
+          : application.influencer_id;
+
+        if (recipientId) {
+          const NotificationService = require('./notificationService');
+          // Skip notification if recipient is actively viewing the chat
+          const isViewingChat = NotificationService.isUserInChatRoom(recipientId, applicationId);
+          
+          if (!isViewingChat) {
+            // Send notification (socket will handle if online, FCM if offline)
+            await NotificationService.notifyChatMessage(
+              applicationId,
+              userId,
+              recipientId,
+              safeMessage
+            );
+          } else {
+            console.log(`[ChatService/saveMessage] Skipping notification - user ${recipientId} is viewing chat for application ${applicationId}`);
+          }
+        }
+      }
+    } catch (notifError) {
+      console.error('[ChatService/saveMessage] Failed to send notification:', notifError);
+      // Don't fail message saving if notification fails
     }
 
     return savedMessage;
@@ -289,12 +474,12 @@ const ChatService = {
       .select('*', { count: 'exact', head: true })
       .eq('chat_id', chat.id);
 
-    // Get messages
+    // Get messages ordered by sequence_number for guaranteed ordering
     const { data, error } = await supabaseAdmin
       .from('v1_chat_messages')
       .select('*')
       .eq('chat_id', chat.id)
-      .order('created_at', { ascending: true })
+      .order('sequence_number', { ascending: true })
       .range(validatedOffset, validatedOffset + validatedLimit - 1);
 
     if (error) {
@@ -323,12 +508,20 @@ const ChatService = {
    * closeChat
    * Call when Application moves to COMPLETED by admin (not when work is completed)
    * @param {string} applicationId - The application ID
+   * @param {string} closedById - The user ID who closed the chat (optional, defaults to system)
    * @returns {Promise<void>}
    */
-  async closeChat(applicationId) {
+  async closeChat(applicationId, closedById = null) {
     if (!applicationId) {
       throw new Error('applicationId is required');
     }
+
+    // Get application details to find participants
+    const { data: application } = await supabaseAdmin
+      .from('v1_applications')
+      .select('influencer_id, v1_campaigns!inner(brand_id)')
+      .eq('id', applicationId)
+      .single();
 
     const { error } = await supabaseAdmin
       .from('v1_chats')
@@ -338,6 +531,28 @@ const ChatService = {
     if (error) {
       console.error('Error closing chat:', error);
       throw new Error(`Failed to close chat: ${error.message}`);
+    }
+
+    // Send notification to the other party
+    if (application) {
+      try {
+        const NotificationService = require('./notificationService');
+        const brandId = application.v1_campaigns?.brand_id;
+        const otherUserId = closedById === application.influencer_id 
+          ? brandId 
+          : application.influencer_id;
+        
+        if (otherUserId) {
+          await NotificationService.notifyConversationClosed(
+            applicationId,
+            closedById || 'system',
+            otherUserId
+          );
+        }
+      } catch (notifError) {
+        console.error('[ChatService/closeChat] Failed to send notification:', notifError);
+        // Don't fail chat closure if notification fails
+      }
     }
   },
 
@@ -393,6 +608,9 @@ const ChatService = {
       throw new Error(`Failed to mark message as read: ${readError.message}`);
     }
 
+    // Update message status to READ
+    await this.updateMessageStatus(messageId, 'READ');
+
     return readReceipt;
   },
 
@@ -423,9 +641,9 @@ const ChatService = {
 
   /**
    * getUserChats
-   * Gets all chat IDs for a user (influencer or brand_owner)
+   * Gets all chats for a user (influencer or brand_owner) with related data
    * @param {string} userId - The user ID
-   * @returns {Promise<Array>} - Array of chat objects with id, application_id, and status
+   * @returns {Promise<Array>} - Array of chat objects with campaign, brand, influencer, last_message_received, and total_unread_messages
    */
   async getUserChats(userId) {
     if (!userId) {
@@ -468,10 +686,26 @@ const ChatService = {
         return [];
       }
 
-      // Step 4: Get all chats for these applications
+      // Step 4: Get all chats with application, campaign, and influencer data
       const { data: chats, error: chatsError } = await supabaseAdmin
         .from('v1_chats')
-        .select('id, application_id, status, created_at, updated_at')
+        .select(`
+          id,
+          application_id,
+          status,
+          created_at,
+          updated_at,
+          v1_applications!inner(
+            influencer_id,
+            campaign_id,
+            v1_campaigns!inner(
+              id,
+              title,
+              brand_id,
+              cover_image_url
+            )
+          )
+        `)
         .in('application_id', uniqueApplicationIds)
         .order('updated_at', { ascending: false });
 
@@ -480,11 +714,194 @@ const ChatService = {
         throw new Error(`Failed to get user chats: ${chatsError.message}`);
       }
 
-      return chats || [];
+      if (!chats || chats.length === 0) {
+        return [];
+      }
+
+      // Step 5: Get all unique brand IDs and influencer IDs
+      const brandIds = [...new Set(
+        chats
+          .map(chat => chat.v1_applications?.v1_campaigns?.brand_id)
+          .filter(Boolean)
+      )];
+      const influencerIds = [...new Set(
+        chats
+          .map(chat => chat.v1_applications?.influencer_id)
+          .filter(Boolean)
+      )];
+      const chatIds = chats.map(chat => chat.id);
+
+      // Step 6: Fetch brand profiles
+      const brandMap = {};
+      if (brandIds.length > 0) {
+        const { data: brandProfiles, error: brandProfilesError } = await supabaseAdmin
+          .from('v1_brand_profiles')
+          .select('user_id, brand_name, brand_logo_url')
+          .in('user_id', brandIds)
+          .eq('is_deleted', false);
+
+        if (!brandProfilesError && brandProfiles) {
+          brandProfiles.forEach(profile => {
+            brandMap[profile.user_id] = {
+              id: profile.user_id,
+              brand_name: profile.brand_name,
+              brand_logo_url: profile.brand_logo_url
+            };
+          });
+        }
+      }
+
+      // Step 7: Fetch influencer users and profiles
+      const influencerMap = {};
+      if (influencerIds.length > 0) {
+        const { data: influencerUsers, error: influencerUsersError } = await supabaseAdmin
+          .from('v1_users')
+          .select('id, name')
+          .in('id', influencerIds)
+          .eq('is_deleted', false);
+
+        if (!influencerUsersError && influencerUsers) {
+          // Fetch influencer profiles for profile_photo_url
+          const { data: influencerProfiles, error: influencerProfilesError } = await supabaseAdmin
+            .from('v1_influencer_profiles')
+            .select('user_id, profile_photo_url')
+            .in('user_id', influencerIds)
+            .eq('is_deleted', false);
+
+          const profileMap = {};
+          if (!influencerProfilesError && influencerProfiles) {
+            influencerProfiles.forEach(profile => {
+              profileMap[profile.user_id] = profile.profile_photo_url;
+            });
+          }
+
+          influencerUsers.forEach(user => {
+            influencerMap[user.id] = {
+              id: user.id,
+              influencer_name: user.name,
+              profile_photo_url: profileMap[user.id] || null
+            };
+          });
+        }
+      }
+
+      // Step 8: Get last message for each chat
+      const lastMessageMap = {};
+      if (chatIds.length > 0) {
+        // Get the most recent message for each chat
+        for (const chatId of chatIds) {
+          const { data: lastMessage, error: lastMessageError } = await supabaseAdmin
+            .from('v1_chat_messages')
+            .select('message')
+            .eq('chat_id', chatId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (!lastMessageError && lastMessage) {
+            lastMessageMap[chatId] = lastMessage.message;
+          }
+        }
+      }
+
+      // Step 9: Get unread message counts for each chat
+      const unreadCountMap = {};
+      if (chatIds.length > 0) {
+        // Get all messages that are not sent by the user
+        const { data: allMessages, error: allMessagesError } = await supabaseAdmin
+          .from('v1_chat_messages')
+          .select('id, chat_id, sender_id')
+          .in('chat_id', chatIds)
+          .neq('sender_id', userId);
+
+        if (!allMessagesError && allMessages && allMessages.length > 0) {
+          // Get all read receipts for this user
+          const messageIds = allMessages.map(msg => msg.id);
+          const { data: readReceipts } = await supabaseAdmin
+            .from('v1_chat_message_reads')
+            .select('message_id')
+            .in('message_id', messageIds)
+            .eq('user_id', userId);
+
+          const readMessageIds = new Set(
+            (readReceipts || []).map(receipt => receipt.message_id)
+          );
+
+          // Count unread messages per chat (messages not in readMessageIds)
+          allMessages.forEach(message => {
+            if (!readMessageIds.has(message.id)) {
+              unreadCountMap[message.chat_id] = (unreadCountMap[message.chat_id] || 0) + 1;
+            }
+          });
+        }
+      }
+
+      // Step 10: Format the response
+      const formattedChats = chats.map(chat => {
+        const application = chat.v1_applications;
+        const campaign = application?.v1_campaigns;
+        const brandId = campaign?.brand_id;
+        const influencerId = application?.influencer_id;
+
+        return {
+          id: chat.id,
+          application_id: chat.application_id,
+          status: chat.status,
+          created_at: chat.created_at,
+          updated_at: chat.updated_at,
+          campaign: campaign ? {
+            id: campaign.id,
+            title: campaign.title,
+            cover_image_url: campaign.cover_image_url
+          } : null,
+          brand: brandId && brandMap[brandId] ? brandMap[brandId] : null,
+          influencer: influencerId && influencerMap[influencerId] ? influencerMap[influencerId] : null,
+          last_message_received: lastMessageMap[chat.id] || null,
+          total_unread_messages: unreadCountMap[chat.id] || 0
+        };
+      });
+
+      return formattedChats;
     } catch (error) {
       console.error('Error in getUserChats:', error);
       throw error;
     }
+  },
+
+  /**
+   * updateMessageStatus
+   * Updates the status of a message (SENDING, SENT, DELIVERED, READ)
+   * Note: SENDING is accepted but not set by backend (intended for frontend optimistic updates)
+   * @param {string} messageId - The message ID
+   * @param {string} status - The new status
+   * @returns {Promise<Object>} - The updated message
+   */
+  async updateMessageStatus(messageId, status) {
+    if (!messageId || !status) {
+      throw new Error('messageId and status are required');
+    }
+
+    const validStatuses = ['SENDING', 'SENT', 'DELIVERED', 'READ'];
+    if (!validStatuses.includes(status)) {
+      throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+    }
+
+    const { data: updatedMessage, error } = await supabaseAdmin
+      .from('v1_chat_messages')
+      .update({ 
+        status,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', messageId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating message status:', error);
+      throw new Error(`Failed to update message status: ${error.message}`);
+    }
+
+    return updatedMessage;
   }
 };
 

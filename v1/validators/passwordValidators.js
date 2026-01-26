@@ -22,6 +22,29 @@ const validateBrandRegister = [
     .isLength({ min: 2, max: 100 })
     .withMessage("Name must be between 2 and 100 characters")
     .trim(),
+  body("fcm_token")
+    .optional()
+    .isString()
+    .withMessage("fcm_token must be a string")
+    .trim(),
+  body("device_type")
+    .optional()
+    .isString()
+    .withMessage("device_type must be a string")
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toLowerCase().trim();
+      const validValues = ["android", "ios", "web", "unknown"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("device_type must be one of: android, ios, web, unknown");
+      }
+      return true;
+    }),
+  body("device_id")
+    .optional()
+    .isString()
+    .withMessage("device_id must be a string")
+    .trim(),
 ];
 
 const validateBrandLogin = [
@@ -32,6 +55,29 @@ const validateBrandLogin = [
   body("password")
     .notEmpty()
     .withMessage("Password is required"),
+  body("fcm_token")
+    .optional()
+    .isString()
+    .withMessage("fcm_token must be a string")
+    .trim(),
+  body("device_type")
+    .optional()
+    .isString()
+    .withMessage("device_type must be a string")
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toLowerCase().trim();
+      const validValues = ["android", "ios", "web", "unknown"];
+      if (!validValues.includes(normalized)) {
+        throw new Error("device_type must be one of: android, ios, web, unknown");
+      }
+      return true;
+    }),
+  body("device_id")
+    .optional()
+    .isString()
+    .withMessage("device_id must be a string")
+    .trim(),
 ];
 
 const validateEmailVerification = [

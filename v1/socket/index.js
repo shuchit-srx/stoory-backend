@@ -3,17 +3,25 @@ const jwt = require('jsonwebtoken');
 const { ChatService, NotificationService } = require('../services');
 const { supabaseAdmin } = require('../db/config');
 
-// Rate limiting: Track message counts per user
+// Rate limiting configuration - Per-room rate limiting
+// Structure: Map<userId, Map<roomName, {count, resetTime}>>
 const messageRateLimits = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_MESSAGES_PER_WINDOW = 30; // Max 30 messages per minute
+const MAX_MESSAGES_PER_WINDOW = 30; // Max 30 messages per minute per room
 
-// Cleanup rate limiting map periodically to prevent memory leaks
+// Track user's active rooms for reconnection
+const userActiveRooms = new Map(); // Map<userId, Set<roomName>>
+
+// Cleanup expired rate limit entries to prevent memory leaks
 setInterval(() => {
   const now = Date.now();
-  for (const [userId, limits] of messageRateLimits.entries()) {
-    // Remove entries that are past their reset time
-    if (now > limits.resetTime) {
+  for (const [userId, roomLimits] of messageRateLimits.entries()) {
+    for (const [roomName, limits] of roomLimits.entries()) {
+      if (now > limits.resetTime) {
+        roomLimits.delete(roomName);
+      }
+    }
+    if (roomLimits.size === 0) {
       messageRateLimits.delete(userId);
     }
   }
@@ -22,170 +30,200 @@ setInterval(() => {
 const initSocket = (server) => {
   const io = socketIo(server, {
     cors: {
-      origin: process.env.CORS_ORIGIN?.split(",") || [
-        "http://localhost:3000",
-        "http://localhost:5173"
+      origin: process.env.CORS_ORIGIN?.split(',') || [
+        'http://localhost:3000',
+        'http://localhost:5173'
       ],
-      methods: ["GET", "POST"],
+      methods: ['GET', 'POST'],
       credentials: true,
-      allowedHeaders: ["Authorization", "Content-Type"]
+      allowedHeaders: ['Authorization', 'Content-Type']
     },
-    transports: ["websocket", "polling"],
+    transports: ['websocket', 'polling'],
     pingTimeout: 60000,
     pingInterval: 25000,
     maxHttpBufferSize: 1e8 // 100MB for file uploads
   });
 
-  // Attach io to notification service
   NotificationService.setSocketIO(io);
 
-  // Authentication middleware
+  // Authenticate socket connections using JWT token
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth.token;
       if (!token) {
-        return next(new Error("Authentication required"));
+        return next(new Error('Authentication required'));
       }
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       socket.user = decoded;
       next();
     } catch (err) {
-      console.error("Socket auth error:", err.message);
+      console.error('Socket auth error:', err.message);
       if (err.name === 'TokenExpiredError') {
-        return next(new Error("Token expired"));
+        return next(new Error('Token expired'));
       }
-      next(new Error("Invalid token"));
+      next(new Error('Invalid token'));
     }
   });
 
   io.on('connection', (socket) => {
     console.log(`User connected: ${socket.user.id}`);
     NotificationService.registerOnlineUser(socket.user.id, socket.id);
-    
-    // Track user's current room
+
+    // Initialize socket state
     socket.currentRoom = null;
     socket.userId = socket.user.id;
 
-    // Join chat room
+    // Restore room membership on reconnection
+    const userRooms = userActiveRooms.get(socket.user.id);
+    if (userRooms && userRooms.size > 0) {
+      // Rejoin all previous rooms
+      userRooms.forEach((roomName) => {
+        socket.join(roomName);
+        console.log(`User ${socket.user.id} rejoined room ${roomName} on reconnection`);
+      });
+      // Set current room to the first one (or most recent)
+      socket.currentRoom = Array.from(userRooms)[0];
+    }
+
+    // Handle joining a chat room
     socket.on('join_chat', async ({ applicationId }) => {
       try {
+        // Validate application ID
         if (!applicationId) {
-          return socket.emit('error', { 
-            message: 'applicationId is required' 
+          return socket.emit('error', {
+            message: 'applicationId is required'
           });
         }
 
-        // Validate access
+        // Check user access to application
         const hasAccess = await ChatService.validateUserAccess(
-          socket.user.id, 
+          socket.user.id,
           applicationId
         );
-        
+
         if (!hasAccess) {
-          return socket.emit('error', { 
-            message: 'Access denied to this application' 
+          return socket.emit('error', {
+            message: 'Access denied to this application'
           });
         }
 
-        // Check if chat exists and is active
+        // Verify chat exists and is active
         const chat = await ChatService.getChatByApplication(applicationId);
         if (!chat) {
-          return socket.emit('error', { 
-            message: 'Chat not found for this application' 
+          return socket.emit('error', {
+            message: 'Chat not found for this application'
           });
         }
 
         if (chat.status !== 'ACTIVE') {
-          return socket.emit('error', { 
-            message: 'Chat is closed' 
+          return socket.emit('error', {
+            message: 'Chat is closed'
           });
         }
 
         const roomName = `app_${applicationId}`;
-        
-        // Leave previous room if any
+
+        // Leave previous room if user was in one
         if (socket.currentRoom) {
           socket.leave(socket.currentRoom);
         }
-        
+
+        // Join new room
         socket.join(roomName);
         socket.currentRoom = roomName;
-        
+
+        // Track room membership for reconnection
+        if (!userActiveRooms.has(socket.user.id)) {
+          userActiveRooms.set(socket.user.id, new Set());
+        }
+        userActiveRooms.get(socket.user.id).add(roomName);
+
         console.log(`User ${socket.user.id} joined room ${roomName}`);
-        
-        // Notify others
+
+        // Notify other users in room
         socket.to(roomName).emit('user_joined', {
           userId: socket.user.id,
           applicationId,
           timestamp: new Date().toISOString()
         });
 
-        // Acknowledge join
+        // Confirm join to requester
         socket.emit('joined_chat', {
           applicationId,
           roomName
         });
       } catch (error) {
         console.error('Join chat error:', error);
-        socket.emit('error', { 
-          message: error.message || 'Failed to join chat' 
+        socket.emit('error', {
+          message: error.message || 'Failed to join chat'
         });
       }
     });
 
-    // Send message
+    // Handle sending messages
     socket.on('send_message', async (payload, callback) => {
       try {
         const { applicationId, message, attachmentUrl } = payload;
-        
-        // Validation
+
+        // Validate required fields
         if (!applicationId) {
-          return socket.emit('error', { 
-            message: 'applicationId is required' 
+          return socket.emit('error', {
+            message: 'applicationId is required'
           });
         }
 
         if (!message || typeof message !== 'string' || !message.trim()) {
-          return socket.emit('error', { 
-            message: 'message is required and must be a non-empty string' 
+          return socket.emit('error', {
+            message: 'message is required and must be a non-empty string'
           });
         }
 
-        // Message length validation
+        // Validate message length
         if (message.length > 10000) {
-          return socket.emit('error', { 
-            message: 'Message exceeds maximum length of 10000 characters' 
+          return socket.emit('error', {
+            message: 'Message exceeds maximum length of 10000 characters'
           });
         }
 
-        // Rate limiting
+        const roomName = `app_${applicationId}`;
+
+        // Verify user is in room (check before processing)
+        if (!socket.rooms.has(roomName)) {
+          return socket.emit('error', {
+            message: 'You must join the chat room first'
+          });
+        }
+
+        // Per-room rate limiting
         const now = Date.now();
-        const userLimits = messageRateLimits.get(socket.userId) || { count: 0, resetTime: now + RATE_LIMIT_WINDOW };
-        
-        if (now > userLimits.resetTime) {
-          // Reset window
-          userLimits.count = 0;
-          userLimits.resetTime = now + RATE_LIMIT_WINDOW;
+        if (!messageRateLimits.has(socket.userId)) {
+          messageRateLimits.set(socket.userId, new Map());
+        }
+        const userRoomLimits = messageRateLimits.get(socket.userId);
+        const roomLimits = userRoomLimits.get(roomName) || {
+          count: 0,
+          resetTime: now + RATE_LIMIT_WINDOW
+        };
+
+        // Reset window if expired
+        if (now > roomLimits.resetTime) {
+          roomLimits.count = 0;
+          roomLimits.resetTime = now + RATE_LIMIT_WINDOW;
         }
 
-        if (userLimits.count >= MAX_MESSAGES_PER_WINDOW) {
-          return socket.emit('error', { 
-            message: 'Rate limit exceeded. Please wait before sending more messages.' 
+        // Enforce rate limit
+        if (roomLimits.count >= MAX_MESSAGES_PER_WINDOW) {
+          return socket.emit('error', {
+            message: 'Rate limit exceeded. Please wait before sending more messages.'
           });
         }
 
-        userLimits.count++;
-        messageRateLimits.set(socket.userId, userLimits);
+        roomLimits.count++;
+        userRoomLimits.set(roomName, roomLimits);
+        messageRateLimits.set(socket.userId, userRoomLimits);
 
-        // Check if in room
-        if (!socket.rooms.has(`app_${applicationId}`)) {
-          return socket.emit('error', { 
-            message: 'You must join the chat room first' 
-          });
-        }
-
-        // Save message
+        // Save message to database
         const savedMessage = await ChatService.saveMessage(
           socket.user.id,
           applicationId,
@@ -193,45 +231,82 @@ const initSocket = (server) => {
           attachmentUrl
         );
 
-        // Broadcast to room (including sender)
-        io.to(`app_${applicationId}`).emit('receive_message', {
+        // Validate room membership again right before broadcast (prevent race condition)
+        if (!socket.rooms.has(roomName)) {
+          return socket.emit('error', {
+            message: 'You left the chat room. Please rejoin to send messages.'
+          });
+        }
+
+        // Prepare payload for broadcast (chat_id must be applicationId for frontend)
+        const emitPayload = {
           ...savedMessage,
+          chat_id: applicationId,
+          sender_id: savedMessage.sender_id,
           sender: {
-            id: socket.user.id,
-            // Add other user info if needed
+            id: socket.user.id
           }
+        };
+
+        // Broadcast message to all users in room
+        const roomSockets = await io.in(roomName).fetchSockets();
+        const recipientSockets = roomSockets.filter(s => s.userId !== socket.user.id);
+        
+        console.log(`[Socket] Emitting receive_message to room ${roomName}`, {
+          messageId: savedMessage.id,
+          chat_id: applicationId,
+          sender_id: socket.user.id,
+          roomClients: roomSockets.map(s => s.userId),
+          roomClientCount: roomSockets.length,
+          recipientCount: recipientSockets.length
         });
+
+        io.to(roomName).emit('receive_message', emitPayload);
+
+        // Update message status to DELIVERED for all recipients in the room
+        if (recipientSockets.length > 0) {
+          try {
+            await ChatService.updateMessageStatus(savedMessage.id, 'DELIVERED');
+            console.log(`[Socket] Message ${savedMessage.id} marked as DELIVERED to ${recipientSockets.length} recipients`);
+          } catch (statusError) {
+            console.error('[Socket] Failed to update message status to DELIVERED:', statusError);
+          }
+        }
 
         // Acknowledge to sender
         if (callback) {
-          callback({ 
-            success: true, 
+          callback({
+            success: true,
             messageId: savedMessage.id,
-            timestamp: savedMessage.created_at
+            timestamp: savedMessage.created_at,
+            status: 'SENT'
           });
         }
       } catch (error) {
         console.error('Send message error:', error);
-        socket.emit('error', { 
-          message: error.message || 'Failed to send message' 
+        socket.emit('error', {
+          message: error.message || 'Failed to send message'
         });
         if (callback) {
-          callback({ 
-            success: false, 
-            error: error.message 
+          callback({
+            success: false,
+            error: error.message
           });
         }
       }
     });
 
-    // Typing indicator
+    // Handle typing indicators
     socket.on('typing', ({ applicationId, isTyping }) => {
       if (!applicationId) {
         return;
       }
 
-      if (socket.currentRoom && socket.currentRoom === `app_${applicationId}`) {
-        socket.to(socket.currentRoom).emit('user_typing', {
+      const roomName = `app_${applicationId}`;
+
+      // Validate user is in room before broadcasting typing status
+      if (socket.rooms.has(roomName)) {
+        socket.to(roomName).emit('user_typing', {
           userId: socket.user.id,
           isTyping: Boolean(isTyping),
           timestamp: new Date().toISOString()
@@ -239,16 +314,16 @@ const initSocket = (server) => {
       }
     });
 
-    // Mark message as read
+    // Handle marking messages as read
     socket.on('mark_read', async ({ messageId }, callback) => {
       try {
         if (!messageId) {
-          return socket.emit('error', { 
-            message: 'messageId is required' 
+          return socket.emit('error', {
+            message: 'messageId is required'
           });
         }
 
-        // Get the message first to find the chat room (before marking as read)
+        // Fetch message to get application ID
         const { data: message, error: messageError } = await supabaseAdmin
           .from('v1_chat_messages')
           .select('chat_id, v1_chats(application_id)')
@@ -256,69 +331,85 @@ const initSocket = (server) => {
           .single();
 
         if (messageError || !message) {
-          return socket.emit('error', { 
-            message: 'Message not found' 
+          return socket.emit('error', {
+            message: 'Message not found'
           });
         }
 
-        // Mark message as read
+        // Mark message as read (this also updates status to READ)
         const readReceipt = await ChatService.markMessageAsRead(
           messageId,
           socket.user.id
         );
 
-        // Broadcast read receipt to room if we have the application ID
+        // Broadcast read receipt to room
         if (message.v1_chats && message.v1_chats.application_id) {
           const applicationId = message.v1_chats.application_id;
           const roomName = `app_${applicationId}`;
 
-          // Broadcast read receipt to room
           io.to(roomName).emit('message_read', {
             messageId,
             userId: socket.user.id,
             readAt: readReceipt.read_at || new Date().toISOString(),
+            status: 'READ',
             timestamp: new Date().toISOString()
           });
         }
 
-        // Acknowledge to sender
+        // Acknowledge to requester
         if (callback) {
-          callback({ 
-            success: true, 
-            readReceipt 
+          callback({
+            success: true,
+            readReceipt
           });
         }
       } catch (error) {
         console.error('Mark read error:', error);
-        socket.emit('error', { 
-          message: error.message || 'Failed to mark message as read' 
+        socket.emit('error', {
+          message: error.message || 'Failed to mark message as read'
         });
         if (callback) {
-          callback({ 
-            success: false, 
-            error: error.message 
+          callback({
+            success: false,
+            error: error.message
           });
         }
       }
     });
 
-    // Leave room
-    socket.on('leave_chat', () => {
-      if (socket.currentRoom) {
-        socket.to(socket.currentRoom).emit('user_left', {
+    // Handle leaving chat room
+    socket.on('leave_chat', (payload = {}) => {
+      const { applicationId } = payload;
+      const roomName = applicationId ? `app_${applicationId}` : socket.currentRoom;
+      
+      if (roomName && socket.rooms.has(roomName)) {
+        socket.to(roomName).emit('user_left', {
           userId: socket.user.id,
           timestamp: new Date().toISOString()
         });
-        socket.leave(socket.currentRoom);
-        socket.currentRoom = null;
+        socket.leave(roomName);
+        
+        // Remove from tracked rooms
+        const userRooms = userActiveRooms.get(socket.user.id);
+        if (userRooms) {
+          userRooms.delete(roomName);
+          if (userRooms.size === 0) {
+            userActiveRooms.delete(socket.user.id);
+          }
+        }
+        
+        if (socket.currentRoom === roomName) {
+          socket.currentRoom = null;
+        }
       }
     });
 
-    // Disconnect handler
+    // Handle disconnection
     socket.on('disconnect', (reason) => {
       console.log(`User ${socket.user.id} disconnected: ${reason}`);
       NotificationService.unregisterOnlineUser(socket.user.id, socket.id);
-      
+
+      // Notify room if user was in one
       if (socket.currentRoom) {
         socket.to(socket.currentRoom).emit('user_left', {
           userId: socket.user.id,
@@ -326,8 +417,11 @@ const initSocket = (server) => {
         });
       }
 
-      // Cleanup
+      // Cleanup rate limit data
       messageRateLimits.delete(socket.userId);
+      
+      // Cleanup room tracking
+      userActiveRooms.delete(socket.user.id);
     });
   });
 

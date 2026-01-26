@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: stoory-backend-v1
+    env: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: test
+      - key: PORT
+        value: 10000
+    healthCheckPath: /health
+
