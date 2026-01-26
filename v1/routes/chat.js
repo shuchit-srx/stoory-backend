@@ -26,23 +26,25 @@ router.post(
 );
 
 /**
- * GET /api/v1/chat/:applicationId
- * Get chat details for an application
- */
-router.get(
-  '/:applicationId',
-  authMiddleware.authenticateToken,
-  chatController.getChat
-);
-
-/**
- * GET /api/v1/chat/user/chats
+ * GET /api/v1/chat/user/my-chats
  * Get all chat IDs for the authenticated user (influencer or brand_owner)
+ * NOTE: This specific route must be defined before the generic /:chatId route
  */
 router.get(
   '/user/my-chats',
   authMiddleware.authenticateToken,
   chatController.getUserChats
+);
+
+/**
+ * GET /api/v1/chat/:chatId
+ * Get chat details by chat ID
+ * NOTE: This parameterized route must come after specific routes
+ */
+router.get(
+  '/:chatId',
+  authMiddleware.authenticateToken,
+  chatController.getChat
 );
 
 module.exports = router;

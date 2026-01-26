@@ -383,6 +383,19 @@ class PayoutService {
       if (phaseUpdateError) {
         console.error('[PayoutService/verifyPayoutPayment] Phase update error:', phaseUpdateError);
         // Log but don't fail payout verification if phase update fails
+      } else {
+        // Send flow state notification to influencer
+        try {
+          const NotificationService = require('./notificationService');
+          await NotificationService.notifyFlowStateChange(
+            payout.application_id,
+            'COMPLETED',
+            payout.influencer_id,
+            'Application completed successfully! 🎊'
+          );
+        } catch (notifError) {
+          console.error('[PayoutService/verifyPayoutPayment] Failed to send flow state notification:', notifError);
+        }
       }
 
       // Create transaction record (all amounts in RUPEES)
@@ -402,6 +415,20 @@ class PayoutService {
       } catch (txnError) {
         console.error('[PayoutService/verifyPayoutPayment] Transaction creation error:', txnError);
         // Don't fail verification if transaction creation fails
+      }
+
+      // Send notification to influencer
+      try {
+        const NotificationService = require('./notificationService');
+        await NotificationService.notifyPayoutReleased(
+          payout.id,
+          payout.application_id,
+          payout.influencer_id,
+          payout.amount
+        );
+      } catch (notifError) {
+        console.error('[PayoutService/verifyPayoutPayment] Failed to send notification:', notifError);
+        // Don't fail payout verification if notification fails
       }
 
       return {

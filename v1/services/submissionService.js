@@ -225,6 +225,19 @@ class SubmissionService {
         }
       }
 
+      // Always send notification to brand owner when script is submitted (including resubmissions)
+      try {
+        const NotificationService = require('./notificationService');
+        await NotificationService.notifyScriptSubmitted(
+          script.id,
+          applicationId,
+          application.brand_id,
+          application.influencer_id
+        );
+      } catch (notifError) {
+        console.error('[SubmissionService/submitScript] Failed to send notification:', notifError);
+      }
+
       return {
         success: true,
         message: 'Script submitted successfully',
@@ -307,6 +320,19 @@ class SubmissionService {
           console.error('[SubmissionService/submitWork] Phase update error:', updateError);
           // Don't fail the entire operation, just log it
         }
+      }
+
+      // Always send notification to brand owner when work is submitted (including resubmissions)
+      try {
+        const NotificationService = require('./notificationService');
+        await NotificationService.notifyWorkSubmitted(
+          workSubmission.id,
+          applicationId,
+          application.brand_id,
+          application.influencer_id
+        );
+      } catch (notifError) {
+        console.error('[SubmissionService/submitWork] Failed to send notification:', notifError);
       }
 
       return {
@@ -432,6 +458,22 @@ class SubmissionService {
           console.error('[SubmissionService/reviewScript] Phase update error:', phaseError);
           // Log but don't fail
         }
+      }
+
+      // Send notification to influencer (includes all statuses: ACCEPTED, REJECTED, REVISION)
+      try {
+        const NotificationService = require('./notificationService');
+        await NotificationService.notifyScriptReview(
+          scriptId,
+          application.id,
+          brandId,
+          application.influencer_id,
+          status,
+          remarks
+        );
+      } catch (notifError) {
+        console.error('[SubmissionService/reviewScript] Failed to send notification:', notifError);
+        // Don't fail the operation if notification fails
       }
 
       return {
@@ -605,6 +647,22 @@ class SubmissionService {
             }
           }
         }
+      }
+
+      // Send notification to influencer
+      try {
+        const NotificationService = require('./notificationService');
+        await NotificationService.notifyWorkReview(
+          workSubmissionId,
+          application.id,
+          brandId,
+          application.influencer_id,
+          status,
+          remarks
+        );
+      } catch (notifError) {
+        console.error('[SubmissionService/reviewWork] Failed to send notification:', notifError);
+        // Don't fail the operation if notification fails
       }
 
       return {
