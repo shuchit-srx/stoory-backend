@@ -123,6 +123,53 @@ class UserController {
       });
     }
   }
+
+  /**
+   * Delete current user (soft delete)
+   * DELETE /api/v1/users/delete-me
+   */
+  async deleteUser(req, res) {
+    try {
+      const userId = req.user?.id;
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          message: "User ID is required",
+        });
+      }
+
+      const result = await UserService.deleteUser(userId);
+
+      if (!result.success) {
+        return res.status(result.statusCode || 400).json({
+          success: false,
+          message: result.message || "Failed to delete user account",
+          error: result.error,
+          details: result.details || null,
+        });
+      }
+
+      const response = {
+        success: true,
+        message: result.message || "User account deleted successfully",
+      };
+
+      if (result.warning) {
+        response.warning = true;
+        response.pendingPayoutsCount = result.pendingPayoutsCount || 0;
+      }
+
+      return res.status(result.statusCode || 200).json(response);
+    } catch (err) {
+      console.error("[v1/UserController/deleteUser] Exception:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: err.message,
+      });
+    }
+  }
 }
 
 module.exports = new UserController();
