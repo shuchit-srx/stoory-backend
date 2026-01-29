@@ -335,6 +335,88 @@ class NotificationController {
       res.status(500).json({ success: false, message: 'Internal server error' });
     }
   }
+
+  async deleteNotification(req, res) {
+    try {
+      const userId = req.user.id;
+      const { id } = req.params;
+
+      // Verify notification belongs to user
+      const { data: notification, error: notifError } = await supabaseAdmin
+        .from('v1_notifications')
+        .select('id, user_id')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+
+      if (notifError || !notification) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Notification not found' 
+        });
+      }
+
+      // Delete the notification
+      const { error } = await supabaseAdmin
+        .from('v1_notifications')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', userId);
+
+      if (error) {
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Failed to delete notification', 
+          error: error.message 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Notification deleted successfully' 
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] deleteNotification error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async deleteAllNotifications(req, res) {
+    try {
+      const userId = req.user.id;
+      const { readOnly = false } = req.query; // Optional: delete only read notifications
+
+      let query = supabaseAdmin
+        .from('v1_notifications')
+        .delete()
+        .eq('user_id', userId);
+
+      // If readOnly is true, only delete read notifications
+      if (readOnly === 'true') {
+        query = query.eq('read', true);
+      }
+
+      const { error } = await query;
+
+      if (error) {
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Failed to delete notifications', 
+          error: error.message 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: readOnly === 'true' 
+          ? 'All read notifications deleted successfully' 
+          : 'All notifications deleted successfully'
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] deleteAllNotifications error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = new NotificationController();

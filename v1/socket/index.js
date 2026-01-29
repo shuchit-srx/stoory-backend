@@ -67,23 +67,26 @@ const initSocket = (server) => {
   });
 
   io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.user.id}`);
+    console.log(`User connected: ${socket.user.id} (socket: ${socket.id})`);
+    
+    // 🔧 CRITICAL CHANGE: Register immediately
+    // SIGNIFICANCE: Ensures user is tracked as online immediately
     NotificationService.registerOnlineUser(socket.user.id, socket.id);
 
-    // Initialize socket state
     socket.currentRoom = null;
     socket.userId = socket.user.id;
 
-    // Restore room membership on reconnection
-    const userRooms = userActiveRooms.get(socket.user.id);
-    if (userRooms && userRooms.size > 0) {
-      // Rejoin all previous rooms
-      userRooms.forEach((roomName) => {
-        socket.join(roomName);
-        console.log(`User ${socket.user.id} rejoined room ${roomName} on reconnection`);
-      });
-      // Set current room to the first one (or most recent)
-      socket.currentRoom = Array.from(userRooms)[0];
+    // 🔧 OPTIMIZATION: Verify socket is connected before restoring rooms
+    // SIGNIFICANCE: Prevents operations on disconnected sockets
+    if (socket.connected) {
+      const userRooms = userActiveRooms.get(socket.user.id);
+      if (userRooms && userRooms.size > 0) {
+        userRooms.forEach((roomName) => {
+          socket.join(roomName);
+          console.log(`User ${socket.user.id} rejoined room ${roomName} on reconnection`);
+        });
+        socket.currentRoom = Array.from(userRooms)[0];
+      }
     }
 
     // Handle joining a chat room
@@ -93,6 +96,14 @@ const initSocket = (server) => {
         if (!applicationId) {
           return socket.emit('error', {
             message: 'applicationId is required'
+          });
+        }
+
+        // 🔧 OPTIMIZATION: Verify socket is still connected
+        // SIGNIFICANCE: Prevents operations on disconnected sockets
+        if (!socket.connected) {
+          return socket.emit('error', {
+            message: 'Socket connection lost'
           });
         }
 
@@ -183,6 +194,14 @@ const initSocket = (server) => {
         if (message.length > 10000) {
           return socket.emit('error', {
             message: 'Message exceeds maximum length of 10000 characters'
+          });
+        }
+
+        // 🔧 OPTIMIZATION: Verify socket is still connected
+        // SIGNIFICANCE: Prevents message sending on disconnected sockets
+        if (!socket.connected) {
+          return socket.emit('error', {
+            message: 'Socket connection lost'
           });
         }
 
@@ -302,6 +321,12 @@ const initSocket = (server) => {
         return;
       }
 
+      // 🔧 OPTIMIZATION: Verify socket is connected before broadcasting
+      // SIGNIFICANCE: Prevents operations on disconnected sockets
+      if (!socket.connected) {
+        return;
+      }
+
       const roomName = `app_${applicationId}`;
 
       // Validate user is in room before broadcasting typing status
@@ -320,6 +345,14 @@ const initSocket = (server) => {
         if (!messageId) {
           return socket.emit('error', {
             message: 'messageId is required'
+          });
+        }
+
+        // 🔧 OPTIMIZATION: Verify socket is connected
+        // SIGNIFICANCE: Prevents operations on disconnected sockets
+        if (!socket.connected) {
+          return socket.emit('error', {
+            message: 'Socket connection lost'
           });
         }
 
@@ -404,12 +437,14 @@ const initSocket = (server) => {
       }
     });
 
-    // Handle disconnection
+    // 🔧 CRITICAL CHANGE: Enhanced disconnect handler
+    // SIGNIFICANCE: Proper cleanup prevents memory leaks and stale state
     socket.on('disconnect', (reason) => {
-      console.log(`User ${socket.user.id} disconnected: ${reason}`);
+      console.log(`User ${socket.user.id} disconnected: ${reason} (socket: ${socket.id})`);
+      
+      // 🔧 CRITICAL: Unregister immediately
       NotificationService.unregisterOnlineUser(socket.user.id, socket.id);
 
-      // Notify room if user was in one
       if (socket.currentRoom) {
         socket.to(socket.currentRoom).emit('user_left', {
           userId: socket.user.id,
@@ -417,11 +452,22 @@ const initSocket = (server) => {
         });
       }
 
-      // Cleanup rate limit data
-      messageRateLimits.delete(socket.userId);
-      
-      // Cleanup room tracking
-      userActiveRooms.delete(socket.user.id);
+      // 🔧 OPTIMIZATION: Only cleanup if user is fully offline
+      const remainingSockets = NotificationService.onlineUsers.get(socket.user.id);
+      if (!remainingSockets || remainingSockets.size === 0) {
+        messageRateLimits.delete(socket.userId);
+        userActiveRooms.delete(socket.user.id);
+        console.log(`[Socket] User ${socket.user.id} fully offline, cleaned up`);
+      } else {
+        console.log(`[Socket] User ${socket.user.id} still has ${remainingSockets.size} active socket(s)`);
+      }
+    });
+
+    // 🔧 CRITICAL CHANGE: Handle connection errors
+    // SIGNIFICANCE: Prevents stale state on errors
+    socket.on('error', (error) => {
+      console.error(`[Socket] Error for user ${socket.user.id} (socket: ${socket.id}):`, error);
+      NotificationService.unregisterOnlineUser(socket.user.id, socket.id);
     });
   });
 
