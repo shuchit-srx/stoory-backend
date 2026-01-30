@@ -723,7 +723,7 @@ class ApplicationService {
   async getInfluencerApplications(influencerId) {
     try {
       // Fetch applications with nested campaign and brand data
-      // Filter out deleted applications and applications with deleted campaigns
+      // Filter out applications with deleted campaigns
       const { data: applications, error: applicationsError } = await supabaseAdmin
         .from('v1_applications')
         .select(`
@@ -744,7 +744,6 @@ class ApplicationService {
           )
         `)
         .eq('influencer_id', influencerId)
-        .eq('is_deleted', false)
         .eq('v1_campaigns.is_deleted', false)
         .order('created_at', { ascending: false });
 

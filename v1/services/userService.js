@@ -156,7 +156,7 @@ class UserService {
       }
 
       // Get applications made by this influencer with nested campaign data
-      // Filter out deleted applications and applications with deleted campaigns
+      // Filter out applications with deleted campaigns
       const { data: applications, error: applicationsError } =
         await supabaseAdmin
           .from("v1_applications")
@@ -168,7 +168,6 @@ class UserService {
             )
           `)
           .eq("influencer_id", user.id)
-          .eq("is_deleted", false)
           .eq("v1_campaigns.is_deleted", false)
           .order("created_at", { ascending: false });
 
@@ -637,8 +636,7 @@ class UserService {
           )
         `
         )
-        .eq("influencer_id", userId)
-        .eq("is_deleted", false);
+        .eq("influencer_id", userId);
 
       if (error) {
         console.error(
@@ -813,25 +811,9 @@ class UserService {
           };
         }
 
-        // Soft delete all applications created by this influencer
-        const { error: applicationsError } = await supabaseAdmin
-          .from("v1_applications")
-          .update({ is_deleted: true })
-          .eq("influencer_id", userId)
-          .eq("is_deleted", false);
-
-        if (applicationsError) {
-          console.error(
-            "[v1/UserService/performSoftDelete] Applications update error:",
-            applicationsError
-          );
-          return {
-            success: false,
-            statusCode: 500,
-            message: "Failed to delete user account",
-            error: applicationsError.message,
-          };
-        }
+        // Note: Applications table does not have is_deleted column
+        // Applications are not soft deleted when influencer deletes account
+        // They remain in the database for historical/audit purposes
       }
 
       // Finally, soft delete the user record

@@ -417,12 +417,10 @@ class CampaignService {
       const scriptDeadline = campaign.script_deadline || null;
 
       // Fetch all applications for this campaign - only required fields
-      // Filter out deleted applications
       const { data: applications, error: applicationsError } = await supabaseAdmin
         .from("v1_applications")
         .select("id, phase, created_at, influencer_id")
         .eq("campaign_id", campaignId)
-        .eq("is_deleted", false)
         .order("created_at", { ascending: false });
 
       if (applicationsError) {
@@ -893,8 +891,7 @@ class CampaignService {
       const { data: allApplications, error: appsError } = await supabaseAdmin
         .from("v1_applications")
         .select("id, phase")
-        .eq("campaign_id", campaignId)
-        .eq("is_deleted", false);
+        .eq("campaign_id", campaignId);
 
       if (appsError) {
         console.error("[v1/deleteCampaign] Error fetching applications:", appsError);
@@ -987,12 +984,10 @@ class CampaignService {
       }
 
       // Get all applications for this campaign
-      // Filter out deleted applications
       const { data: applications, error: appsError } = await supabaseAdmin
         .from("v1_applications")
         .select("id, phase")
-        .eq("campaign_id", campaignId)
-        .eq("is_deleted", false);
+        .eq("campaign_id", campaignId);
 
       if (appsError) {
         console.error("[v1/checkAndCompleteNormalCampaign] Applications fetch error:", appsError);
