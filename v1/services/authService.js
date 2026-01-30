@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const whatsappService = require("../utils/whatsapp");
 const emailService = require("../utils/emailService");
+const { normalizeGender } = require("../utils/enumNormalizer");
 
 class AuthService {
   constructor() {
@@ -398,12 +399,22 @@ class AuthService {
         const id = crypto.randomUUID();
         const role = this.mapRole(userData?.role);
 
+        // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+        let dobValue = null;
+        if (userData?.dob !== undefined && userData?.dob !== null && userData?.dob !== "") {
+          const dobDate = new Date(userData.dob);
+          if (!isNaN(dobDate.getTime())) {
+            dobValue = dobDate.toISOString();
+          }
+        }
+
         const insertUser = {
           id,
           name: userData?.name || null,
           email: userData?.email || null,
           phone_number: phone,
           role,
+          dob: dobValue,
           is_deleted: false,
         };
 
@@ -482,6 +493,27 @@ class AuthService {
     const update = {};
     if (userData.name !== undefined) update.name = userData.name;
     if (userData.email !== undefined) update.email = userData.email;
+    // Handle gender - now stored in v1_users table
+    if (userData.gender !== undefined) {
+      const normalizedGender = normalizeGender(userData.gender);
+      if (normalizedGender !== null) {
+        update.gender = normalizedGender;
+      }
+    }
+    // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+    if (userData.dob !== undefined) {
+      const dobInput = userData.dob;
+      if (dobInput !== null && dobInput !== undefined && dobInput !== "") {
+        const dobDate = new Date(dobInput);
+        if (!isNaN(dobDate.getTime())) {
+          update.dob = dobDate.toISOString();
+        } else {
+          console.warn("[v1/updateBasicUserFields] Invalid dob format:", dobInput);
+        }
+      } else {
+        update.dob = null;
+      }
+    }
 
     if (Object.keys(update).length === 0) return;
 

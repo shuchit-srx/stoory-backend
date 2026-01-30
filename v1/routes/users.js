@@ -28,7 +28,7 @@ router.delete(
 router.get(
   "/influencers/:id",  // or /influencers/all for all influencers
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole("BRAND_OWNER"),
+  authMiddleware.requireRole("BRAND_OWNER","ADMIN"),
   UserController.getInfluencers
 );
 
