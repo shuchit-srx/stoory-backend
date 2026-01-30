@@ -244,6 +244,34 @@ function normalizeEnum(value, validValues) {
   return validValues.includes(normalized) ? normalized : null;
 }
 
+/**
+ * Validates if a value (case-insensitive) matches any of the valid enum values
+ * @param {string} value - The value to validate
+ * @param {string[]} validValues - Array of valid enum values (should be uppercase)
+ * @returns {boolean} - True if value matches (case-insensitive)
+ */
+function isValidEnum(value, validValues) {
+  if (!value || typeof value !== "string") return false;
+  const normalized = String(value).toUpperCase().trim();
+  return validValues.includes(normalized);
+}
+
+/**
+ * Custom validator for express-validator that accepts any case
+ * @param {string[]} validValues - Array of valid enum values (uppercase)
+ * @param {string} errorMessage - Error message if validation fails
+ * @returns {Function} - Express validator function
+ */
+function validateEnumCaseInsensitive(validValues, errorMessage) {
+  return (value) => {
+    if (value === undefined || value === null) return true; // Optional fields
+    if (!isValidEnum(value, validValues)) {
+      throw new Error(errorMessage);
+    }
+    return true;
+  };
+}
+
 module.exports = {
   normalizeGender,
   normalizeTier,
@@ -257,5 +285,7 @@ module.exports = {
   normalizeDataSource,
   normalizePayoutStatus,
   normalizeEnum,
+  isValidEnum,
+  validateEnumCaseInsensitive,
 };
 

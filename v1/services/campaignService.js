@@ -3,7 +3,7 @@ const {
   normalizeTier,
   normalizeCampaignType,
   normalizeCampaignStatus,
-} = require("../../utils/enumNormalizer");
+} = require("../utils/enumNormalizer");
 
 /**
  * Campaign Service

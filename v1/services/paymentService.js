@@ -1,7 +1,7 @@
 const { supabaseAdmin } = require("../db/config");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
-const { normalizePaymentStatus } = require("../../utils/enumNormalizer");
+const { normalizePaymentStatus } = require("../utils/enumNormalizer");
 
 // Initialize Razorpay
 let razorpay = null;
