@@ -406,12 +406,6 @@ class AuthService {
           if (!isNaN(dobDate.getTime())) {
             dobValue = dobDate.toISOString();
           }
-        } else if (userData?.date_of_birth !== undefined && userData?.date_of_birth !== null && userData?.date_of_birth !== "") {
-          // Also support date_of_birth field name
-          const dobDate = new Date(userData.date_of_birth);
-          if (!isNaN(dobDate.getTime())) {
-            dobValue = dobDate.toISOString();
-          }
         }
 
         const insertUser = {
@@ -507,8 +501,8 @@ class AuthService {
       }
     }
     // Handle dob - accept ISO8601 date strings or null, always save in ISO format
-    if (userData.dob !== undefined || userData.date_of_birth !== undefined) {
-      const dobInput = userData.dob !== undefined ? userData.dob : userData.date_of_birth;
+    if (userData.dob !== undefined) {
+      const dobInput = userData.dob;
       if (dobInput !== null && dobInput !== undefined && dobInput !== "") {
         const dobDate = new Date(dobInput);
         if (!isNaN(dobDate.getTime())) {
