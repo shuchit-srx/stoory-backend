@@ -323,24 +323,27 @@ class CampaignService {
       }
 
       // Attach brand details to each campaign - simplified structure
-      const campaignsWithBrand = (data || []).map(campaign => {
-        const brandUser = brandMap[campaign.brand_id] || null;
+      // Filter out campaigns where brand owner is deleted
+      const campaignsWithBrand = (data || [])
+        .filter(campaign => brandMap[campaign.brand_id]) // Only include campaigns with non-deleted brand owners
+        .map(campaign => {
+          const brandUser = brandMap[campaign.brand_id];
 
-        const brand = brandUser ? {
-          id: brandUser.id,
-          brand_name: brandUser.name
-        } : null;
+          const brand = {
+            id: brandUser.id,
+            brand_name: brandUser.name
+          };
 
-        return {
-          id: campaign.id,
-          title: campaign.title,
-          cover_image_url: campaign.cover_image_url,
-          budget: campaign.budget,
-          platform: campaign.platform,
-          content_type: campaign.content_type,
-          brand: brand
-        };
-      });
+          return {
+            id: campaign.id,
+            title: campaign.title,
+            cover_image_url: campaign.cover_image_url,
+            budget: campaign.budget,
+            platform: campaign.platform,
+            content_type: campaign.content_type,
+            brand: brand
+          };
+        });
 
       const hasMore = (validatedOffset + validatedLimit) < (count || 0);
 
@@ -374,7 +377,7 @@ class CampaignService {
       // Fetch the campaign - select only required fields
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language, work_deadline, script_deadline, acception_applications_till")
+        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language, work_deadline, script_deadline, applications_accepted_till, brand_id")
         .eq("id", campaignId)
         .eq("is_deleted", false)
         .maybeSingle();
@@ -395,15 +398,31 @@ class CampaignService {
         };
       }
 
+      // Check if brand owner is deleted
+      const { data: brandUser, error: brandUserError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, is_deleted")
+        .eq("id", campaign.brand_id)
+        .maybeSingle();
+
+      if (brandUserError || !brandUser || brandUser.is_deleted) {
+        return {
+          success: false,
+          message: "Campaign not found",
+        };
+      }
+
       // Get deadline fields from campaign
       const workDeadline = campaign.work_deadline || null;
       const scriptDeadline = campaign.script_deadline || null;
 
       // Fetch all applications for this campaign - only required fields
+      // Filter out deleted applications
       const { data: applications, error: applicationsError } = await supabaseAdmin
         .from("v1_applications")
         .select("id, phase, created_at, influencer_id")
         .eq("campaign_id", campaignId)
+        .eq("is_deleted", false)
         .order("created_at", { ascending: false });
 
       if (applicationsError) {
@@ -505,7 +524,7 @@ class CampaignService {
         budget: campaign.budget,
         platform: campaign.platform,
         content_type: campaign.content_type,
-        accepting_applications_till: campaign.acception_applications_till || null,
+        applications_accepted_till: campaign.applications_accepted_till || null,
         script_deadline: scriptDeadline,
         work_deadline: workDeadline,
         buffer_days: campaign.buffer_days || null,
@@ -803,8 +822,8 @@ class CampaignService {
           update.script_deadline = updateData.script_deadline ?? null;
         }
   
-        if (updateData.acception_applications_till !== undefined) {
-          update.acception_applications_till = updateData.acception_applications_till ?? null;
+        if (updateData.applications_accepted_till !== undefined) {
+          update.applications_accepted_till = updateData.applications_accepted_till ?? null;
         }
   
         if (updateData.buffer_days !== undefined) {
@@ -854,9 +873,9 @@ class CampaignService {
   /**
    * Delete campaign (Brand Owner only)
    * Soft deletes by setting is_deleted = true
-   * Campaign can only be deleted if:
-   * - No applications have been accepted, OR
-   * - If applications were accepted, all accepted applications must be in PAYOUT or COMPLETED state
+   * Campaign (NORMAL or BULK) can only be deleted if:
+   * - All applications are in APPLIED or COMPLETED state
+   * - No applications in ACCEPTED, SCRIPT, WORK, PAYOUT, or CANCELLED states
    */
   async deleteCampaign(campaignId, brandId) {
     try {
@@ -869,14 +888,13 @@ class CampaignService {
         return ownershipCheck;
       }
 
-      // Check if campaign has any applications in progress
-      // Campaign can only be deleted if:
-      // - No applications have been accepted, OR
-      // - If applications were accepted, all must be in PAYOUT or COMPLETED state
+      // Check if campaign has any applications
+      // Campaign can only be deleted if all applications are in APPLIED or COMPLETED state
       const { data: allApplications, error: appsError } = await supabaseAdmin
         .from("v1_applications")
         .select("id, phase")
-        .eq("campaign_id", campaignId);
+        .eq("campaign_id", campaignId)
+        .eq("is_deleted", false);
 
       if (appsError) {
         console.error("[v1/deleteCampaign] Error fetching applications:", appsError);
@@ -890,18 +908,19 @@ class CampaignService {
       if (!allApplications || allApplications.length === 0) {
         // No applications, safe to delete
       } else {
-        // Check if any application is in a state that prevents deletion
-        // Allowed states for deletion: APPLIED, CANCELLED, PAYOUT, COMPLETED
-        // Not allowed: ACCEPTED, SCRIPT, WORK (in progress states)
-        const invalidPhases = ["ACCEPTED", "SCRIPT", "WORK"];
+        // Check if all applications are in allowed states for deletion
+        // Allowed states: APPLIED, COMPLETED
+        // Not allowed: ACCEPTED, SCRIPT, WORK, PAYOUT, CANCELLED
+        const allowedPhases = ["APPLIED", "COMPLETED"];
         const invalidApplications = allApplications.filter(app => 
-          invalidPhases.includes(app.phase)
+          !allowedPhases.includes(app.phase)
         );
 
         if (invalidApplications.length > 0) {
+          const invalidPhases = [...new Set(invalidApplications.map(app => app.phase))];
           return {
             success: false,
-            message: "Cannot delete campaign. Some applications are still in progress (ACCEPTED, SCRIPT, or WORK phase). All applications must be in APPLIED, PAYOUT, or COMPLETED state before deletion.",
+            message: `Cannot delete campaign. All applications must be in APPLIED or COMPLETED state. Found applications in: ${invalidPhases.join(", ")}`,
           };
         }
       }
@@ -968,10 +987,12 @@ class CampaignService {
       }
 
       // Get all applications for this campaign
+      // Filter out deleted applications
       const { data: applications, error: appsError } = await supabaseAdmin
         .from("v1_applications")
         .select("id, phase")
-        .eq("campaign_id", campaignId);
+        .eq("campaign_id", campaignId)
+        .eq("is_deleted", false);
 
       if (appsError) {
         console.error("[v1/checkAndCompleteNormalCampaign] Applications fetch error:", appsError);

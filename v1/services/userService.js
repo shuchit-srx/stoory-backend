@@ -156,16 +156,20 @@ class UserService {
       }
 
       // Get applications made by this influencer with nested campaign data
+      // Filter out deleted applications and applications with deleted campaigns
       const { data: applications, error: applicationsError } =
         await supabaseAdmin
           .from("v1_applications")
           .select(`
             *,
-            v1_campaigns(
-              *
+            v1_campaigns!inner(
+              *,
+              is_deleted
             )
           `)
           .eq("influencer_id", user.id)
+          .eq("is_deleted", false)
+          .eq("v1_campaigns.is_deleted", false)
           .order("created_at", { ascending: false });
 
       if (applicationsError) {
@@ -619,8 +623,7 @@ class UserService {
 
   async validateInfluencerDeletion(userId) {
     try {
-      const phasesToCheck = ["ACCEPTED", "SCRIPT", "WORK", "PAYOUT"];
-
+      // Get all applications for this influencer
       const { data: applications, error } = await supabaseAdmin
         .from("v1_applications")
         .select(
@@ -635,7 +638,7 @@ class UserService {
         `
         )
         .eq("influencer_id", userId)
-        .in("phase", phasesToCheck);
+        .eq("is_deleted", false);
 
       if (error) {
         console.error(
@@ -652,13 +655,17 @@ class UserService {
 
       const apps = applications || [];
       if (apps.length === 0) {
+        // No applications, safe to delete
         return { success: true };
       }
 
-      // 1) If any ACCEPTED or SCRIPT exists, work cannot be submitted yet -> block
-      const preWorkApps = apps.filter((a) => ["ACCEPTED", "SCRIPT"].includes(a.phase));
-      if (preWorkApps.length > 0) {
-        const campaignTitles = preWorkApps
+      // Influencer can only delete account if ALL applications are in APPLIED, PAYOUT, or COMPLETED phase
+      const allowedPhases = ["APPLIED", "PAYOUT", "COMPLETED"];
+      const invalidApplications = apps.filter((a) => !allowedPhases.includes(a.phase));
+
+      if (invalidApplications.length > 0) {
+        const invalidPhases = [...new Set(invalidApplications.map((a) => a.phase))];
+        const campaignTitles = invalidApplications
           .map((a) => a.v1_campaigns?.title)
           .filter(Boolean)
           .slice(0, 5);
@@ -666,60 +673,16 @@ class UserService {
         return {
           success: false,
           statusCode: 400,
-          message:
-            "Cannot delete account. You have accepted collaborations where work is not submitted yet. Please submit the work before deleting your account.",
+          message: `Cannot delete account. All applications must be in APPLIED, PAYOUT, or COMPLETED phase. Found applications in: ${invalidPhases.join(", ")}`,
           details: {
-            activeApplicationsCount: preWorkApps.length,
+            activeApplicationsCount: invalidApplications.length,
             campaignTitles,
+            invalidPhases,
           },
         };
       }
 
-      // 2) For WORK phase, ensure at least one work submission exists per application
-      const workApps = apps.filter((a) => a.phase === "WORK");
-      if (workApps.length > 0) {
-        const workAppIds = workApps.map((a) => a.id);
-        const { data: submissions, error: submissionError } = await supabaseAdmin
-          .from("v1_work_submissions")
-          .select("application_id")
-          .in("application_id", workAppIds);
-
-        if (submissionError) {
-          console.error(
-            "[v1/UserService/validateInfluencerDeletion] Work submissions error:",
-            submissionError
-          );
-          return {
-            success: false,
-            statusCode: 500,
-            message: "Failed to validate deletion",
-            error: submissionError.message,
-          };
-        }
-
-        const submittedSet = new Set((submissions || []).map((s) => s.application_id));
-        const workNotSubmitted = workApps.filter((a) => !submittedSet.has(a.id));
-
-        if (workNotSubmitted.length > 0) {
-          const campaignTitles = workNotSubmitted
-            .map((a) => a.v1_campaigns?.title)
-            .filter(Boolean)
-            .slice(0, 5);
-
-          return {
-            success: false,
-            statusCode: 400,
-            message:
-              "Cannot delete account. You have accepted collaborations where work is not submitted yet. Please submit the work before deleting your account.",
-            details: {
-              activeApplicationsCount: workNotSubmitted.length,
-              campaignTitles,
-            },
-          };
-        }
-      }
-
-      // 3) PAYOUT phase -> allow but warn
+      // Check if there are any applications in PAYOUT phase to show warning
       const payoutApps = apps.filter((a) => a.phase === "PAYOUT");
       if (payoutApps.length > 0) {
         return {
@@ -767,6 +730,26 @@ class UserService {
             statusCode: 500,
             message: "Failed to delete user account",
             error: brandProfileError.message,
+          };
+        }
+
+        // Soft delete all campaigns created by this brand owner
+        const { error: campaignsError } = await supabaseAdmin
+          .from("v1_campaigns")
+          .update({ is_deleted: true })
+          .eq("brand_id", userId)
+          .eq("is_deleted", false);
+
+        if (campaignsError) {
+          console.error(
+            "[v1/UserService/performSoftDelete] Campaigns update error:",
+            campaignsError
+          );
+          return {
+            success: false,
+            statusCode: 500,
+            message: "Failed to delete user account",
+            error: campaignsError.message,
           };
         }
       }
@@ -827,6 +810,26 @@ class UserService {
             statusCode: 500,
             message: "Failed to delete user account",
             error: portfolioError.message,
+          };
+        }
+
+        // Soft delete all applications created by this influencer
+        const { error: applicationsError } = await supabaseAdmin
+          .from("v1_applications")
+          .update({ is_deleted: true })
+          .eq("influencer_id", userId)
+          .eq("is_deleted", false);
+
+        if (applicationsError) {
+          console.error(
+            "[v1/UserService/performSoftDelete] Applications update error:",
+            applicationsError
+          );
+          return {
+            success: false,
+            statusCode: 500,
+            message: "Failed to delete user account",
+            error: applicationsError.message,
           };
         }
       }
