@@ -691,6 +691,18 @@ class ApplicationService {
         // Don't fail completion if chat closure fails, but log it
       }
 
+      // Auto-complete NORMAL campaigns when all applications are completed
+      try {
+        const CampaignService = require('./campaignService');
+        const campaignResult = await CampaignService.checkAndCompleteNormalCampaign(app.campaign_id);
+        if (campaignResult.success && campaignResult.campaignCompleted) {
+          console.log(`[ApplicationService/complete] Campaign ${app.campaign_id} auto-completed`);
+        }
+      } catch (campaignError) {
+        console.error(`[ApplicationService/complete] Failed to check campaign completion:`, campaignError);
+        // Don't fail application completion if campaign check fails, but log it
+      }
+
       return {
         success: true,
         message: 'Application completed successfully',
@@ -711,13 +723,14 @@ class ApplicationService {
   async getInfluencerApplications(influencerId) {
     try {
       // Fetch applications with nested campaign and brand data
+      // Filter out applications with deleted campaigns
       const { data: applications, error: applicationsError } = await supabaseAdmin
         .from('v1_applications')
         .select(`
           id,
           phase,
           created_at,
-          v1_campaigns(
+          v1_campaigns!inner(
             id,
             title,
             description,
@@ -726,10 +739,12 @@ class ApplicationService {
             content_type,
             language,
             brand_id,
-            cover_image_url
+            cover_image_url,
+            is_deleted
           )
         `)
         .eq('influencer_id', influencerId)
+        .eq('v1_campaigns.is_deleted', false)
         .order('created_at', { ascending: false });
 
       if (applicationsError) {
@@ -777,28 +792,35 @@ class ApplicationService {
       }
 
       // Format response according to required structure
-      const formattedApplications = applications.map(app => {
-        const campaign = app.v1_campaigns || null;
-        const brandId = campaign?.brand_id;
-        const brand = brandId ? brandMap[brandId] || null : null;
+      // Filter out applications where brand owner is deleted
+      const formattedApplications = applications
+        .filter(app => {
+          const campaign = app.v1_campaigns;
+          const brandId = campaign?.brand_id;
+          return brandId && brandMap[brandId]; // Only include if brand owner is not deleted
+        })
+        .map(app => {
+          const campaign = app.v1_campaigns;
+          const brandId = campaign.brand_id;
+          const brand = brandMap[brandId];
 
-        return {
-          id: app.id,
-          phase: app.phase,
-          created_at: app.created_at,
-          campaign: campaign ? {
-            id: campaign.id,
-            title: campaign.title,
-            description: campaign.description,
-            cover_image_url: campaign.cover_image_url,
-            budget: campaign.budget,
-            platform: campaign.platform,
-            content_type: campaign.content_type,
-            language: campaign.language,
-            brand: brand,
-          } : null,
-        };
-      });
+          return {
+            id: app.id,
+            phase: app.phase,
+            created_at: app.created_at,
+            campaign: {
+              id: campaign.id,
+              title: campaign.title,
+              description: campaign.description,
+              cover_image_url: campaign.cover_image_url,
+              budget: campaign.budget,
+              platform: campaign.platform,
+              content_type: campaign.content_type,
+              language: campaign.language,
+              brand: brand,
+            },
+          };
+        });
 
       return {
         success: true,

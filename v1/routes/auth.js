@@ -30,6 +30,11 @@ router.post(
   validateSendOTP,
   AuthController.sendRegistrationOTP
 );
+router.post(
+  "/send-reactivation-otp",
+  validateSendOTP,
+  AuthController.sendReactivationOTP
+);
 router.post("/verify-otp", validateVerifyOTP, AuthController.verifyOTP);
 router.post("/refresh-token", AuthController.refreshToken);
 

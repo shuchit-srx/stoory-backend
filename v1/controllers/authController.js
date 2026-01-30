@@ -25,6 +25,7 @@ class AuthController {
         success: false,
         message: result.message,
         code: result.code,
+        is_deleted: result.is_deleted ?? false,
       });
     } catch (err) {
       console.error("[v1/sendOTP] error:", err);
@@ -34,6 +35,7 @@ class AuthController {
       });
     }
   }
+
 
   async sendRegistrationOTP(req, res) {
     try {
@@ -65,6 +67,42 @@ class AuthController {
       });
     }
   }
+
+
+  async sendReactivationOTP(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { phone, role } = req.body;
+
+      const result = await AuthService.sendReactivationOTP(phone, role);
+
+      if (result.success) {
+        return res.status(200).json({
+          success: true,
+          message: result.message,
+          is_deleted: true, // explicit, client flow depends on this
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+        code: result.code,
+        is_deleted: result.is_deleted ?? false,
+      });
+    } catch (err) {
+      console.error("[v1/sendReactivationOTP] error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
 
   async verifyOTP(req, res) {
     try {
@@ -133,7 +171,7 @@ class AuthController {
 
       const status =
         result.code === "REFRESH_TOKEN_EXPIRED" ||
-        result.code === "INVALID_TOKEN_TYPE"
+          result.code === "INVALID_TOKEN_TYPE"
           ? 401
           : 400;
 
@@ -416,8 +454,8 @@ class AuthController {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const panInput = req.body?.pan || req.body?.pan_number;
-      
+      const panInput = req.body?.pan;
+
       // Extract userId and userRole from authenticated token (required - set by authMiddleware)
       // Token payload structure: { id, phone, role }
       // Since authenticateToken middleware is used, req.user is guaranteed to exist
@@ -451,14 +489,14 @@ class AuthController {
       if (!result.success) {
         const statusCode =
           result.error_type === "invalid_format" ||
-          result.error_type === "different_pan_exists" ||
-          result.error_type === "duplicate_pan"
+            result.error_type === "different_pan_exists" ||
+            result.error_type === "duplicate_pan"
             ? 400
             : result.error_type === "timeout"
-            ? 504
-            : result.error_type === "service_unavailable"
-            ? 503
-            : result.http_status || 500;
+              ? 504
+              : result.error_type === "service_unavailable"
+                ? 503
+                : result.http_status || 500;
 
         return res.status(statusCode).json({
           success: false,

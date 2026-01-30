@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const whatsappService = require("../utils/whatsapp");
 const emailService = require("../utils/emailService");
+const { normalizeGender } = require("../utils/enumNormalizer");
 
 class AuthService {
   constructor() {
@@ -17,6 +18,16 @@ class AuthService {
 
   generateOTP() {
     return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+  // Map legacy roles → v1 roles
+  mapRole(userDataRole) {
+    if (!userDataRole) return "INFLUENCER";
+
+    const role = String(userDataRole).toLowerCase().trim();
+    if (role === "influencer") return "INFLUENCER";
+    if (role === "brand_owner" || role === "brand" || role === "owner") return "BRAND_OWNER";
+    if (role === "admin") return "ADMIN";
+    return "INFLUENCER"; // default
   }
 
   async storeOTP(phone, otp) {
@@ -34,7 +45,7 @@ class AuthService {
         console.error("[v1/storeOTP] error:", error);
         return { success: false, message: "Failed to store OTP" };
       }
-      
+
       return { success: true };
     } catch (err) {
       console.error("[v1/storeOTP] error:", err);
@@ -101,16 +112,6 @@ class AuthService {
     }
   }
 
-  // Map legacy roles → v1 roles
-  mapRole(userDataRole) {
-    if (!userDataRole) return "INFLUENCER";
-
-    const role = String(userDataRole).toLowerCase().trim();
-    if (role === "influencer") return "INFLUENCER";
-    if (role === "brand_owner" || role === "brand" || role === "owner") return "BRAND_OWNER";
-    if (role === "admin") return "ADMIN";
-    return "INFLUENCER"; // default
-  }
 
   // ---------- Send OTP (login existing v1 user) ----------
 
@@ -161,6 +162,14 @@ class AuthService {
           success: false,
           message: "Account not found. Please register the phone number.",
           code: "USER_NOT_FOUND",
+        };
+      }
+
+      if (user.is_deleted === true) {
+        return {
+          success: false,
+          message: "Account deleted, reactivate to continue",
+          is_deleted: true,
         };
       }
 
@@ -263,6 +272,110 @@ class AuthService {
     }
   }
 
+  async sendReactivationOTP(phone, role = null) {
+    try {
+      // Validate phone format
+      if (!phone.startsWith("+")) {
+        return {
+          success: false,
+          message: "Phone number must include country code (e.g., +1234567890)",
+        };
+      }
+
+      const phoneRegex = /^\+[1-9]\d{6,14}$/;
+      if (!phoneRegex.test(phone)) {
+        return {
+          success: false,
+          message:
+            "Invalid phone number format. Use international format: +[country code][number]",
+        };
+      }
+
+      // Bypass for mock users (only if enabled)
+      const mockUsersService = require("./mockUsersService");
+      if (
+        mockUsersService.isMockUsersEnabled() &&
+        mockUsersService.isMockUser(phone)
+      ) {
+        return {
+          success: true,
+          message: "OTP sent successfully",
+          is_deleted: true,
+        };
+      }
+
+      // Bypass for legacy test phone number
+      if (phone === "+919876543210") {
+        return {
+          success: true,
+          message: "OTP sent successfully",
+          is_deleted: true,
+        };
+      }
+
+      // Check if user exists
+      const { success, user } = await this.findV1UserByPhone(phone);
+      if (!success) {
+        return { success: false, message: "Database error" };
+      }
+
+      if (!user) {
+        return {
+          success: false,
+          message: "Account not found. Please register first.",
+          code: "USER_NOT_FOUND",
+        };
+      }
+
+      // 🚫 Active account should NOT use reactivation flow
+      if (user.is_deleted === false) {
+        return {
+          success: false,
+          message: "Account is already active. Please login.",
+          code: "ACCOUNT_ALREADY_ACTIVE",
+          is_deleted: false,
+        };
+      }
+
+      // Validate role if provided
+      if (role) {
+        const validRoles = ["BRAND_OWNER", "INFLUENCER", "ADMIN"];
+        if (!validRoles.includes(role)) {
+          return {
+            success: false,
+            message: "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
+            code: "INVALID_ROLE",
+          };
+        }
+
+        if (user.role !== role) {
+          return {
+            success: false,
+            message: `Phone number does not belong to a ${role}.`,
+            code: "ROLE_MISMATCH",
+          };
+        }
+      }
+
+      // Generate and store OTP
+      const otp = this.generateOTP();
+      const storeResult = await this.storeOTP(phone, otp);
+      if (!storeResult.success) return storeResult;
+
+      // Send OTP
+      const sendResult = await whatsappService.sendOTP(phone, otp);
+
+      return {
+        ...sendResult,
+        is_deleted: true,
+      };
+    } catch (err) {
+      console.error("[v1/sendReactivationOTP] error:", err);
+      return { success: false, message: "Failed to send reactivation OTP" };
+    }
+  }
+
+
   // ---------- Verify OTP & create/update v1 users + profiles ----------
 
   async verifyOTP(phone, token, userData) {
@@ -286,12 +399,22 @@ class AuthService {
         const id = crypto.randomUUID();
         const role = this.mapRole(userData?.role);
 
+        // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+        let dobValue = null;
+        if (userData?.dob !== undefined && userData?.dob !== null && userData?.dob !== "") {
+          const dobDate = new Date(userData.dob);
+          if (!isNaN(dobDate.getTime())) {
+            dobValue = dobDate.toISOString();
+          }
+        }
+
         const insertUser = {
           id,
           name: userData?.name || null,
           email: userData?.email || null,
           phone_number: phone,
           role,
+          dob: dobValue,
           is_deleted: false,
         };
 
@@ -336,7 +459,12 @@ class AuthService {
           }
         }
         // ADMIN and AGENT don't need profiles for now
-      } else {
+      }
+      else if (user && user.is_deleted === true) {
+        // reactivate user
+        await this.reactivateUser(user);
+      }
+      else {
         // Existing user: optionally update basic fields
         await this.updateBasicUserFields(user, userData);
       }
@@ -365,6 +493,27 @@ class AuthService {
     const update = {};
     if (userData.name !== undefined) update.name = userData.name;
     if (userData.email !== undefined) update.email = userData.email;
+    // Handle gender - now stored in v1_users table
+    if (userData.gender !== undefined) {
+      const normalizedGender = normalizeGender(userData.gender);
+      if (normalizedGender !== null) {
+        update.gender = normalizedGender;
+      }
+    }
+    // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+    if (userData.dob !== undefined) {
+      const dobInput = userData.dob;
+      if (dobInput !== null && dobInput !== undefined && dobInput !== "") {
+        const dobDate = new Date(dobInput);
+        if (!isNaN(dobDate.getTime())) {
+          update.dob = dobDate.toISOString();
+        } else {
+          console.warn("[v1/updateBasicUserFields] Invalid dob format:", dobInput);
+        }
+      } else {
+        update.dob = null;
+      }
+    }
 
     if (Object.keys(update).length === 0) return;
 
@@ -374,6 +523,149 @@ class AuthService {
       console.error("[v1/updateBasicUserFields] error:", err);
     }
   }
+
+  async reactivateUser(user) {
+    try {
+      if (!user?.id) {
+        return {
+          success: false,
+          statusCode: 400,
+          message: "User ID is required for reactivation",
+        };
+      }
+
+      if (!user.is_deleted) {
+        return {
+          success: false,
+          statusCode: 400,
+          message: "User account is already active",
+        };
+      }
+
+      const nowIso = new Date().toISOString();
+
+      // -------- Role-specific reactivation --------
+
+      if (user.role === "BRAND_OWNER") {
+        const { error } = await supabaseAdmin
+          .from("v1_brand_profiles")
+          .update({ is_deleted: false, updated_at: nowIso })
+          .eq("user_id", user.id)
+          .eq("is_deleted", true);
+
+        if (error) {
+          console.error(
+            "[v1/UserService/reactivateUser] Brand profile error:",
+            error
+          );
+          return {
+            success: false,
+            statusCode: 500,
+            message: "Failed to reactivate brand profile",
+            error: error.message,
+          };
+        }
+      }
+
+      if (user.role === "INFLUENCER") {
+        const { error: profileError } = await supabaseAdmin
+          .from("v1_influencer_profiles")
+          .update({ is_deleted: false, updated_at: nowIso })
+          .eq("user_id", user.id)
+          .eq("is_deleted", true);
+
+        if (profileError) {
+          console.error(
+            "[v1/UserService/reactivateUser] Influencer profile error:",
+            profileError
+          );
+          return {
+            success: false,
+            statusCode: 500,
+            message: "Failed to reactivate influencer profile",
+            error: profileError.message,
+          };
+        }
+
+        const { error: socialError } = await supabaseAdmin
+          .from("v1_influencer_social_accounts")
+          .update({ is_deleted: false, updated_at: nowIso })
+          .eq("user_id", user.id)
+          .eq("is_deleted", true);
+
+        if (socialError) {
+          console.error(
+            "[v1/UserService/reactivateUser] Social accounts error:",
+            socialError
+          );
+          return {
+            success: false,
+            statusCode: 500,
+            message: "Failed to reactivate influencer social accounts",
+            error: socialError.message,
+          };
+        }
+
+        const { error: portfolioError } = await supabaseAdmin
+          .from("v1_influencer_portfolio")
+          .update({ is_deleted: false })
+          .eq("user_id", user.id)
+          .eq("is_deleted", true);
+
+        if (portfolioError) {
+          console.error(
+            "[v1/UserService/reactivateUser] Portfolio error:",
+            portfolioError
+          );
+          return {
+            success: false,
+            statusCode: 500,
+            message: "Failed to reactivate influencer portfolio",
+            error: portfolioError.message,
+          };
+        }
+      }
+
+      // -------- Reactivate user record last --------
+
+      const { error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .update({
+          is_deleted: false,
+          updated_at: nowIso,
+        })
+        .eq("id", user.id)
+        .eq("is_deleted", true);
+
+      if (userError) {
+        console.error(
+          "[v1/UserService/reactivateUser] User update error:",
+          userError
+        );
+        return {
+          success: false,
+          statusCode: 500,
+          message: "Failed to reactivate user account",
+          error: userError.message,
+        };
+      }
+
+      return {
+        success: true,
+        statusCode: 200,
+        message: "User account reactivated successfully",
+      };
+    } catch (err) {
+      console.error("[v1/UserService/reactivateUser] Exception:", err);
+      return {
+        success: false,
+        statusCode: 500,
+        message: "Failed to reactivate user account",
+        error: err.message,
+      };
+    }
+  }
+
 
   // ---------- JWT helpers ----------
 
@@ -552,7 +844,7 @@ class AuthService {
    */
   async registerBrandOwner(email, password, name) {
     let createdUserId = null; // Track created user ID for cleanup
-    
+
     try {
       // 1) Validate email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -641,7 +933,7 @@ class AuthService {
             .from("v1_users")
             .delete()
             .eq("id", createdUserId);
-          
+
           if (deleteError) {
             console.error(
               "[v1/registerBrandOwner] Failed to rollback user creation:",
@@ -664,12 +956,11 @@ class AuthService {
             );
           }
         }
-        
+
         return {
           success: false,
-          message: `Failed to create brand profile: ${
-            profileResult.error || "Unknown error"
-          }`,
+          message: `Failed to create brand profile: ${profileResult.error || "Unknown error"
+            }`,
         };
       }
 
@@ -766,7 +1057,7 @@ class AuthService {
       };
     } catch (err) {
       console.error("[v1/registerBrandOwner] Exception:", err);
-      
+
       // If user was created but exception occurred, try to clean up
       if (createdUserId) {
         try {
@@ -778,7 +1069,7 @@ class AuthService {
             .from("v1_users")
             .delete()
             .eq("id", createdUserId);
-          
+
           if (deleteError) {
             console.error(
               "[v1/registerBrandOwner] Failed to cleanup user after exception:",
@@ -810,10 +1101,10 @@ class AuthService {
           );
         }
       }
-      
-      return { 
-        success: false, 
-        message: `Registration failed: ${err.message || "Unknown error"}` 
+
+      return {
+        success: false,
+        message: `Registration failed: ${err.message || "Unknown error"}`
       };
     }
   }

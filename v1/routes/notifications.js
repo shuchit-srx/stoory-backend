@@ -10,6 +10,12 @@ router.get('/', authMiddleware.authenticateToken, notificationController.getNoti
 // Mark as read
 router.patch('/:id/read', authMiddleware.authenticateToken, notificationController.markAsRead.bind(notificationController));
 
+// Delete specific notification
+router.delete('/:id', authMiddleware.authenticateToken, notificationController.deleteNotification.bind(notificationController));
+
+// Delete all notifications (or only read notifications)
+router.delete('/', authMiddleware.authenticateToken, notificationController.deleteAllNotifications.bind(notificationController));
+
 // Delivery stats
 router.get(
   '/:id/delivery-stats',
