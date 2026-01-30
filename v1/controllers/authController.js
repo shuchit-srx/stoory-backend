@@ -454,7 +454,7 @@ class AuthController {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const panInput = req.body?.pan || req.body?.pan_number;
+      const panInput = req.body?.pan;
 
       // Extract userId and userRole from authenticated token (required - set by authMiddleware)
       // Token payload structure: { id, phone, role }

@@ -115,10 +115,10 @@ const validateCreateCampaign = [
     .isISO8601()
     .withMessage("script_deadline must be a valid ISO 8601 date")
     .toDate(),
-  body("acception_applications_till")
+  body("applications_accepted_till")
     .optional()
     .isISO8601()
-    .withMessage("acception_applications_till must be a valid ISO 8601 date")
+    .withMessage("applications_accepted_till must be a valid ISO 8601 date")
     .toDate(),
   body("buffer_days")
     .optional()
@@ -136,18 +136,18 @@ const validateCreateCampaign = [
         );
       }
     }
-    // Validate that acception_applications_till <= work_deadline if both are provided
+    // Validate that applications_accepted_till <= work_deadline if both are provided
     if (
-      value.acception_applications_till !== undefined &&
+      value.applications_accepted_till !== undefined &&
       value.work_deadline !== undefined &&
-      value.acception_applications_till &&
+      value.applications_accepted_till &&
       value.work_deadline
     ) {
-      const acceptingDate = new Date(value.acception_applications_till);
+      const acceptingDate = new Date(value.applications_accepted_till);
       const workDate = new Date(value.work_deadline);
       if (acceptingDate > workDate) {
         throw new Error(
-          "acception_applications_till must be less than or equal to work_deadline"
+          "applications_accepted_till must be less than or equal to work_deadline"
         );
       }
     }
@@ -264,10 +264,10 @@ const validateUpdateCampaign = [
     .isISO8601()
     .withMessage("script_deadline must be a valid ISO 8601 date")
     .toDate(),
-  body("acception_applications_till")
+  body("applications_accepted_till")
     .optional()
     .isISO8601()
-    .withMessage("acception_applications_till must be a valid ISO 8601 date")
+    .withMessage("applications_accepted_till must be a valid ISO 8601 date")
     .toDate(),
   body("buffer_days")
     .optional()
@@ -285,18 +285,18 @@ const validateUpdateCampaign = [
         );
       }
     }
-    // Validate that acception_applications_till <= work_deadline if both are provided
+    // Validate that applications_accepted_till <= work_deadline if both are provided
     if (
-      value.acception_applications_till !== undefined &&
+      value.applications_accepted_till !== undefined &&
       value.work_deadline !== undefined &&
-      value.acception_applications_till &&
+      value.applications_accepted_till &&
       value.work_deadline
     ) {
-      const acceptingDate = new Date(value.acception_applications_till);
+      const acceptingDate = new Date(value.applications_accepted_till);
       const workDate = new Date(value.work_deadline);
       if (acceptingDate > workDate) {
         throw new Error(
-          "acception_applications_till must be less than or equal to work_deadline"
+          "applications_accepted_till must be less than or equal to work_deadline"
         );
       }
     }

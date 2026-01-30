@@ -1,4 +1,9 @@
 const { supabaseAdmin } = require("../db/config");
+const {
+  normalizeTier,
+  normalizeCampaignType,
+  normalizeCampaignStatus,
+} = require("../utils/enumNormalizer");
 
 /**
  * Campaign Service
@@ -34,7 +39,7 @@ class CampaignService {
    */
   normalizeStatus(status) {
     if (!status) return "DRAFT";
-    return status.toUpperCase();
+    return normalizeCampaignStatus(status) || "DRAFT";
   }
 
   /**
@@ -42,17 +47,14 @@ class CampaignService {
    */
   normalizeType(type) {
     if (!type) return "NORMAL";
-    return type.toUpperCase();
+    return normalizeCampaignType(type) || "NORMAL";
   }
 
   /**
    * Normalize influencer tier
    */
   normalizeTier(tier) {
-    if (!tier) return null;
-    const normalized = String(tier).toUpperCase().trim();
-    const validTiers = ["NANO", "MICRO", "MID", "MACRO"];
-    return validTiers.includes(normalized) ? normalized : null;
+    return normalizeTier(tier);
   }
 
   /**
@@ -62,7 +64,7 @@ class CampaignService {
     try {
       const { data, error } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("brand_id")
+        .select("brand_id, is_deleted")
         .eq("id", campaignId)
         .maybeSingle();
 
@@ -73,6 +75,10 @@ class CampaignService {
 
       if (!data) {
         return { success: false, message: "Campaign not found" };
+      }
+
+      if (data.is_deleted) {
+        return { success: false, message: "Campaign already deleted" };
       }
 
       if (data.brand_id !== brandId) {
@@ -92,7 +98,7 @@ class CampaignService {
     async createCampaign(brandId, campaignData) {
       try {
         // Validate type
-        const type = this.normalizeType(campaignData.type);
+        const type = normalizeCampaignType(campaignData.type) || "NORMAL";
         if (!this.validateType(type)) {
           return {
             success: false,
@@ -101,7 +107,7 @@ class CampaignService {
         }
   
         // Validate status
-        const status = this.normalizeStatus(campaignData.status || "DRAFT");
+        const status = normalizeCampaignStatus(campaignData.status) || "DRAFT";
         if (!this.validateStatus(status)) {
           return {
             success: false,
@@ -185,14 +191,14 @@ class CampaignService {
           content_type: Array.isArray(campaignData.content_type) 
             ? campaignData.content_type 
             : [],
-          influencer_tier: this.normalizeTier(campaignData.influencer_tier),
+          influencer_tier: normalizeTier(campaignData.influencer_tier),
           categories: campaignData.categories ?? null,
           language: campaignData.language ?? null,
           brand_guideline: campaignData.brand_guideline ?? null,
           // Deadline fields
           work_deadline: campaignData.work_deadline ?? null,
           script_deadline: campaignData.script_deadline ?? null,
-          acception_applications_till: campaignData.acception_applications_till ?? null,
+          applications_accepted_till: campaignData.applications_accepted_till ?? null,
           buffer_days: campaignData.buffer_days ?? 0,
         };
   
@@ -247,18 +253,19 @@ class CampaignService {
       let query = supabaseAdmin
         .from("v1_campaigns")
         .select("id, title, cover_image_url, budget, platform, content_type, brand_id", { count: "exact" })
+        .eq("is_deleted", false)
         .order("created_at", { ascending: false });
 
       // Apply filters
       if (status) {
-        const normalizedStatus = this.normalizeStatus(status);
+        const normalizedStatus = normalizeCampaignStatus(status) || "DRAFT";
         if (this.validateStatus(normalizedStatus)) {
           query = query.eq("status", normalizedStatus);
         }
       }
 
       if (type) {
-        const normalizedType = this.normalizeType(type);
+        const normalizedType = normalizeCampaignType(type) || "NORMAL";
         if (this.validateType(normalizedType)) {
           query = query.eq("type", normalizedType);
         }
@@ -316,24 +323,27 @@ class CampaignService {
       }
 
       // Attach brand details to each campaign - simplified structure
-      const campaignsWithBrand = (data || []).map(campaign => {
-        const brandUser = brandMap[campaign.brand_id] || null;
+      // Filter out campaigns where brand owner is deleted
+      const campaignsWithBrand = (data || [])
+        .filter(campaign => brandMap[campaign.brand_id]) // Only include campaigns with non-deleted brand owners
+        .map(campaign => {
+          const brandUser = brandMap[campaign.brand_id];
 
-        const brand = brandUser ? {
-          id: brandUser.id,
-          brand_name: brandUser.name
-        } : null;
+          const brand = {
+            id: brandUser.id,
+            brand_name: brandUser.name
+          };
 
-        return {
-          id: campaign.id,
-          title: campaign.title,
-          cover_image_url: campaign.cover_image_url,
-          budget: campaign.budget,
-          platform: campaign.platform,
-          content_type: campaign.content_type,
-          brand: brand
-        };
-      });
+          return {
+            id: campaign.id,
+            title: campaign.title,
+            cover_image_url: campaign.cover_image_url,
+            budget: campaign.budget,
+            platform: campaign.platform,
+            content_type: campaign.content_type,
+            brand: brand
+          };
+        });
 
       const hasMore = (validatedOffset + validatedLimit) < (count || 0);
 
@@ -367,8 +377,9 @@ class CampaignService {
       // Fetch the campaign - select only required fields
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language, work_deadline, script_deadline, acception_applications_till")
+        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language, work_deadline, script_deadline, applications_accepted_till, brand_id")
         .eq("id", campaignId)
+        .eq("is_deleted", false)
         .maybeSingle();
 
       if (campaignError) {
@@ -381,6 +392,20 @@ class CampaignService {
       }
 
       if (!campaign) {
+        return {
+          success: false,
+          message: "Campaign not found",
+        };
+      }
+
+      // Check if brand owner is deleted
+      const { data: brandUser, error: brandUserError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, is_deleted")
+        .eq("id", campaign.brand_id)
+        .maybeSingle();
+
+      if (brandUserError || !brandUser || brandUser.is_deleted) {
         return {
           success: false,
           message: "Campaign not found",
@@ -497,7 +522,7 @@ class CampaignService {
         budget: campaign.budget,
         platform: campaign.platform,
         content_type: campaign.content_type,
-        accepting_applications_till: campaign.acception_applications_till || null,
+        applications_accepted_till: campaign.applications_accepted_till || null,
         script_deadline: scriptDeadline,
         work_deadline: workDeadline,
         buffer_days: campaign.buffer_days || null,
@@ -540,18 +565,19 @@ class CampaignService {
         .from("v1_campaigns")
         .select("id, title, cover_image_url, type, budget, status, language, created_at", { count: "exact" })
         .eq("brand_id", brandId)
+        .eq("is_deleted", false)
         .order("created_at", { ascending: false });
 
       // Apply filters
       if (status) {
-        const normalizedStatus = this.normalizeStatus(status);
+        const normalizedStatus = normalizeCampaignStatus(status) || "DRAFT";
         if (this.validateStatus(normalizedStatus)) {
           query = query.eq("status", normalizedStatus);
         }
       }
 
       if (type) {
-        const normalizedType = this.normalizeType(type);
+        const normalizedType = normalizeCampaignType(type) || "NORMAL";
         if (this.validateType(normalizedType)) {
           query = query.eq("type", normalizedType);
         }
@@ -579,24 +605,28 @@ class CampaignService {
         supabaseAdmin
           .from("v1_campaigns")
           .select("*", { count: "exact", head: true })
-          .eq("brand_id", brandId),
+          .eq("brand_id", brandId)
+          .eq("is_deleted", false),
         // Get live campaigns count
         supabaseAdmin
           .from("v1_campaigns")
           .select("*", { count: "exact", head: true })
           .eq("brand_id", brandId)
+          .eq("is_deleted", false)
           .eq("status", "LIVE"),
         // Get active campaigns count
         supabaseAdmin
           .from("v1_campaigns")
           .select("*", { count: "exact", head: true })
           .eq("brand_id", brandId)
+          .eq("is_deleted", false)
           .eq("status", "ACTIVE"),
         // Get completed campaigns count
         supabaseAdmin
           .from("v1_campaigns")
           .select("*", { count: "exact", head: true })
           .eq("brand_id", brandId)
+          .eq("is_deleted", false)
           .eq("status", "COMPLETED"),
       ]);
 
@@ -694,7 +724,7 @@ class CampaignService {
         }
   
         if (updateData.type !== undefined) {
-          const type = this.normalizeType(updateData.type);
+          const type = normalizeCampaignType(updateData.type) || "NORMAL";
           if (!this.validateType(type)) {
             return {
               success: false,
@@ -705,7 +735,7 @@ class CampaignService {
         }
   
         if (updateData.status !== undefined) {
-          const status = this.normalizeStatus(updateData.status);
+          const status = normalizeCampaignStatus(updateData.status) || "DRAFT";
           if (!this.validateStatus(status)) {
             return {
               success: false,
@@ -766,7 +796,7 @@ class CampaignService {
         }
   
         if (updateData.influencer_tier !== undefined) {
-          update.influencer_tier = this.normalizeTier(updateData.influencer_tier);
+          update.influencer_tier = normalizeTier(updateData.influencer_tier);
         }
   
         if (updateData.categories !== undefined) {
@@ -790,8 +820,8 @@ class CampaignService {
           update.script_deadline = updateData.script_deadline ?? null;
         }
   
-        if (updateData.acception_applications_till !== undefined) {
-          update.acception_applications_till = updateData.acception_applications_till ?? null;
+        if (updateData.applications_accepted_till !== undefined) {
+          update.applications_accepted_till = updateData.applications_accepted_till ?? null;
         }
   
         if (updateData.buffer_days !== undefined) {
@@ -840,6 +870,10 @@ class CampaignService {
 
   /**
    * Delete campaign (Brand Owner only)
+   * Soft deletes by setting is_deleted = true
+   * Campaign (NORMAL or BULK) can only be deleted if:
+   * - All applications are in APPLIED or COMPLETED state
+   * - No applications in ACCEPTED, SCRIPT, WORK, PAYOUT, or CANCELLED states
    */
   async deleteCampaign(campaignId, brandId) {
     try {
@@ -852,10 +886,46 @@ class CampaignService {
         return ownershipCheck;
       }
 
-      // Hard delete
+      // Check if campaign has any applications
+      // Campaign can only be deleted if all applications are in APPLIED or COMPLETED state
+      const { data: allApplications, error: appsError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("id, phase")
+        .eq("campaign_id", campaignId);
+
+      if (appsError) {
+        console.error("[v1/deleteCampaign] Error fetching applications:", appsError);
+        return {
+          success: false,
+          message: "Failed to validate campaign deletion",
+          error: appsError.message,
+        };
+      }
+
+      if (!allApplications || allApplications.length === 0) {
+        // No applications, safe to delete
+      } else {
+        // Check if all applications are in allowed states for deletion
+        // Allowed states: APPLIED, COMPLETED
+        // Not allowed: ACCEPTED, SCRIPT, WORK, PAYOUT, CANCELLED
+        const allowedPhases = ["APPLIED", "COMPLETED"];
+        const invalidApplications = allApplications.filter(app => 
+          !allowedPhases.includes(app.phase)
+        );
+
+        if (invalidApplications.length > 0) {
+          const invalidPhases = [...new Set(invalidApplications.map(app => app.phase))];
+          return {
+            success: false,
+            message: `Cannot delete campaign. All applications must be in APPLIED or COMPLETED state. Found applications in: ${invalidPhases.join(", ")}`,
+          };
+        }
+      }
+
+      // Soft delete - set is_deleted = true
       const { error } = await supabaseAdmin
         .from("v1_campaigns")
-        .delete()
+        .update({ is_deleted: true })
         .eq("id", campaignId);
 
       if (error) {
@@ -878,6 +948,84 @@ class CampaignService {
         message: "Internal server error",
         error: err.message,
       };
+    }
+  }
+
+  /**
+   * Check and auto-complete NORMAL campaigns when all applications are completed
+   * This should be called after an application is completed
+   */
+  async checkAndCompleteNormalCampaign(campaignId) {
+    try {
+      // Get campaign details
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from("v1_campaigns")
+        .select("id, type, status, is_deleted")
+        .eq("id", campaignId)
+        .maybeSingle();
+
+      if (campaignError) {
+        console.error("[v1/checkAndCompleteNormalCampaign] Campaign fetch error:", campaignError);
+        return { success: false, error: campaignError.message };
+      }
+
+      if (!campaign || campaign.is_deleted) {
+        return { success: false, message: "Campaign not found or deleted" };
+      }
+
+      // Only auto-complete NORMAL campaigns
+      if (campaign.type !== "NORMAL") {
+        return { success: true, message: "Not a NORMAL campaign, skipping auto-completion" };
+      }
+
+      // Don't update if already completed
+      if (campaign.status === "COMPLETED") {
+        return { success: true, message: "Campaign already completed" };
+      }
+
+      // Get all applications for this campaign
+      const { data: applications, error: appsError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("id, phase")
+        .eq("campaign_id", campaignId);
+
+      if (appsError) {
+        console.error("[v1/checkAndCompleteNormalCampaign] Applications fetch error:", appsError);
+        return { success: false, error: appsError.message };
+      }
+
+      if (!applications || applications.length === 0) {
+        return { success: true, message: "No applications found, campaign not completed" };
+      }
+
+      // Check if all applications are in COMPLETED or CANCELLED state
+      const allCompleted = applications.every(app => 
+        app.phase === "COMPLETED" || app.phase === "CANCELLED"
+      );
+
+      if (allCompleted) {
+        // Update campaign status to COMPLETED
+        const { error: updateError } = await supabaseAdmin
+          .from("v1_campaigns")
+          .update({ status: "COMPLETED" })
+          .eq("id", campaignId);
+
+        if (updateError) {
+          console.error("[v1/checkAndCompleteNormalCampaign] Update error:", updateError);
+          return { success: false, error: updateError.message };
+        }
+
+        return { 
+          success: true, 
+          message: "Campaign auto-completed successfully",
+          campaignCompleted: true
+        };
+      }
+
+      return { success: true, message: "Not all applications completed yet" };
+    } catch (err) {
+      console.error("[v1/checkAndCompleteNormalCampaign] Exception:", err);
+      return { success: false, error: err.message };
     }
   }
 

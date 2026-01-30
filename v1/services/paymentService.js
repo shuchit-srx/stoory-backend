@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../db/config");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
+const { normalizePaymentStatus } = require("../utils/enumNormalizer");
 
 // Initialize Razorpay
 let razorpay = null;
@@ -26,12 +27,7 @@ class PaymentService {
    */
   normalizeStatus(status) {
     if (!status) return null;
-    const normalized = String(status).toUpperCase().trim();
-    const validStatuses = ["CREATED", "PROCESSING", "VERIFIED", "FAILED", "REFUNDED"];
-    if (validStatuses.includes(normalized)) {
-      return normalized;
-    }
-    return status; // Return original if not valid (for error handling)
+    return normalizePaymentStatus(status) || status; // Return original if not valid (for error handling)
   }
 
   /**
@@ -224,7 +220,7 @@ class PaymentService {
 
       if (existingPayment) {
         // Normalize status to UPPERCASE
-        const normalizedStatus = this.normalizeStatus(existingPayment.status) || existingPayment.status;
+        const normalizedStatus = normalizePaymentStatus(existingPayment.status) || existingPayment.status;
         if (normalizedStatus === "VERIFIED") {
           return {
             success: false,
@@ -455,7 +451,7 @@ class PaymentService {
 
       // Add applications with verified APPLICATION payments
       (existingApplicationPayments || []).forEach(p => {
-        const normalizedStatus = this.normalizeStatus(p.status) || p.status;
+        const normalizedStatus = normalizePaymentStatus(p.status) || p.status;
         if (normalizedStatus === "VERIFIED") {
           paidAppIds.add(p.payable_id);
         }
@@ -463,7 +459,7 @@ class PaymentService {
 
       // Add applications in verified CAMPAIGN payment orders
       (existingBulkPayments || []).forEach(bp => {
-        const normalizedStatus = this.normalizeStatus(bp.v1_payment_orders.status) || bp.v1_payment_orders.status;
+        const normalizedStatus = normalizePaymentStatus(bp.v1_payment_orders.status) || bp.v1_payment_orders.status;
         if (normalizedStatus === "VERIFIED") {
           paidAppIds.add(bp.application_id);
         }
@@ -701,7 +697,7 @@ class PaymentService {
       }
 
       // Normalize status to UPPERCASE (in case of legacy lowercase values)
-      paymentOrder.status = this.normalizeStatus(paymentOrder.status) || paymentOrder.status;
+      paymentOrder.status = normalizePaymentStatus(paymentOrder.status) || paymentOrder.status;
 
       // Check if payment already verified
       if (paymentOrder.status === "VERIFIED") {
@@ -1074,7 +1070,7 @@ class PaymentService {
       // Normalize all status values to UPPERCASE
       const normalizedPayments = (payments || []).map((payment) => ({
         ...payment,
-        status: this.normalizeStatus(payment.status) || payment.status,
+        status: normalizePaymentStatus(payment.status) || payment.status,
       }));
 
       return {
@@ -1233,7 +1229,7 @@ class PaymentService {
 
       if (existingPayment) {
         const normalizedStatus =
-          this.normalizeStatus(existingPayment.status) ||
+          normalizePaymentStatus(existingPayment.status) ||
           existingPayment.status;
         if (normalizedStatus === "VERIFIED") {
           return {
@@ -1458,7 +1454,7 @@ class PaymentService {
 
       // Normalize status
       paymentOrder.status =
-        this.normalizeStatus(paymentOrder.status) || paymentOrder.status;
+        normalizePaymentStatus(paymentOrder.status) || paymentOrder.status;
 
       // Check if payment already verified
       if (paymentOrder.status === "VERIFIED") {

@@ -384,6 +384,27 @@ class PayoutService {
         console.error('[PayoutService/verifyPayoutPayment] Phase update error:', phaseUpdateError);
         // Log but don't fail payout verification if phase update fails
       } else {
+        // Get campaign_id from application for auto-completion check
+        const { data: application, error: appError } = await supabaseAdmin
+          .from('v1_applications')
+          .select('campaign_id')
+          .eq('id', payout.application_id)
+          .maybeSingle();
+
+        if (!appError && application) {
+          // Auto-complete NORMAL campaigns when all applications are completed
+          try {
+            const CampaignService = require('./campaignService');
+            const campaignResult = await CampaignService.checkAndCompleteNormalCampaign(application.campaign_id);
+            if (campaignResult.success && campaignResult.campaignCompleted) {
+              console.log(`[PayoutService/verifyPayoutPayment] Campaign ${application.campaign_id} auto-completed`);
+            }
+          } catch (campaignError) {
+            console.error(`[PayoutService/verifyPayoutPayment] Failed to check campaign completion:`, campaignError);
+            // Don't fail payout verification if campaign check fails, but log it
+          }
+        }
+
         // Send flow state notification to influencer
         try {
           const NotificationService = require('./notificationService');

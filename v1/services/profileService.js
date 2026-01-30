@@ -1,70 +1,12 @@
 const { supabaseAdmin } = require("../db/config");
 const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
+const {
+  normalizeGender,
+  normalizeTier,
+  normalizePlatform,
+} = require("../utils/enumNormalizer");
 
 class ProfileService {
-  /**
-   * Normalize gender value to match database constraint (uppercase)
-   */
-  normalizeGender(gender) {
-    if (!gender) return null;
-
-    const normalized = String(gender).toUpperCase().trim();
-    const validGenders = ["MALE", "FEMALE", "OTHER"];
-
-    if (validGenders.includes(normalized)) {
-      return normalized;
-    }
-
-    // If lowercase provided, convert to uppercase
-    const lower = normalized.toLowerCase();
-    if (lower === "male") return "MALE";
-    if (lower === "female") return "FEMALE";
-    if (lower === "other") return "OTHER";
-
-    return null; // Invalid gender, return null
-  }
-
-  normalizeTier(tier) {
-    if (!tier) return null;
-  
-    const normalized = String(tier).toUpperCase().trim();
-    const validTiers = ["NANO", "MICRO", "MID", "MACRO"];
-  
-    if (validTiers.includes(normalized)) {
-      return normalized;
-    }
-  
-    // Handle lowercase variations
-    const lower = normalized.toLowerCase();
-    if (lower === "nano") return "NANO";
-    if (lower === "micro") return "MICRO";
-    if (lower === "mid") return "MID";
-    if (lower === "macro") return "MACRO";
-  
-    return null; // Invalid tier, return null
-  }
-
-  /**
-   * Normalize platform name to match database constraint (INSTAGRAM | FACEBOOK | YOUTUBE)
-   */
-  normalizePlatform(platformName) {
-    if (!platformName) return null;
-
-    const normalized = String(platformName).toUpperCase().trim();
-    const validPlatforms = ["INSTAGRAM", "FACEBOOK", "YOUTUBE"];
-
-    if (validPlatforms.includes(normalized)) {
-      return normalized;
-    }
-
-    // Handle common variations
-    const lower = normalized.toLowerCase();
-    if (lower === "instagram" || lower === "ig") return "INSTAGRAM";
-    if (lower === "facebook" || lower === "fb") return "FACEBOOK";
-    if (lower === "youtube" || lower === "yt") return "YOUTUBE";
-
-    return null; // Invalid platform
-  }
 
   /**
    * Upsert social platforms for influencer
@@ -80,7 +22,7 @@ class ProfileService {
 
       for (const platform of platforms) {
         try {
-          const platformName = this.normalizePlatform(
+          const platformName = normalizePlatform(
             platform.platform_name || platform.platform || platform.platformName
           );
           const username = platform.username || null;
@@ -314,6 +256,15 @@ class ProfileService {
         }
       }
 
+      // Handle gender - now stored in v1_users table (must be before userUpdate execution)
+      if (profileData.gender !== undefined) {
+        const normalizedGender = normalizeGender(profileData.gender);
+        // Only add to update if normalization succeeded (not null)
+        if (normalizedGender !== null) {
+          userUpdate.gender = normalizedGender;
+        }
+      }
+
       if (Object.keys(userUpdate).length > 0) {
         // First check if user exists
         const { data: existingUser, error: checkError } = await supabaseAdmin
@@ -430,18 +381,9 @@ class ProfileService {
           : null;
       }
 
-      // Handle gender
-      if (profileData.gender !== undefined) {
-        const normalizedGender = this.normalizeGender(profileData.gender);
-        // Only add to update if normalization succeeded (not null)
-        if (normalizedGender !== null) {
-          profileUpdate.gender = normalizedGender;
-        }
-      }
-
       // Handle tier
       if (profileData.tier !== undefined) {
-        profileUpdate.tier = this.normalizeTier(profileData.tier);
+        profileUpdate.tier = normalizeTier(profileData.tier);
       }
 
       // Handle min_value
@@ -476,27 +418,88 @@ class ProfileService {
 
       let updatedProfile = null;
       if (Object.keys(profileUpdate).length > 0) {
-        const { data, error: updateError } = await supabaseAdmin
+        // First check if profile exists
+        const { data: existingProfile, error: checkError } = await supabaseAdmin
           .from("v1_influencer_profiles")
-          .update(profileUpdate)
+          .select("user_id")
           .eq("user_id", userId)
           .eq("is_deleted", false)
-          .select()
-          .single();
+          .maybeSingle();
 
-        if (updateError) {
+        if (checkError) {
           console.error(
-            "[v1/updateInfluencerProfile] Profile update error:",
-            updateError
+            "[v1/updateInfluencerProfile] Profile check error:",
+            checkError
           );
-          // If image was uploaded but profile update failed, delete the uploaded image
           if (profileImageUrl) {
             await deleteImageFromStorage(profileImageUrl);
           }
-          return { success: false, message: "Failed to update profile" };
+          return { success: false, message: "Failed to verify profile" };
         }
 
-        updatedProfile = data;
+        if (!existingProfile) {
+          // Profile doesn't exist, create it
+          const placeholderImageUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
+          const newProfile = {
+            user_id: userId,
+            profile_photo_url: profileImageUrl || placeholderImageUrl,
+            is_profile_verified: false,
+            bio: profileUpdate.bio || "",
+            city: profileUpdate.city || null,
+            country: profileUpdate.country || null,
+            primary_language: profileUpdate.primary_language || null,
+            languages: profileUpdate.languages || null,
+            tier: profileUpdate.tier || null,
+            pan_number: profileUpdate.pan_number || null,
+            pan_verified: false,
+            profile_completion_pct: 0,
+            is_deleted: false,
+            categories: profileUpdate.categories || null,
+            min_value: profileUpdate.min_value || null,
+            max_value: profileUpdate.max_value || null,
+          };
+
+          const { data: createdProfile, error: createError } = await supabaseAdmin
+            .from("v1_influencer_profiles")
+            .insert(newProfile)
+            .select()
+            .single();
+
+          if (createError) {
+            console.error(
+              "[v1/updateInfluencerProfile] Profile creation error:",
+              createError
+            );
+            if (profileImageUrl) {
+              await deleteImageFromStorage(profileImageUrl);
+            }
+            return { success: false, message: "Failed to create profile" };
+          }
+
+          updatedProfile = createdProfile;
+        } else {
+          // Profile exists, update it
+          const { data, error: updateError } = await supabaseAdmin
+            .from("v1_influencer_profiles")
+            .update(profileUpdate)
+            .eq("user_id", existingProfile.user_id)
+            .select()
+            .single();
+
+          if (updateError) {
+            console.error(
+              "[v1/updateInfluencerProfile] Profile update error:",
+              updateError
+            );
+            // If image was uploaded but profile update failed, delete the uploaded image
+            if (profileImageUrl) {
+              await deleteImageFromStorage(profileImageUrl);
+            }
+            return { success: false, message: "Failed to update profile" };
+          }
+
+          updatedProfile = data;
+        }
       } else {
         // Fetch existing profile if no updates
         const { data, error: fetchError } = await supabaseAdmin
@@ -715,6 +718,15 @@ class ProfileService {
         }
       }
 
+      // Handle gender - now stored in v1_users table (must be before userUpdate execution)
+      if (profileData.gender !== undefined) {
+        const normalizedGender = normalizeGender(profileData.gender);
+        // Only add to update if normalization succeeded (not null)
+        if (normalizedGender !== null) {
+          userUpdate.gender = normalizedGender;
+        }
+      }
+
       if (Object.keys(userUpdate).length > 0) {
         // First check if user exists
         const { data: existingUser, error: checkError } = await supabaseAdmin
@@ -816,15 +828,6 @@ class ProfileService {
         }
       }
 
-      // Update gender if provided
-      if (profileData.gender !== undefined) {
-        const normalizedGender = this.normalizeGender(profileData.gender);
-        // Only add to update if normalization succeeded (not null)
-        if (normalizedGender !== null) {
-          profileUpdate.gender = normalizedGender;
-        }
-      }
-
       // Update brand_logo_url if provided (required field - NOT NULL in schema)
       if (brandLogoUrl !== null) {
         profileUpdate.brand_logo_url = brandLogoUrl;
@@ -843,27 +846,81 @@ class ProfileService {
       let updatedProfile = null;
 
       if (Object.keys(profileUpdate).length > 0) {
-        const { data, error: updateError } = await supabaseAdmin
+        // First check if profile exists
+        const { data: existingProfile, error: checkError } = await supabaseAdmin
           .from("v1_brand_profiles")
-          .update(profileUpdate)
+          .select("user_id")
           .eq("user_id", userId)
           .eq("is_deleted", false)
-          .select()
-          .single();
+          .maybeSingle();
 
-        if (updateError) {
+        if (checkError) {
           console.error(
-            "[v1/updateBrandProfile] Profile update error:",
-            updateError
+            "[v1/updateBrandProfile] Profile check error:",
+            checkError
           );
-          // If logo was uploaded but update failed, try to delete uploaded logo
           if (brandLogoUrl) {
             await deleteImageFromStorage(brandLogoUrl);
           }
-          return { success: false, message: "Failed to update profile" };
+          return { success: false, message: "Failed to verify profile" };
         }
 
-        updatedProfile = data;
+        if (!existingProfile) {
+          // Profile doesn't exist, create it
+          const placeholderLogoUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
+          const newProfile = {
+            user_id: userId,
+            brand_name: profileUpdate.brand_name || "",
+            brand_logo_url: brandLogoUrl || placeholderLogoUrl,
+            bio: profileUpdate.bio || null,
+            brand_description: profileUpdate.brand_description || null,
+            pan_number: profileUpdate.pan_number || null,
+            pan_verified: false,
+            profile_completion_pct: 0,
+            is_deleted: false,
+          };
+
+          const { data: createdProfile, error: createError } = await supabaseAdmin
+            .from("v1_brand_profiles")
+            .insert(newProfile)
+            .select()
+            .single();
+
+          if (createError) {
+            console.error(
+              "[v1/updateBrandProfile] Profile creation error:",
+              createError
+            );
+            if (brandLogoUrl) {
+              await deleteImageFromStorage(brandLogoUrl);
+            }
+            return { success: false, message: "Failed to create profile" };
+          }
+
+          updatedProfile = createdProfile;
+        } else {
+          // Profile exists, update it
+          const { data, error: updateError } = await supabaseAdmin
+            .from("v1_brand_profiles")
+            .update(profileUpdate)
+            .eq("user_id", existingProfile.user_id)
+            .select()
+            .single();
+
+          if (updateError) {
+            console.error(
+              "[v1/updateBrandProfile] Profile update error:",
+              updateError
+            );
+            // If logo was uploaded but update failed, try to delete uploaded logo
+            if (brandLogoUrl) {
+              await deleteImageFromStorage(brandLogoUrl);
+            }
+            return { success: false, message: "Failed to update profile" };
+          }
+
+          updatedProfile = data;
+        }
       } else {
         // Fetch existing profile if no updates
         const { data, error: fetchError } = await supabaseAdmin
@@ -952,8 +1009,8 @@ class ProfileService {
         country: userData?.address_country || userData?.country || null,
         primary_language: primaryLanguage,
         languages: languagesArray,
-        gender: this.normalizeGender(userData?.gender),
-        tier: this.normalizeTier(userData?.tier),
+        // gender: removed - now stored in v1_users table
+        tier: normalizeTier(userData?.tier),
         pan_number: userData?.pan_number || null,
         pan_verified: false,
         profile_completion_pct: 0,
@@ -1000,7 +1057,7 @@ class ProfileService {
           placeholderLogoUrl,
         bio: userData?.bio || null,
         brand_description: userData?.brand_description || null,
-        gender: this.normalizeGender(userData?.gender),
+        // gender: removed - now stored in v1_users table
         pan_number: userData?.pan_number || null,
         pan_verified: false,
         profile_completion_pct: 0,
@@ -1073,8 +1130,8 @@ class ProfileService {
           pendingSteps.push("role_selection");
         }
 
-        // 2. Gender Selection - v1_influencer_profiles.gender
-        if (profile?.gender) {
+        // 2. Gender Selection - v1_users.gender
+        if (user.gender) {
           completedSteps.push("gender_selection");
         } else {
           pendingSteps.push("gender_selection");
@@ -1177,8 +1234,8 @@ class ProfileService {
           pendingSteps.push("role_selection");
         }
 
-        // 2. Gender Selection - v1_brand_profiles.gender
-        if (profile?.gender) {
+        // 2. Gender Selection - v1_users.gender
+        if (user.gender) {
           completedSteps.push("gender_selection");
         } else {
           pendingSteps.push("gender_selection");
