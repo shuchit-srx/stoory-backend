@@ -13,6 +13,7 @@ class MockUsersService {
   constructor() {
     // Check if mock users are enabled
     this.isEnabled = process.env.ENABLE_MOCK_USERS === "true";
+    console.log("Mock users are enabled:", this.isEnabled);
 
     // Define mock users: 3 admins, 5 brand owners, 8 influencers
     this.mockUsers = {
