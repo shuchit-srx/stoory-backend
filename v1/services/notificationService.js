@@ -246,66 +246,161 @@ class NotificationService {
     }
   }
 
-  // 🔧 CRITICAL CHANGE: Enhanced sendNotification with socket retry
-  // SIGNIFICANCE: Retries socket sends before FCM fallback - improves delivery by 30%
+  // 🔧 CRITICAL CHANGE: Context-aware notification delivery
+  // SIGNIFICANCE: Prevents duplicate notifications while ensuring delivery
+  // - Sends socket if user is online
+  // - Sends FCM if user is offline OR not viewing relevant screen
+  // - Avoids duplicates by checking if user is actively viewing the notification context
   async sendNotification(userId, notificationData, notificationId = null) {
     const online = this.isUserOnline(userId);
-    let deliveryResult = null;
-    let method = null;
-
+    let socketResult = null;
+    let fcmResult = null;
+    
+    // Try socket first if user is online
     if (online) {
-      method = 'socket';
-      deliveryResult = this.sendSocketNotification(userId, notificationData);
+      socketResult = this.sendSocketNotification(userId, notificationData);
       
       if (notificationId) {
-        this.logDeliveryAttempt(notificationId, method, deliveryResult.sent, {
-          socketCount: deliveryResult.count || 0,
-          failedCount: deliveryResult.failed || 0,
-          failedSockets: deliveryResult.failedSockets || [],
+        this.logDeliveryAttempt(notificationId, 'socket', socketResult.sent, {
+          socketCount: socketResult.count || 0,
+          failedCount: socketResult.failed || 0,
+          failedSockets: socketResult.failedSockets || [],
         });
       }
       
-      if (deliveryResult.sent) {
-        return { success: true, method, deliveryResult };
+      // Check if user is actively viewing the relevant screen/context
+      const isViewingRelevantScreen = await this.isUserViewingRelevantScreen(
+        userId, 
+        notificationData
+      );
+      
+      // If socket succeeded AND user is viewing relevant screen, skip FCM to avoid duplicates
+      if (socketResult.sent && isViewingRelevantScreen) {
+        return { 
+          success: true, 
+          method: 'socket', 
+          socketResult,
+          skippedFCM: true,
+          reason: 'user_viewing_screen'
+        };
       }
       
-      // 🔧 CRITICAL: Retry socket once before falling back to FCM
-      if (deliveryResult.failed > 0 && deliveryResult.count === 0) {
+      // If socket failed, retry once
+      if (!socketResult.sent && socketResult.failed > 0 && socketResult.count === 0) {
         await new Promise(resolve => setTimeout(resolve, 300)); // Wait 300ms
-        deliveryResult = this.sendSocketNotification(userId, notificationData);
+        socketResult = this.sendSocketNotification(userId, notificationData);
         
         if (notificationId) {
-          this.logDeliveryAttempt(notificationId, 'socket_retry', deliveryResult.sent, {
-            socketCount: deliveryResult.count || 0,
+          this.logDeliveryAttempt(notificationId, 'socket_retry', socketResult.sent, {
+            socketCount: socketResult.count || 0,
           });
-        }
-        
-        if (deliveryResult.sent) {
-          return { success: true, method, deliveryResult };
         }
       }
     }
     
-    // Fallback to FCM
-    method = 'fcm';
-    deliveryResult = await this.sendFCMNotification(userId, notificationData);
+    // Send FCM in these cases:
+    // 1. User is offline
+    // 2. Socket failed
+    // 3. User is online but NOT viewing the relevant screen (app might be backgrounded)
+    const shouldSendFCM = !online || !socketResult?.sent || !(await this.isUserViewingRelevantScreen(userId, notificationData));
     
-    const fcmSuccess = deliveryResult.success && (
-      deliveryResult.sent > 0 || 
-      (deliveryResult.sent === 0 && deliveryResult.reason === 'no_tokens' && !deliveryResult.error)
-    );
-    
-    if (notificationId) {
-      this.logDeliveryAttempt(notificationId, method, fcmSuccess, {
-        sent: deliveryResult.sent || 0,
-        failed: deliveryResult.failed || 0,
-        error: deliveryResult.error || null,
-        reason: deliveryResult.reason || null,
-        details: deliveryResult.details || null,
-      });
+    if (shouldSendFCM) {
+      fcmResult = await this.sendFCMNotification(userId, notificationData);
+      
+      if (notificationId) {
+        const fcmSuccess = fcmResult.success && (
+          fcmResult.sent > 0 || 
+          (fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error)
+        );
+        
+        this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess, {
+          sent: fcmResult.sent || 0,
+          failed: fcmResult.failed || 0,
+          error: fcmResult.error || null,
+          reason: fcmResult.reason || null,
+          details: fcmResult.details || null,
+        });
+      }
     }
     
-    return { success: fcmSuccess, method, deliveryResult };
+    const success = (socketResult?.sent > 0) || (fcmResult?.success && fcmResult.sent > 0);
+    const method = socketResult?.sent && fcmResult?.sent > 0 
+      ? 'socket+fcm' 
+      : socketResult?.sent 
+        ? 'socket' 
+        : 'fcm';
+    
+    return { 
+      success, 
+      method, 
+      socketResult: socketResult || null, 
+      fcmResult: fcmResult || null 
+    };
+  }
+
+  // 🔧 NEW: Helper method to check if user is viewing relevant screen
+  // SIGNIFICANCE: Prevents duplicate notifications by checking if user is actively viewing the notification context
+  async isUserViewingRelevantScreen(userId, notificationData) {
+    if (!this.io) return false;
+    
+    try {
+      const { type, data } = notificationData;
+      
+      // For chat messages, check if user is in conversation room
+      if (type === 'CHAT_MESSAGE' && data?.applicationId) {
+        return this.isUserInChatRoom(userId, data.applicationId);
+      }
+      
+      // For application-related notifications, check if user is on application screen
+      if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'APPLICATION_APPROVED', 
+           'APPLICATION_CANCELLED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW',
+           'WORK_SUBMITTED', 'WORK_REVIEW', 'MOU_ACCEPTED', 'MOU_FULLY_ACCEPTED',
+           'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'FLOW_STATE_CHANGE'].includes(type) && data?.applicationId) {
+        const roomName = `app_${data.applicationId}`;
+        const userRoom = `user_${userId}`;
+        
+        const userRoomSockets = this.io.sockets.adapter.rooms.get(userRoom);
+        if (!userRoomSockets || userRoomSockets.size === 0) return false;
+        
+        const appRoom = this.io.sockets.adapter.rooms.get(roomName);
+        if (!appRoom || appRoom.size === 0) return false;
+        
+        // Check if any of user's sockets are in the application room
+        for (const socketId of userRoomSockets) {
+          if (appRoom.has(socketId)) {
+            return true; // User is viewing this application
+          }
+        }
+        return false;
+      }
+      
+      // For campaign updates, check if user is in campaign room
+      if (type === 'CAMPAIGN_UPDATE' && data?.campaignId) {
+        const roomName = `campaign_${data.campaignId}`;
+        const userRoom = `user_${userId}`;
+        
+        const userRoomSockets = this.io.sockets.adapter.rooms.get(userRoom);
+        if (!userRoomSockets || userRoomSockets.size === 0) return false;
+        
+        const campaignRoom = this.io.sockets.adapter.rooms.get(roomName);
+        if (!campaignRoom || campaignRoom.size === 0) return false;
+        
+        for (const socketId of userRoomSockets) {
+          if (campaignRoom.has(socketId)) {
+            return true; // User is viewing this campaign
+          }
+        }
+        return false;
+      }
+      
+      // For other notification types, assume user is not viewing relevant screen
+      // (safer to send FCM to ensure delivery)
+      return false;
+    } catch (error) {
+      console.warn('[v1/Notification] Error checking screen context:', error);
+      // On error, default to false (send FCM to be safe)
+      return false;
+    }
   }
 
   // 🔧 OPTIMIZATION: Enhanced storeNotification with in-memory cache
@@ -433,13 +528,17 @@ class NotificationService {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
       
       // Schedule retry for failed notifications
-      if (sendResult.method === 'fcm' && sendResult.deliveryResult?.error) {
-        await this.scheduleRetry(notificationId, {
-          userId,
-          notificationData,
-          attempts: 0
-        });
-      } else if (sendResult.method === 'socket' && !sendResult.deliveryResult?.sent) {
+      // Retry if:
+      // 1. FCM failed with an error (not just no_tokens)
+      // 2. Socket failed and FCM also failed or wasn't sent
+      // 3. Both methods failed
+      const fcmFailed = sendResult.fcmResult && (
+        !sendResult.fcmResult.success || 
+        (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
+      );
+      const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
+      
+      if (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) {
         await this.scheduleRetry(notificationId, {
           userId,
           notificationData,
@@ -530,7 +629,14 @@ class NotificationService {
       } else {
         this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
         
-        if (sendResult.method === 'fcm' && sendResult.deliveryResult?.error) {
+        // Schedule retry for failed batched notifications
+        const fcmFailed = sendResult.fcmResult && (
+          !sendResult.fcmResult.success || 
+          (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
+        );
+        const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
+        
+        if (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) {
           await this.scheduleRetry(notificationId, {
             userId,
             notificationData: batchedData,
@@ -686,10 +792,22 @@ class NotificationService {
     } else {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
       
-      if (sendResult.method === 'fcm' && retryData.attempts < this.MAX_RETRIES) {
+      // Continue retrying if:
+      // 1. FCM failed with an error (not just no_tokens)
+      // 2. Both socket and FCM failed
+      // 3. Haven't reached max retries
+      const fcmFailed = sendResult.fcmResult && (
+        !sendResult.fcmResult.success || 
+        (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
+      );
+      const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
+      const shouldRetry = (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) && 
+                          retryData.attempts < this.MAX_RETRIES;
+      
+      if (shouldRetry) {
         await this.scheduleRetry(notificationId, retryData);
       } else {
-        console.log(`[v1/Notification] Retry failed for notification ${notificationId}, max attempts reached`);
+        console.log(`[v1/Notification] Retry failed for notification ${notificationId}, max attempts reached or no retry needed`);
       }
     }
   }
@@ -1148,6 +1266,84 @@ class NotificationService {
       return await this.sendAndStoreNotification(brandId, notificationData);
     } catch (error) {
       console.error('[v1/Notification] Work submitted error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyMOUAccepted(mouId, applicationId, acceptedByUserId, otherUserId, userRole) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, influencer_id, brand_id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const { data: mou } = await supabaseAdmin
+        .from('v1_mous')
+        .select('accepted_by_influencer, accepted_by_brand, status')
+        .eq('id', mouId)
+        .maybeSingle();
+
+      const { data: accepter } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', acceptedByUserId)
+        .maybeSingle();
+
+      const fullyAccepted = mou?.accepted_by_influencer && mou?.accepted_by_brand;
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign';
+
+      let title, body;
+      if (fullyAccepted) {
+        title = 'MOU Fully Accepted! ✅';
+        body = `Both parties have accepted the MOU for "${campaignTitle}". You can now proceed.`;
+      } else {
+        title = 'MOU Accepted';
+        body = `${accepter?.name || 'The other party'} accepted the MOU for "${campaignTitle}". Please accept your MOU to proceed.`;
+      }
+
+      const notificationData = {
+        type: 'MOU_ACCEPTED',
+        title,
+        body,
+        clickAction: `/applications/${applicationId}/mou`,
+        data: { mouId, applicationId, acceptedByUserId, otherUserId, fullyAccepted },
+      };
+
+      return await this.sendAndStoreNotification(otherUserId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] MOU accepted error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyMOUFullyAccepted(mouId, applicationId, brandId, influencerId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign';
+
+      const notificationData = {
+        type: 'MOU_FULLY_ACCEPTED',
+        title: 'MOU Accepted by Both Parties! ✅',
+        body: `Both parties have accepted the MOU for "${campaignTitle}". Please proceed with payment to continue.`,
+        clickAction: `/applications/${applicationId}/payment`,
+        data: { 
+          mouId, 
+          applicationId, 
+          brandId, 
+          influencerId,
+          action: 'proceed_with_payment'
+        },
+      };
+
+      return await this.sendAndStoreNotification(brandId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] MOU fully accepted error:', error);
       return { success: false, error: error.message };
     }
   }
