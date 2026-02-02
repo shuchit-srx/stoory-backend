@@ -28,7 +28,7 @@ class NotificationService {
     // 🔧 OPTIMIZATION: In-memory duplicate cache
     // SIGNIFICANCE: Reduces database queries by 80% for duplicate detection
     this.duplicateCache = new Map(); // Map<key, timestamp>
-    this.DUPLICATE_CACHE_TTL = 5000; // 5 seconds
+    this.DUPLICATE_CACHE_TTL = 30000; // 30 seconds - increased to prevent duplicates from rapid retries
     this.startDuplicateCacheCleanup();
   }
 
@@ -458,43 +458,94 @@ class NotificationService {
     }
   }
 
+  // 🔧 FIX: Generate duplicate detection key based on notification type
+  // SIGNIFICANCE: Prevents duplicate notifications across all types
+  generateDuplicateKey(notificationData) {
+    const { userId, type, data } = notificationData;
+    
+    // For chat messages, use applicationId and senderId
+    if (type === 'CHAT_MESSAGE' && data?.applicationId && data?.senderId) {
+      return `${userId}_${type}_${data.applicationId}_${data.senderId}`;
+    }
+    
+    // For application-related notifications, use applicationId
+    if (['APPLICATION_ACCEPTED', 'APPLICATION_APPROVED', 'APPLICATION_CANCELLED', 
+         'APPLICATION_CREATED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW', 'WORK_SUBMITTED', 
+         'WORK_REVIEW', 'MOU_ACCEPTED', 'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 
+         'PAYMENT_COMPLETED', 'FLOW_STATE_CHANGE', 'CONVERSATION_CLOSED'].includes(type) && 
+        data?.applicationId) {
+      // Include phase for FLOW_STATE_CHANGE to allow different phases
+      if (type === 'FLOW_STATE_CHANGE' && data?.newPhase) {
+        return `${userId}_${type}_${data.applicationId}_${data.newPhase}`;
+      }
+      return `${userId}_${type}_${data.applicationId}`;
+    }
+    
+    // For campaign updates, use campaignId
+    if (type === 'CAMPAIGN_UPDATE' && data?.campaignId) {
+      return `${userId}_${type}_${data.campaignId}`;
+    }
+    
+    // For other types, use type and userId (less specific but prevents rapid duplicates)
+    return `${userId}_${type}_${JSON.stringify(data || {})}`;
+  }
+
   // 🔧 OPTIMIZATION: Enhanced storeNotification with in-memory cache
   // SIGNIFICANCE: Reduces database queries by 80%, improves latency by 50ms
+  // 🔧 FIX: Extended duplicate detection to all notification types
   async storeNotification(notificationData) {
     try {
-      // 🔧 OPTIMIZATION: Check in-memory cache first (much faster than DB)
-      if (notificationData.type === 'CHAT_MESSAGE' && 
-          notificationData.data?.applicationId && 
-          notificationData.data?.senderId) {
-        
-        const cacheKey = `${notificationData.userId}_${notificationData.type}_${notificationData.data.applicationId}_${notificationData.data.senderId}`;
-        const cached = this.duplicateCache.get(cacheKey);
-        
-        if (cached && (Date.now() - cached) < this.DUPLICATE_CACHE_TTL) {
-          return { success: true, notification: { id: 'cached' }, duplicate: true };
-        }
-        
-        // Check database only if not in cache
-        const twoSecondsAgo = new Date(Date.now() - 2000).toISOString();
-        const { data: existing } = await supabaseAdmin
-          .from('v1_notifications')
-          .select('id')
-          .eq('user_id', notificationData.userId)
-          .eq('type', notificationData.type)
-          .eq('data->>applicationId', notificationData.data.applicationId)
-          .eq('data->>senderId', notificationData.data.senderId)
-          .gte('created_at', twoSecondsAgo)
-          .limit(1)
-          .maybeSingle();
-        
-        if (existing) {
-          this.duplicateCache.set(cacheKey, Date.now());
-          return { success: true, notification: existing, duplicate: true };
-        }
-        
-        // Add to cache after storing
-        this.duplicateCache.set(cacheKey, Date.now());
+      // 🔧 FIX: Check in-memory cache for ALL notification types
+      const cacheKey = this.generateDuplicateKey(notificationData);
+      const cached = this.duplicateCache.get(cacheKey);
+      
+      if (cached && (Date.now() - cached) < this.DUPLICATE_CACHE_TTL) {
+        console.log(`[v1/Notification] Duplicate detected in cache for user ${notificationData.userId}, type ${notificationData.type}`);
+        return { success: true, notification: { id: 'cached' }, duplicate: true };
       }
+      
+      // 🔧 FIX: Check database for duplicates with appropriate time window and fields
+      const timeWindow = 30; // 30 seconds window for duplicate detection
+      const timeWindowAgo = new Date(Date.now() - timeWindow * 1000).toISOString();
+      
+      let existingQuery = supabaseAdmin
+        .from('v1_notifications')
+        .select('id')
+        .eq('user_id', notificationData.userId)
+        .eq('type', notificationData.type)
+        .gte('created_at', timeWindowAgo)
+        .limit(1);
+      
+      // Add type-specific filters for better duplicate detection
+      if (notificationData.type === 'CHAT_MESSAGE' && notificationData.data?.applicationId && notificationData.data?.senderId) {
+        existingQuery = existingQuery
+          .eq('data->>applicationId', notificationData.data.applicationId)
+          .eq('data->>senderId', notificationData.data.senderId);
+      } else if (['APPLICATION_ACCEPTED', 'APPLICATION_APPROVED', 'APPLICATION_CANCELLED', 
+                  'APPLICATION_CREATED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW', 'WORK_SUBMITTED', 
+                  'WORK_REVIEW', 'MOU_ACCEPTED', 'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 
+                  'PAYMENT_COMPLETED', 'CONVERSATION_CLOSED'].includes(notificationData.type) && 
+                 notificationData.data?.applicationId) {
+        existingQuery = existingQuery.eq('data->>applicationId', notificationData.data.applicationId);
+        
+        // For FLOW_STATE_CHANGE, also check the phase to allow different phases
+        if (notificationData.type === 'FLOW_STATE_CHANGE' && notificationData.data?.newPhase) {
+          existingQuery = existingQuery.eq('data->>newPhase', notificationData.data.newPhase);
+        }
+      } else if (notificationData.type === 'CAMPAIGN_UPDATE' && notificationData.data?.campaignId) {
+        existingQuery = existingQuery.eq('data->>campaignId', notificationData.data.campaignId);
+      }
+      
+      const { data: existing } = await existingQuery.maybeSingle();
+      
+      if (existing) {
+        console.log(`[v1/Notification] Duplicate detected in database for user ${notificationData.userId}, type ${notificationData.type}, notification ${existing.id}`);
+        this.duplicateCache.set(cacheKey, Date.now());
+        return { success: true, notification: existing, duplicate: true };
+      }
+      
+      // Add to cache before storing to prevent race conditions
+      this.duplicateCache.set(cacheKey, Date.now());
       
       // 🔧 OPTIMIZATION: Let database set timestamps (more efficient)
       const { data, error } = await supabaseAdmin
@@ -552,6 +603,9 @@ class NotificationService {
   }
 
   async sendAndStoreNotification(userId, notificationData) {
+    // 🔧 FIX: Add logging to track notification attempts
+    console.log(`[v1/Notification] Attempting to send notification to user ${userId}, type: ${notificationData.type}`);
+    
     const shouldBatch = this.shouldBatchNotification(notificationData.type);
     
     if (shouldBatch) {
@@ -564,44 +618,16 @@ class NotificationService {
       return { stored: false, sent: false, error: storeResult.error };
     }
 
-    // 🔧 FIX: Handle duplicate notifications - still attempt delivery if user is offline
-    // This ensures FCM is sent even for duplicates if user is offline
+    // 🔧 FIX: Handle duplicate notifications - skip delivery entirely for duplicates
+    // Duplicates should not be sent again to prevent multiple notifications
     if (storeResult.duplicate) {
-      const isOnline = this.isUserOnline(userId);
-      
-      // If user is offline, still attempt FCM delivery for duplicates
-      if (!isOnline) {
-        // Use actual notification ID if available, otherwise use null (for cached duplicates)
-        const notificationId = storeResult.notification.id && storeResult.notification.id !== 'cached' 
-          ? storeResult.notification.id 
-          : null;
-        
-        const sendResult = await this.sendNotification(userId, notificationData, notificationId);
-        
-        console.log(`[v1/Notification] Duplicate notification for offline user ${userId}, FCM delivery attempted:`, {
-          success: sendResult.success,
-          method: sendResult.method,
-          fcmSent: sendResult.fcmResult?.sent || 0
-        });
-        
-        return {
-          stored: true,
-          sent: sendResult.success,
-          duplicate: true,
-          notification: storeResult.notification,
-          method: sendResult.method,
-          fcmResult: sendResult.fcmResult,
-        };
-      }
-      
-      // If user is online and viewing, skip delivery for duplicates
-      console.log(`[v1/Notification] Duplicate notification for online user ${userId}, delivery skipped`);
+      console.log(`[v1/Notification] Duplicate notification detected for user ${userId}, type: ${notificationData.type}, skipping delivery`);
       return {
         stored: true,
-        sent: true,
+        sent: false, // 🔧 FIX: Mark as not sent to prevent duplicate delivery
         duplicate: true,
         notification: storeResult.notification,
-        skipped: 'user_online_viewing',
+        skipped: 'duplicate_detected',
       };
     }
 
