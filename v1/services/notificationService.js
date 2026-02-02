@@ -223,6 +223,18 @@ class NotificationService {
 
   async sendFCMNotification(userId, notificationData) {
     try {
+      // 🔧 FIX: Check FCM initialization before attempting to send
+      if (!fcmService.initialized) {
+        console.warn(`[v1/Notification] FCM service not initialized, cannot send notification to user ${userId}`);
+        return { 
+          success: false, 
+          error: 'FCM service not initialized', 
+          sent: 0, 
+          failed: 0,
+          reason: 'service_not_initialized'
+        };
+      }
+
       const result = await fcmService.sendNotificationToUser(userId, {
         title: notificationData.title,
         body: notificationData.body,
@@ -235,14 +247,34 @@ class NotificationService {
       });
 
       // Add reason for clarity
-      if (result.success && result.sent === 0) {
+      if (result.success && result.sent === 0 && !result.reason) {
         result.reason = 'no_tokens';
+      }
+
+      // 🔧 FIX: Improved logging for FCM results
+      if (!result.success) {
+        console.error(`[v1/Notification] FCM send failed for user ${userId}:`, {
+          error: result.error,
+          reason: result.reason,
+          sent: result.sent,
+          failed: result.failed
+        });
+      } else if (result.sent === 0) {
+        console.log(`[v1/Notification] FCM send succeeded but no tokens for user ${userId}`);
+      } else {
+        console.log(`[v1/Notification] FCM send succeeded for user ${userId}: ${result.sent} sent, ${result.failed} failed`);
       }
 
       return result;
     } catch (error) {
-      console.error('[v1/Notification] FCM send error:', error);
-      return { success: false, error: error.message, sent: 0, failed: 0 };
+      console.error(`[v1/Notification] FCM send error for user ${userId}:`, error);
+      return { 
+        success: false, 
+        error: error.message, 
+        sent: 0, 
+        failed: 0,
+        reason: 'exception'
+      };
     }
   }
 
@@ -251,10 +283,17 @@ class NotificationService {
   // - Sends socket if user is online
   // - Sends FCM if user is offline OR not viewing relevant screen
   // - Avoids duplicates by checking if user is actively viewing the notification context
+  // - FIXED: Always sends FCM for offline users, even if viewing screen (multi-device support)
   async sendNotification(userId, notificationData, notificationId = null) {
     const online = this.isUserOnline(userId);
     let socketResult = null;
     let fcmResult = null;
+    
+    // 🔧 FIX: Call isUserViewingRelevantScreen once and reuse the result
+    let isViewingRelevantScreen = false;
+    if (online) {
+      isViewingRelevantScreen = await this.isUserViewingRelevantScreen(userId, notificationData);
+    }
     
     // Try socket first if user is online
     if (online) {
@@ -266,23 +305,6 @@ class NotificationService {
           failedCount: socketResult.failed || 0,
           failedSockets: socketResult.failedSockets || [],
         });
-      }
-      
-      // Check if user is actively viewing the relevant screen/context
-      const isViewingRelevantScreen = await this.isUserViewingRelevantScreen(
-        userId, 
-        notificationData
-      );
-      
-      // If socket succeeded AND user is viewing relevant screen, skip FCM to avoid duplicates
-      if (socketResult.sent && isViewingRelevantScreen) {
-        return { 
-          success: true, 
-          method: 'socket', 
-          socketResult,
-          skippedFCM: true,
-          reason: 'user_viewing_screen'
-        };
       }
       
       // If socket failed, retry once
@@ -298,28 +320,58 @@ class NotificationService {
       }
     }
     
-    // Send FCM in these cases:
-    // 1. User is offline
+    // 🔧 FIX: Send FCM in these cases:
+    // 1. User is offline (always send FCM)
     // 2. Socket failed
     // 3. User is online but NOT viewing the relevant screen (app might be backgrounded)
-    const shouldSendFCM = !online || !socketResult?.sent || !(await this.isUserViewingRelevantScreen(userId, notificationData));
+    // REMOVED: Early return that skipped FCM - now FCM is always attempted for offline users
+    // This ensures multi-device support (user might be viewing on one device but need notification on another)
+    const shouldSendFCM = !online || !socketResult?.sent || !isViewingRelevantScreen;
     
     if (shouldSendFCM) {
-      fcmResult = await this.sendFCMNotification(userId, notificationData);
-      
-      if (notificationId) {
-        const fcmSuccess = fcmResult.success && (
-          fcmResult.sent > 0 || 
-          (fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error)
-        );
+      // 🔧 FIX: Check FCM initialization before sending
+      if (!fcmService.initialized) {
+        console.warn(`[v1/Notification] FCM not initialized, cannot send push notification to user ${userId}`);
+        if (notificationId) {
+          this.logDeliveryAttempt(notificationId, 'fcm', false, {
+            error: 'FCM not initialized',
+            reason: 'service_not_initialized'
+          });
+        }
+      } else {
+        fcmResult = await this.sendFCMNotification(userId, notificationData);
         
-        this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess, {
-          sent: fcmResult.sent || 0,
-          failed: fcmResult.failed || 0,
-          error: fcmResult.error || null,
-          reason: fcmResult.reason || null,
-          details: fcmResult.details || null,
-        });
+        if (notificationId) {
+          // 🔧 FIX: Improved success criteria - sent: 0 is only success if reason is 'no_tokens' (user has no tokens)
+          const fcmSuccess = fcmResult.success && fcmResult.sent > 0;
+          const fcmHasTokens = fcmResult.success && fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error;
+          
+          this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess || fcmHasTokens, {
+            sent: fcmResult.sent || 0,
+            failed: fcmResult.failed || 0,
+            error: fcmResult.error || null,
+            reason: fcmResult.reason || null,
+            details: fcmResult.details || null,
+            hasTokens: fcmHasTokens,
+          });
+          
+          // 🔧 FIX: Better logging for FCM failures
+          if (!fcmSuccess && !fcmHasTokens) {
+            console.error(`[v1/Notification] FCM delivery failed for user ${userId}, notification ${notificationId}:`, {
+              error: fcmResult.error,
+              reason: fcmResult.reason,
+              sent: fcmResult.sent,
+              failed: fcmResult.failed
+            });
+          } else if (fcmHasTokens) {
+            console.log(`[v1/Notification] FCM skipped for user ${userId} - no active tokens`);
+          }
+        }
+      }
+    } else {
+      // Log when FCM is skipped due to user viewing relevant screen
+      if (notificationId) {
+        console.log(`[v1/Notification] FCM skipped for user ${userId}, notification ${notificationId} - user viewing relevant screen`);
       }
     }
     
@@ -328,13 +380,16 @@ class NotificationService {
       ? 'socket+fcm' 
       : socketResult?.sent 
         ? 'socket' 
-        : 'fcm';
+        : fcmResult?.sent > 0
+          ? 'fcm'
+          : 'none';
     
     return { 
       success, 
       method, 
       socketResult: socketResult || null, 
-      fcmResult: fcmResult || null 
+      fcmResult: fcmResult || null,
+      skippedFCM: shouldSendFCM === false && online && socketResult?.sent
     };
   }
 
@@ -509,13 +564,44 @@ class NotificationService {
       return { stored: false, sent: false, error: storeResult.error };
     }
 
-    // Handle duplicate notifications gracefully
+    // 🔧 FIX: Handle duplicate notifications - still attempt delivery if user is offline
+    // This ensures FCM is sent even for duplicates if user is offline
     if (storeResult.duplicate) {
+      const isOnline = this.isUserOnline(userId);
+      
+      // If user is offline, still attempt FCM delivery for duplicates
+      if (!isOnline) {
+        // Use actual notification ID if available, otherwise use null (for cached duplicates)
+        const notificationId = storeResult.notification.id && storeResult.notification.id !== 'cached' 
+          ? storeResult.notification.id 
+          : null;
+        
+        const sendResult = await this.sendNotification(userId, notificationData, notificationId);
+        
+        console.log(`[v1/Notification] Duplicate notification for offline user ${userId}, FCM delivery attempted:`, {
+          success: sendResult.success,
+          method: sendResult.method,
+          fcmSent: sendResult.fcmResult?.sent || 0
+        });
+        
+        return {
+          stored: true,
+          sent: sendResult.success,
+          duplicate: true,
+          notification: storeResult.notification,
+          method: sendResult.method,
+          fcmResult: sendResult.fcmResult,
+        };
+      }
+      
+      // If user is online and viewing, skip delivery for duplicates
+      console.log(`[v1/Notification] Duplicate notification for online user ${userId}, delivery skipped`);
       return {
         stored: true,
         sent: true,
         duplicate: true,
         notification: storeResult.notification,
+        skipped: 'user_online_viewing',
       };
     }
 
