@@ -12,8 +12,26 @@ const validateRegisterToken = [
     .isString()
     .withMessage("FCM token must be a string")
     .trim()
-    .isLength({ min: 1 })
-    .withMessage("FCM token cannot be empty"),
+    .isLength({ min: 100 })
+    .withMessage("FCM token appears too short. Ensure you're sending FCM token, not APNs token. Minimum length is 100 characters.")
+    .custom((value) => {
+      // Basic format check
+      const trimmed = value.trim();
+      if (trimmed.length < 100) {
+        throw new Error("FCM token is too short. Minimum length is 100 characters.");
+      }
+      // Check if it looks like an APNs token (64 hex chars)
+      const apnsPattern = /^[0-9a-fA-F]{64}$/;
+      if (apnsPattern.test(trimmed)) {
+        throw new Error("This appears to be an APNs token. Please send FCM token from Firebase instead.");
+      }
+      // Basic pattern validation
+      const fcmPattern = /^[A-Za-z0-9_-]+$/;
+      if (!fcmPattern.test(trimmed)) {
+        throw new Error("FCM token contains invalid characters.");
+      }
+      return true;
+    }),
 
   body("device_type")
     .optional()

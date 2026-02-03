@@ -28,16 +28,14 @@ class EmailService {
           try {
             this.etherealAccount = await nodemailer.createTestAccount();
             this.transporter = nodemailer.createTransport({
-              host: "smtp.ethereal.email",
+              host: 'smtp.ethereal.email',
               port: 587,
               secure: false,
               auth: {
-                // user: this.etherealAccount.user,
-                // pass: this.etherealAccount.pass,
-                user:"isaiah.wolf@ethereal.email",
-                pass: "tYBtrbpGgCrZzXQs11",
-              },
-            });
+                  user: 'anissa.prohaska@ethereal.email',
+                  pass: 'WUDB9dynZrvh6TMavV'
+              }
+          });
             this.fromEmail = this.etherealAccount.user;
             console.log("✅ Ethereal Email test account created");
             console.log("📧 Test account:", this.etherealAccount.user);

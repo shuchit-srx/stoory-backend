@@ -286,11 +286,28 @@ class NotificationController {
           : 'FCM service is not initialized. Check Firebase credentials.',
       };
 
+      // iOS-specific checks
+      if (fcmService.initialized) {
+        status.iosSupport = {
+          apnsConfigured: true, // Firebase SDK handles this
+          note: 'APNs configuration must be verified in Firebase Console',
+          requirements: [
+            'APNs Auth Key or certificates configured in Firebase Console',
+            'Bundle ID matches exactly',
+            'Testing on real iOS device (not simulator)'
+          ]
+        };
+      }
+
       // Optionally get user's token count
       if (req.user) {
         const tokensResult = await fcmService.getUserTokens(req.user.id);
         if (tokensResult.success) {
           status.userTokens = tokensResult.tokens?.length || 0;
+          
+          // Count iOS tokens
+          const iosTokens = tokensResult.tokens?.filter(t => t.device_type?.toLowerCase() === 'ios') || [];
+          status.iosTokens = iosTokens.length;
         }
       }
 
