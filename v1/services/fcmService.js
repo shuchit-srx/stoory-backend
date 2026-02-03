@@ -68,11 +68,24 @@ class FCMService {
       }
 
       // Validate token with a dry-run send before saving
+      // 🔧 FIX: Added proper iOS/APNS configuration for token validation
       try {
         await this.app.messaging().send({
           token,
           data: { test: 'validation' },
-          apns: { headers: { 'apns-priority': '5' } },
+          apns: {
+            headers: {
+              'apns-priority': '10', // Changed from '5' to '10' for immediate delivery
+              'apns-push-type': 'alert', // Added required push type for iOS
+            },
+            payload: {
+              // Added required aps payload structure for iOS validation
+              aps: {
+                alert: 'Validation',
+                sound: 'default',
+              },
+            },
+          },
           android: { priority: 'normal' }
         }, true); // dryRun = true
       } catch (validationError) {
