@@ -249,6 +249,43 @@ class MOUService {
 
       const fullyAccepted = updatedMOU.accepted_by_influencer && updatedMOU.accepted_by_brand;
 
+      // Send notification to other party about MOU acceptance
+      try {
+        const NotificationService = require('./notificationService');
+        const otherUserId = userRole === 'INFLUENCER' 
+          ? application.brand_id 
+          : application.influencer_id;
+        
+        // Notify other party that MOU was accepted
+        await NotificationService.notifyMOUAccepted(
+          updatedMOU.id,
+          application.id,
+          userId,
+          otherUserId,
+          userRole
+        );
+      } catch (notifError) {
+        console.error('[MOUService/acceptMOU] Failed to send MOU acceptance notification:', notifError);
+        // Don't fail the operation if notification fails
+      }
+
+      // If both parties have accepted, notify brand owner to proceed with payment
+      if (fullyAccepted) {
+        try {
+          const NotificationService = require('./notificationService');
+          await NotificationService.notifyMOUFullyAccepted(
+            updatedMOU.id,
+            application.id,
+            application.brand_id,
+            application.influencer_id
+          );
+          console.log(`✅ [MOUService/acceptMOU] Notified brand owner to proceed with payment for application ${application.id}`);
+        } catch (notifError) {
+          console.error('[MOUService/acceptMOU] Failed to send payment notification:', notifError);
+          // Don't fail the operation if notification fails
+        }
+      }
+
       return {
         success: true,
         message: 'MOU accepted successfully',

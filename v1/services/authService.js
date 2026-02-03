@@ -863,7 +863,7 @@ class AuthService {
       if (existing) {
         return {
           success: false,
-          message: "Email already registered",
+          message: "This email is already registered. Please use a different email",
           code: "EMAIL_ALREADY_EXISTS",
         };
       }

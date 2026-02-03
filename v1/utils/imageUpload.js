@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require('../db/config');
 const multer = require('multer');
 const path = require('path');
+const sharp = require('sharp');
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
@@ -25,6 +26,78 @@ const upload = multer({
 });
 
 /**
+ * Compress image using Sharp
+ * @param {Buffer} fileBuffer - Original image buffer
+ * @param {Object} options - Compression options
+ * @returns {Promise<{buffer: Buffer, mimeType: string, originalSize: number, compressedSize: number}>}
+ */
+async function compressImage(fileBuffer, options = {}) {
+    const {
+        maxWidth = 1920,
+        maxHeight = 1920,
+        quality = 85,
+        format = 'jpeg', // 'jpeg' or 'webp'
+        threshold = 1024 * 1024 // 1MB - only compress if larger than this
+    } = options;
+
+    const originalSize = fileBuffer.length;
+
+    // Skip compression if image is already small enough
+    if (originalSize <= threshold) {
+        return {
+            buffer: fileBuffer,
+            mimeType: 'image/jpeg',
+            originalSize,
+            compressedSize: originalSize,
+            compressed: false
+        };
+    }
+
+    try {
+        let sharpInstance = sharp(fileBuffer)
+            .resize(maxWidth, maxHeight, {
+                fit: 'inside',
+                withoutEnlargement: true
+            });
+
+        let outputMimeType;
+        if (format === 'webp') {
+            sharpInstance = sharpInstance.webp({ quality });
+            outputMimeType = 'image/webp';
+        } else {
+            sharpInstance = sharpInstance.jpeg({ quality, mozjpeg: true });
+            outputMimeType = 'image/jpeg';
+        }
+
+        const compressed = await sharpInstance.toBuffer();
+        const compressedSize = compressed.length;
+        const savings = ((originalSize - compressedSize) / originalSize * 100).toFixed(2);
+        
+        console.log(`[Image Compression] ${(originalSize / 1024).toFixed(2)}KB → ${(compressedSize / 1024).toFixed(2)}KB (${savings}% reduction)`);
+        
+        return {
+            buffer: compressed,
+            mimeType: outputMimeType,
+            originalSize,
+            compressedSize,
+            compressed: true,
+            savings: parseFloat(savings)
+        };
+    } catch (error) {
+        console.error('[Image Compression] Error compressing image:', error);
+        // Return original if compression fails
+        return {
+            buffer: fileBuffer,
+            mimeType: 'image/jpeg',
+            originalSize,
+            compressedSize: originalSize,
+            compressed: false,
+            error: error.message
+        };
+    }
+}
+
+/**
  * Upload image to Supabase Storage
  * @param {Buffer} fileBuffer - The file buffer
  * @param {string} fileName - The file name
@@ -36,24 +109,45 @@ async function uploadImageToStorage(fileBuffer, fileName, folder) {
         console.log('Starting image upload process...');
         console.log('File name:', fileName);
         console.log('Folder:', folder);
-        console.log('File buffer size:', fileBuffer.length, 'bytes');
+        console.log('File buffer size:', (fileBuffer.length / 1024).toFixed(2), 'KB');
 
-        // Generate unique filename
+        // 🔧 COMPRESSION: Compress image if it's larger than 1MB
+        let processedBuffer = fileBuffer;
+        let mimeType = getMimeType(fileName);
+        let fileExtension = path.extname(fileName);
+        
+        if (fileBuffer.length > 1024 * 1024) { // 1MB threshold
+            console.log('Image exceeds 1MB, compressing...');
+            const compressionResult = await compressImage(fileBuffer, {
+                maxWidth: 1920,
+                maxHeight: 1920,
+                quality: 85,
+                format: 'jpeg', // Convert all to JPEG for consistency
+                threshold: 1024 * 1024
+            });
+            
+            processedBuffer = compressionResult.buffer;
+            mimeType = compressionResult.mimeType;
+            fileExtension = compressionResult.mimeType === 'image/webp' ? '.webp' : '.jpg';
+            
+            if (compressionResult.compressed) {
+                console.log(`Compression successful: ${compressionResult.savings}% size reduction`);
+            }
+        }
+
+        // Generate unique filename (use compressed extension if compression occurred)
         const timestamp = Date.now();
-        const fileExtension = path.extname(fileName);
         const uniqueFileName = `${folder}/${timestamp}_${Math.random().toString(36).substring(2)}${fileExtension}`;
         
         console.log('Generated filename:', uniqueFileName);
-
-        // Detect MIME type
-        const mimeType = getMimeType(fileName);
-        console.log('Detected MIME type:', mimeType);
+        console.log('Final file size:', (processedBuffer.length / 1024).toFixed(2), 'KB');
+        console.log('MIME type:', mimeType);
 
         // Upload to Supabase Storage
         console.log('Uploading to Supabase Storage...');
         const { data, error } = await supabaseAdmin.storage
             .from('images')
-            .upload(uniqueFileName, fileBuffer, {
+            .upload(uniqueFileName, processedBuffer, {
                 contentType: mimeType,
                 cacheControl: '3600',
                 upsert: false
@@ -177,27 +271,51 @@ async function uploadPortfolioMediaToStorage(fileBuffer, fileName, mimeType) {
         console.log('Starting portfolio media upload process...');
         console.log('File name:', fileName);
         console.log('MIME type:', mimeType);
-        console.log('File buffer size:', fileBuffer.length, 'bytes');
+        console.log('File buffer size:', (fileBuffer.length / 1024).toFixed(2), 'KB');
 
         // Determine bucket based on file type
         const isVideo = mimeType.startsWith('video/');
         const bucket = isVideo ? 'attachments' : 'images'; // Videos go to attachments, images to images bucket
         const folder = isVideo ? 'portfolio/videos' : 'portfolio/images';
 
+        // 🔧 COMPRESSION: Compress images (not videos) if larger than 1MB
+        let processedBuffer = fileBuffer;
+        let processedMimeType = mimeType;
+        let fileExtension = path.extname(fileName);
+        
+        if (!isVideo && fileBuffer.length > 1024 * 1024) { // 1MB threshold for images only
+            console.log('Portfolio image exceeds 1MB, compressing...');
+            const compressionResult = await compressImage(fileBuffer, {
+                maxWidth: 1920,
+                maxHeight: 1920,
+                quality: 85,
+                format: 'jpeg',
+                threshold: 1024 * 1024
+            });
+            
+            processedBuffer = compressionResult.buffer;
+            processedMimeType = compressionResult.mimeType;
+            fileExtension = compressionResult.mimeType === 'image/webp' ? '.webp' : '.jpg';
+            
+            if (compressionResult.compressed) {
+                console.log(`Portfolio image compression successful: ${compressionResult.savings}% size reduction`);
+            }
+        }
+
         // Generate unique filename
         const timestamp = Date.now();
-        const fileExtension = path.extname(fileName);
         const uniqueFileName = `${folder}/${timestamp}_${Math.random().toString(36).substring(2)}${fileExtension}`;
         
         console.log('Generated filename:', uniqueFileName);
         console.log('Target bucket:', bucket);
+        console.log('Final file size:', (processedBuffer.length / 1024).toFixed(2), 'KB');
 
         // Upload to Supabase Storage
         console.log('Uploading to Supabase Storage...');
         const { data, error } = await supabaseAdmin.storage
             .from(bucket)
-            .upload(uniqueFileName, fileBuffer, {
-                contentType: mimeType,
+            .upload(uniqueFileName, processedBuffer, {
+                contentType: processedMimeType,
                 cacheControl: '3600',
                 upsert: false
             });

@@ -305,7 +305,7 @@ class ProfileService {
           // Return more specific error message
           let errorMessage = "Failed to update user data";
           if (userUpdateError.code === "23505") {
-            errorMessage = "Email already exists";
+            errorMessage = "This email is already registered. Please use a different email";
           } else if (userUpdateError.message) {
             errorMessage = userUpdateError.message;
           }
@@ -767,7 +767,7 @@ class ProfileService {
           // Return more specific error message
           let errorMessage = "Failed to update user data";
           if (userUpdateError.code === "23505") {
-            errorMessage = "Email already exists";
+            errorMessage = "This email is already registered. Please use a different email";
           } else if (userUpdateError.message) {
             errorMessage = userUpdateError.message;
           }

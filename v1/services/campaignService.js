@@ -523,6 +523,7 @@ class CampaignService {
         platform: campaign.platform,
         content_type: campaign.content_type,
         applications_accepted_till: campaign.applications_accepted_till || null,
+        requires_script: campaign.requires_script || false,
         script_deadline: scriptDeadline,
         work_deadline: workDeadline,
         buffer_days: campaign.buffer_days || null,
