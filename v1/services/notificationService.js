@@ -322,11 +322,11 @@ class NotificationService {
     
     // 🔧 FIX: Send FCM in these cases:
     // 1. User is offline (always send FCM)
-    // 2. Socket failed
-    // 3. User is online but NOT viewing the relevant screen (app might be backgrounded)
-    // REMOVED: Early return that skipped FCM - now FCM is always attempted for offline users
-    // This ensures multi-device support (user might be viewing on one device but need notification on another)
-    const shouldSendFCM = !online || !socketResult?.sent || !isViewingRelevantScreen;
+    // 2. Socket failed completely (no sockets succeeded)
+    // 🔧 CRITICAL FIX: Don't send FCM if socket succeeded - prevents duplicate notifications
+    // Only send FCM if socket completely failed OR user is offline
+    // This ensures users get either socket OR FCM, not both (prevents duplicates)
+    const shouldSendFCM = !online || (socketResult && !socketResult.sent && socketResult.count === 0);
     
     if (shouldSendFCM) {
       // 🔧 FIX: Check FCM initialization before sending
@@ -369,9 +369,13 @@ class NotificationService {
         }
       }
     } else {
-      // Log when FCM is skipped due to user viewing relevant screen
+      // Log when FCM is skipped
       if (notificationId) {
-        console.log(`[v1/Notification] FCM skipped for user ${userId}, notification ${notificationId} - user viewing relevant screen`);
+        if (online && socketResult?.sent) {
+          console.log(`[v1/Notification] FCM skipped for user ${userId}, notification ${notificationId} - socket delivery succeeded`);
+        } else {
+          console.log(`[v1/Notification] FCM skipped for user ${userId}, notification ${notificationId}`);
+        }
       }
     }
     
