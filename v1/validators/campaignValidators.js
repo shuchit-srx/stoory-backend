@@ -30,9 +30,9 @@ const validateCreateCampaign = [
     .custom((value) => {
       if (!value) return true;
       const normalized = String(value).toUpperCase().trim();
-      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      const validValues = ["DRAFT", "LIVE", "IN_PROGRESS", "COMPLETED", "EXPIRED", "CANCELLED"];
       if (!validValues.includes(normalized)) {
-        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, IN_PROGRESS, COMPLETED, EXPIRED, CANCELLED");
       }
       return true;
     }),
@@ -179,9 +179,9 @@ const validateUpdateCampaign = [
     .custom((value) => {
       if (!value) return true;
       const normalized = String(value).toUpperCase().trim();
-      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      const validValues = ["DRAFT", "LIVE", "IN_PROGRESS", "COMPLETED", "EXPIRED", "CANCELLED"];
       if (!validValues.includes(normalized)) {
-        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, IN_PROGRESS, COMPLETED, EXPIRED, CANCELLED");
       }
       return true;
     }),
@@ -311,9 +311,9 @@ const validateCampaignFilters = [
     .custom((value) => {
       if (!value) return true;
       const normalized = String(value).toUpperCase().trim();
-      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      const validValues = ["DRAFT", "LIVE", "IN_PROGRESS", "COMPLETED", "EXPIRED", "CANCELLED"];
       if (!validValues.includes(normalized)) {
-        throw new Error("Invalid status filter. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
+        throw new Error("Invalid status filter. Must be one of: DRAFT, LIVE, IN_PROGRESS, COMPLETED, EXPIRED, CANCELLED");
       }
       return true;
     }),

@@ -8,15 +8,38 @@ class SubmissionService {
    */
   async uploadFile(fileBuffer, fileName, mimeType, folder = 'submissions') {
     try {
+      // Determine file type and storage subfolder
+      const isImage = mimeType.startsWith('image/');
+      const isVideo = mimeType.startsWith('video/');
+      const isDocument = !isImage && !isVideo; // PDFs, docs, etc.
+      
+      // Map folder parameter and determine subfolder
+      let storageFolder;
+      if (folder === 'script') {
+        // Scripts are always documents
+        storageFolder = 'scripts/documents';
+      } else if (folder === 'work') {
+        // Works can be images, videos, or documents
+        if (isImage) {
+          storageFolder = 'works/images';
+        } else if (isVideo) {
+          storageFolder = 'works/videos';
+        } else {
+          storageFolder = 'works/documents';
+        }
+      } else {
+        // Default fallback
+        storageFolder = isImage ? `${folder}/images` : isVideo ? `${folder}/videos` : `${folder}/documents`;
+      }
+      
       // Generate unique filename
       const timestamp = Date.now();
       const fileExtension = path.extname(fileName);
       const randomString = Math.random().toString(36).substring(2, 15);
-      const uniqueFileName = `${folder}/${timestamp}_${randomString}${fileExtension}`;
+      const uniqueFileName = `${storageFolder}/${timestamp}_${randomString}${fileExtension}`;
 
-      // Use 'attachments' bucket for all file types (it's already set up for general uploads)
-      // Files are organized by the folder parameter ('scripts' or 'work')
-      const bucket = 'scripts';
+      // All files are stored in 'v1' bucket
+      const bucket = 'v1';
 
       // Upload to Supabase Storage
       const { data, error } = await supabaseAdmin.storage
@@ -645,6 +668,23 @@ class SubmissionService {
                 }
               }
             }
+          }
+
+          // Check and auto-complete campaign when work is accepted
+          // For NORMAL campaigns: Complete when work is accepted
+          // For BULK campaigns: Complete when all selected applications' work is accepted
+          try {
+            const CampaignService = require('./campaignService');
+            const campaignResult = await CampaignService.checkAndCompleteCampaignOnWorkSubmission(
+              application.campaign_id,
+              application.id
+            );
+            if (campaignResult.success && campaignResult.campaignCompleted) {
+              console.log(`[SubmissionService/reviewWork] Campaign ${application.campaign_id} auto-completed`);
+            }
+          } catch (campaignError) {
+            console.error(`[SubmissionService/reviewWork] Failed to check campaign completion:`, campaignError);
+            // Don't fail work review if campaign check fails, but log it
           }
         }
       }

@@ -138,9 +138,14 @@ class ApplicationService {
       return { success: false, message: 'Campaign not found' };
     }
 
-    // Allow various active statuses
-    const allowedStatuses = ['LIVE', 'ACTIVE', 'OPEN', 'PUBLISHED'];
-    if (!allowedStatuses.includes(campaign.status)) {
+    // Allow LIVE status for all campaigns
+    // Allow IN_PROGRESS status only for BULK campaigns (can accept more applications)
+    // Block COMPLETED and EXPIRED campaigns
+    if (campaign.status === 'LIVE') {
+      // LIVE campaigns can always accept applications
+    } else if (campaign.status === 'IN_PROGRESS' && campaign.type === 'BULK') {
+      // BULK campaigns in IN_PROGRESS can still accept applications
+    } else {
       return { 
          success: false, 
          message: `Campaign is not accepting applications (Status: ${campaign.status})` 
@@ -383,6 +388,18 @@ class ApplicationService {
         if (!countUpdateResult.success) {
           console.error(`[ApplicationService/bulkAccept] Failed to update accepted_count for campaign ${campId}:`, countUpdateResult.message);
           // Log error but don't fail the entire bulk operation
+        } else {
+          // Move campaign from LIVE to IN_PROGRESS when first application is accepted
+          try {
+            const CampaignService = require('./campaignService');
+            const campaignStatusResult = await CampaignService.moveCampaignToInProgress(campId);
+            if (campaignStatusResult.success && campaignStatusResult.statusChanged) {
+              console.log(`[ApplicationService/bulkAccept] Campaign ${campId} moved to IN_PROGRESS`);
+            }
+          } catch (campaignError) {
+            console.error(`[ApplicationService/bulkAccept] Failed to update campaign status:`, campaignError);
+            // Don't fail the operation if campaign status update fails, but log it
+          }
         }
       }
 
@@ -509,24 +526,28 @@ class ApplicationService {
         if (!countUpdateResult.success) {
           console.error('[ApplicationService/accept] Failed to update accepted_count:', countUpdateResult.message);
           // Don't fail the entire operation if count update fails, just log it
+        } else {
+          // Move campaign from LIVE to IN_PROGRESS when first application is accepted
+          try {
+            const CampaignService = require('./campaignService');
+            const campaignStatusResult = await CampaignService.moveCampaignToInProgress(app.campaign_id);
+            if (campaignStatusResult.success && campaignStatusResult.statusChanged) {
+              console.log(`[ApplicationService/accept] Campaign ${app.campaign_id} moved to IN_PROGRESS`);
+            }
+          } catch (campaignError) {
+            console.error(`[ApplicationService/accept] Failed to update campaign status:`, campaignError);
+            // Don't fail the operation if campaign status update fails, but log it
+          }
         }
       }
 
-      // Send notification to influencer
+      // Send notification to influencer (Trigger #2)
       try {
         const NotificationService = require('./notificationService');
-        // Use notifyApplicationApproved for consistency with legacy
-        await NotificationService.notifyApplicationApproved(
+        await NotificationService.notifyApplicationAccepted(
           applicationId,
           app.influencer_id,
           brandId
-        );
-        // Also send flow state notification
-        await NotificationService.notifyFlowStateChange(
-          applicationId,
-          'ACCEPTED',
-          app.influencer_id,
-          'Your application has been accepted! You can now proceed with payment.'
         );
       } catch (notifError) {
         console.error('[ApplicationService/accept] Failed to send notification:', notifError);
@@ -605,15 +626,6 @@ class ApplicationService {
             ? applicationData.v1_campaigns?.brand_id 
             : app.influencer_id;
 
-          if (otherUserId) {
-            const NotificationService = require('./notificationService');
-            await NotificationService.notifyApplicationCancelled(
-              applicationId,
-              user.id,
-              otherUserId,
-              null
-            );
-          }
         }
       } catch (notifError) {
         console.error('[ApplicationService/cancel] Failed to send notification:', notifError);
@@ -689,18 +701,6 @@ class ApplicationService {
       } catch (chatError) {
         console.error(`[ApplicationService/complete] Failed to close chat:`, chatError);
         // Don't fail completion if chat closure fails, but log it
-      }
-
-      // Auto-complete NORMAL campaigns when all applications are completed
-      try {
-        const CampaignService = require('./campaignService');
-        const campaignResult = await CampaignService.checkAndCompleteNormalCampaign(app.campaign_id);
-        if (campaignResult.success && campaignResult.campaignCompleted) {
-          console.log(`[ApplicationService/complete] Campaign ${app.campaign_id} auto-completed`);
-        }
-      } catch (campaignError) {
-        console.error(`[ApplicationService/complete] Failed to check campaign completion:`, campaignError);
-        // Don't fail application completion if campaign check fails, but log it
       }
 
       return {
