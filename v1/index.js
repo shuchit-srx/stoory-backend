@@ -89,7 +89,16 @@ const io = initSocket(server);
 // Initialize automatic campaign expiry checker
 (() => {
   const CampaignService = require("./services/campaignService");
-  
+  const EXPIRY_CHECK_MINUTES = process.env.ENABLE_EXPIRY_CHECK ? parseInt(process.env.EXPIRY_CHECK_MINUTES || -1) : -1;
+
+  if(EXPIRY_CHECK_MINUTES === -1) {
+    console.log("⏳ [CampaignExpiry] Disabled via ENABLE_EXPIRY_CHECK");
+    return;
+  }
+  else {
+    console.log(`✅ [CampaignExpiry] Enabled (runs every ${EXPIRY_CHECK_MINUTES} minutes)`);
+  }
+
   const runExpiryCheck = async (reason = "scheduled") => {
     try {
       const result = await CampaignService.checkAndExpireCampaigns();
@@ -111,9 +120,9 @@ const io = initSocket(server);
   setTimeout(() => runExpiryCheck("startup"), 5000);
   
   // Schedule periodic checks
-  setInterval(() => runExpiryCheck("interval"), 1 * 60 * 1000);
+  setInterval(() => runExpiryCheck("interval"), EXPIRY_CHECK_MINUTES * 60 * 1000);
   
-  console.log(`✅ [CampaignExpiry] Automatic expiry check enabled (runs every minute)`);
+  console.log(`✅ [CampaignExpiry] Automatic expiry check enabled (runs every ${EXPIRY_CHECK_MINUTES} minutes)`);
 })();
 
 // Global Error Handler
