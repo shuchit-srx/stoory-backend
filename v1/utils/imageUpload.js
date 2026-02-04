@@ -135,9 +135,23 @@ async function uploadImageToStorage(fileBuffer, fileName, folder) {
             }
         }
 
-        // Generate unique filename (use compressed extension if compression occurred)
+        // Map folder parameter to new structure
+        // 'profiles' -> 'profile-assets/images', 'campaigns' -> 'campaigns/images'
+        let storageFolder;
+        if (folder === 'profiles') {
+            storageFolder = 'profile-assets/images';
+        } else if (folder === 'campaigns' || folder.startsWith('campaigns/')) {
+            // Handle campaigns and subfolders like 'campaigns/references'
+            const subfolder = folder.includes('/') ? folder.split('/').slice(1).join('/') : '';
+            storageFolder = subfolder ? `campaigns/images/${subfolder}` : 'campaigns/images';
+        } else {
+            // Default to profile-assets for other cases
+            storageFolder = `profile-assets/images/${folder}`;
+        }
+
+        // Generate unique filename
         const timestamp = Date.now();
-        const uniqueFileName = `${folder}/${timestamp}_${Math.random().toString(36).substring(2)}${fileExtension}`;
+        const uniqueFileName = `${storageFolder}/${timestamp}_${Math.random().toString(36).substring(2)}${fileExtension}`;
         
         console.log('Generated filename:', uniqueFileName);
         console.log('Final file size:', (processedBuffer.length / 1024).toFixed(2), 'KB');
@@ -146,7 +160,7 @@ async function uploadImageToStorage(fileBuffer, fileName, folder) {
         // Upload to Supabase Storage
         console.log('Uploading to Supabase Storage...');
         const { data, error } = await supabaseAdmin.storage
-            .from('images')
+            .from('v1')
             .upload(uniqueFileName, processedBuffer, {
                 contentType: mimeType,
                 cacheControl: '3600',
@@ -167,7 +181,7 @@ async function uploadImageToStorage(fileBuffer, fileName, folder) {
 
         // Get public URL
         const { data: urlData } = supabaseAdmin.storage
-            .from('images')
+            .from('v1')
             .getPublicUrl(uniqueFileName);
 
         console.log('Public URL generated:', urlData.publicUrl);
@@ -210,14 +224,44 @@ async function deleteImageFromStorage(imageUrl) {
         }
 
         // Extract file path from URL
+        // URL format: .../storage/v1/object/public/v1/{folder}/images/.../filename
+        // We need to extract the path after 'v1' bucket name
         const urlParts = imageUrl.split('/');
-        const fileName = urlParts[urlParts.length - 1];
-        const folder = urlParts[urlParts.length - 2];
-        const filePath = `${folder}/${fileName}`;
+        const v1Index = urlParts.indexOf('v1');
+        if (v1Index !== -1 && v1Index < urlParts.length - 1) {
+            // Extract path after 'v1' bucket name
+            const pathParts = urlParts.slice(v1Index + 1);
+            const filePath = pathParts.join('/');
+            
+            const { error } = await supabaseAdmin.storage
+                .from('v1')
+                .remove([filePath]);
 
-        const { error } = await supabaseAdmin.storage
-            .from('images')
-            .remove([filePath]);
+            if (error) {
+                console.error('Supabase storage delete error:', error);
+                return { success: false, error: error.message };
+            }
+
+            return { success: true, error: null };
+        } else {
+            // Fallback: try to extract path manually if URL structure is different
+            console.warn('Could not parse URL structure, attempting fallback extraction');
+            const fallbackUrlParts = imageUrl.split('/');
+            const fileName = fallbackUrlParts[fallbackUrlParts.length - 1];
+            // This is a best-guess fallback - may need adjustment based on actual URL patterns
+            const filePath = `profile-assets/images/${fileName}`;
+            
+            const { error } = await supabaseAdmin.storage
+                .from('v1')
+                .remove([filePath]);
+            
+            if (error) {
+                console.error('Supabase storage delete error:', error);
+                return { success: false, error: error.message };
+            }
+            
+            return { success: true, error: null };
+        }
 
         if (error) {
             console.error('Supabase storage delete error:', error);
@@ -273,10 +317,10 @@ async function uploadPortfolioMediaToStorage(fileBuffer, fileName, mimeType) {
         console.log('MIME type:', mimeType);
         console.log('File buffer size:', (fileBuffer.length / 1024).toFixed(2), 'KB');
 
-        // Determine bucket based on file type
+        // Determine folder based on file type
+        // Portfolio files go to profile-assets/images or profile-assets/videos
         const isVideo = mimeType.startsWith('video/');
-        const bucket = isVideo ? 'attachments' : 'images'; // Videos go to attachments, images to images bucket
-        const folder = isVideo ? 'portfolio/videos' : 'portfolio/images';
+        const folder = isVideo ? 'profile-assets/videos' : 'profile-assets/images';
 
         // 🔧 COMPRESSION: Compress images (not videos) if larger than 1MB
         let processedBuffer = fileBuffer;
@@ -307,13 +351,14 @@ async function uploadPortfolioMediaToStorage(fileBuffer, fileName, mimeType) {
         const uniqueFileName = `${folder}/${timestamp}_${Math.random().toString(36).substring(2)}${fileExtension}`;
         
         console.log('Generated filename:', uniqueFileName);
-        console.log('Target bucket:', bucket);
+        console.log('Target bucket: v1');
+        console.log('Storage folder:', folder);
         console.log('Final file size:', (processedBuffer.length / 1024).toFixed(2), 'KB');
 
         // Upload to Supabase Storage
         console.log('Uploading to Supabase Storage...');
         const { data, error } = await supabaseAdmin.storage
-            .from(bucket)
+            .from('v1')
             .upload(uniqueFileName, processedBuffer, {
                 contentType: processedMimeType,
                 cacheControl: '3600',
@@ -334,7 +379,7 @@ async function uploadPortfolioMediaToStorage(fileBuffer, fileName, mimeType) {
 
         // Get public URL
         const { data: urlData } = supabaseAdmin.storage
-            .from(bucket)
+            .from('v1')
             .getPublicUrl(uniqueFileName);
 
         console.log('Public URL generated:', urlData.publicUrl);
@@ -357,19 +402,47 @@ async function deletePortfolioMediaFromStorage(mediaUrl) {
             return { success: true, error: null };
         }
 
-        // Determine bucket from URL
-        const isVideo = mediaUrl.includes('/portfolio/videos/');
-        const bucket = isVideo ? 'attachments' : 'images';
-
         // Extract file path from URL
+        // URL format: .../storage/v1/object/public/v1/profile-assets/videos/.../filename
+        // or: .../storage/v1/object/public/v1/profile-assets/images/.../filename
+        // We need to extract the path after 'v1' bucket name
         const urlParts = mediaUrl.split('/');
-        const fileName = urlParts[urlParts.length - 1];
-        const folder = urlParts[urlParts.length - 2];
-        const filePath = `${folder}/${fileName}`;
+        const v1Index = urlParts.indexOf('v1');
+        if (v1Index !== -1 && v1Index < urlParts.length - 1) {
+            // Extract path after 'v1' bucket name
+            const pathParts = urlParts.slice(v1Index + 1);
+            const filePath = pathParts.join('/');
+            
+            const { error } = await supabaseAdmin.storage
+                .from('v1')
+                .remove([filePath]);
 
-        const { error } = await supabaseAdmin.storage
-            .from(bucket)
-            .remove([filePath]);
+            if (error) {
+                console.error('Supabase storage delete error:', error);
+                return { success: false, error: error.message };
+            }
+
+            return { success: true, error: null };
+        } else {
+            // Fallback: try to extract path manually if URL structure is different
+            console.warn('Could not parse URL structure, attempting fallback extraction');
+            const fallbackUrlParts = mediaUrl.split('/');
+            const fileName = fallbackUrlParts[fallbackUrlParts.length - 1];
+            const isVideo = mediaUrl.includes('/videos/');
+            const folderPrefix = isVideo ? 'profile-assets/videos' : 'profile-assets/images';
+            const filePath = `${folderPrefix}/${fileName}`;
+            
+            const { error } = await supabaseAdmin.storage
+                .from('v1')
+                .remove([filePath]);
+            
+            if (error) {
+                console.error('Supabase storage delete error:', error);
+                return { success: false, error: error.message };
+            }
+            
+            return { success: true, error: null };
+        }
 
         if (error) {
             console.error('Supabase storage delete error:', error);

@@ -305,7 +305,7 @@ class CampaignController {
           campaigns: result.campaigns,
           count_total_campaigns: result.count_total_campaigns,
           count_live_campaigns: result.count_live_campaigns,
-          count_active_campaigns: result.count_active_campaigns,
+          count_in_progress_campaigns: result.count_in_progress_campaigns,
           count_completed_campaigns: result.count_completed_campaigns,
           pagination: result.pagination,
         });

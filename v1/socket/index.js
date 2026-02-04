@@ -1,6 +1,6 @@
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
-const { ChatService, NotificationService } = require('../services');
+const { ChatService } = require('../services');
 const { supabaseAdmin } = require('../db/config');
 
 // Rate limiting configuration - Per-room rate limiting
@@ -44,8 +44,6 @@ const initSocket = (server) => {
     maxHttpBufferSize: 1e8 // 100MB for file uploads
   });
 
-  NotificationService.setSocketIO(io);
-
   // Authenticate socket connections using JWT token
   io.use(async (socket, next) => {
     try {
@@ -69,10 +67,6 @@ const initSocket = (server) => {
   io.on('connection', (socket) => {
     console.log(`User connected: ${socket.user.id} (socket: ${socket.id})`);
     
-    // 🔧 CRITICAL CHANGE: Register immediately
-    // SIGNIFICANCE: Ensures user is tracked as online immediately
-    NotificationService.registerOnlineUser(socket.user.id, socket.id);
-
     socket.currentRoom = null;
     socket.userId = socket.user.id;
 
@@ -442,9 +436,6 @@ const initSocket = (server) => {
     socket.on('disconnect', (reason) => {
       console.log(`User ${socket.user.id} disconnected: ${reason} (socket: ${socket.id})`);
       
-      // 🔧 CRITICAL: Unregister immediately
-      NotificationService.unregisterOnlineUser(socket.user.id, socket.id);
-
       if (socket.currentRoom) {
         socket.to(socket.currentRoom).emit('user_left', {
           userId: socket.user.id,
@@ -452,14 +443,12 @@ const initSocket = (server) => {
         });
       }
 
-      // 🔧 OPTIMIZATION: Only cleanup if user is fully offline
-      const remainingSockets = NotificationService.onlineUsers.get(socket.user.id);
-      if (!remainingSockets || remainingSockets.size === 0) {
+      // Cleanup user data when fully disconnected
+      const userRooms = userActiveRooms.get(socket.user.id);
+      if (userRooms && userRooms.size === 0) {
         messageRateLimits.delete(socket.userId);
         userActiveRooms.delete(socket.user.id);
         console.log(`[Socket] User ${socket.user.id} fully offline, cleaned up`);
-      } else {
-        console.log(`[Socket] User ${socket.user.id} still has ${remainingSockets.size} active socket(s)`);
       }
     });
 
@@ -467,7 +456,6 @@ const initSocket = (server) => {
     // SIGNIFICANCE: Prevents stale state on errors
     socket.on('error', (error) => {
       console.error(`[Socket] Error for user ${socket.user.id} (socket: ${socket.id}):`, error);
-      NotificationService.unregisterOnlineUser(socket.user.id, socket.id);
     });
   });
 
