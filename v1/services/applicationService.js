@@ -512,21 +512,13 @@ class ApplicationService {
         }
       }
 
-      // Send notification to influencer
+      // Send notification to influencer (Trigger #2)
       try {
         const NotificationService = require('./notificationService');
-        // Use notifyApplicationApproved for consistency with legacy
-        await NotificationService.notifyApplicationApproved(
+        await NotificationService.notifyApplicationAccepted(
           applicationId,
           app.influencer_id,
           brandId
-        );
-        // Also send flow state notification
-        await NotificationService.notifyFlowStateChange(
-          applicationId,
-          'ACCEPTED',
-          app.influencer_id,
-          'Your application has been accepted! You can now proceed with payment.'
         );
       } catch (notifError) {
         console.error('[ApplicationService/accept] Failed to send notification:', notifError);
@@ -605,15 +597,6 @@ class ApplicationService {
             ? applicationData.v1_campaigns?.brand_id 
             : app.influencer_id;
 
-          if (otherUserId) {
-            const NotificationService = require('./notificationService');
-            await NotificationService.notifyApplicationCancelled(
-              applicationId,
-              user.id,
-              otherUserId,
-              null
-            );
-          }
         }
       } catch (notifError) {
         console.error('[ApplicationService/cancel] Failed to send notification:', notifError);

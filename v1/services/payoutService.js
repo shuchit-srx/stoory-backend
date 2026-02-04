@@ -405,18 +405,6 @@ class PayoutService {
           }
         }
 
-        // Send flow state notification to influencer
-        try {
-          const NotificationService = require('./notificationService');
-          await NotificationService.notifyFlowStateChange(
-            payout.application_id,
-            'COMPLETED',
-            payout.influencer_id,
-            'Application completed successfully! 🎊'
-          );
-        } catch (notifError) {
-          console.error('[PayoutService/verifyPayoutPayment] Failed to send flow state notification:', notifError);
-        }
       }
 
       // Create transaction record (all amounts in RUPEES)

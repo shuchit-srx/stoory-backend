@@ -256,14 +256,22 @@ class MOUService {
           ? application.brand_id 
           : application.influencer_id;
         
-        // Notify other party that MOU was accepted
-        await NotificationService.notifyMOUAccepted(
-          updatedMOU.id,
-          application.id,
-          userId,
-          otherUserId,
-          userRole
-        );
+        // Notify other party that MOU was accepted (Triggers #3 and #4)
+        if (userRole === 'BRAND_OWNER') {
+          await NotificationService.notifyMOUAcceptedByBrand(
+            updatedMOU.id,
+            application.id,
+            userId,
+            otherUserId
+          );
+        } else {
+          await NotificationService.notifyMOUAcceptedByInfluencer(
+            updatedMOU.id,
+            application.id,
+            userId,
+            otherUserId
+          );
+        }
       } catch (notifError) {
         console.error('[MOUService/acceptMOU] Failed to send MOU acceptance notification:', notifError);
         // Don't fail the operation if notification fails

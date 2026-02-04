@@ -403,20 +403,13 @@ const ChatService = {
 
         if (recipientId) {
           const NotificationService = require('./notificationService');
-          // Skip notification if recipient is actively viewing the chat
-          const isViewingChat = NotificationService.isUserInChatRoom(recipientId, applicationId);
-          
-          if (!isViewingChat) {
-            // Send notification (socket will handle if online, FCM if offline)
-            await NotificationService.notifyChatMessage(
-              applicationId,
-              userId,
-              recipientId,
-              safeMessage
-            );
-          } else {
-            console.log(`[ChatService/saveMessage] Skipping notification - user ${recipientId} is viewing chat for application ${applicationId}`);
-          }
+          // Send notification via FCM
+          await NotificationService.notifyChatMessage(
+            applicationId,
+            userId,
+            recipientId,
+            safeMessage
+          );
         }
       }
     } catch (notifError) {
@@ -542,13 +535,14 @@ const ChatService = {
           ? brandId 
           : application.influencer_id;
         
-        if (otherUserId) {
-          await NotificationService.notifyConversationClosed(
-            applicationId,
-            closedById || 'system',
-            otherUserId
-          );
-        }
+        // Conversation closed notification removed - not in 15 trigger points
+        // if (otherUserId) {
+        //   await NotificationService.notifyConversationClosed(
+        //     applicationId,
+        //     closedById || 'system',
+        //     otherUserId
+        //   );
+        // }
       } catch (notifError) {
         console.error('[ChatService/closeChat] Failed to send notification:', notifError);
         // Don't fail chat closure if notification fails
