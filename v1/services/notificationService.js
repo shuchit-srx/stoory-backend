@@ -143,8 +143,11 @@ class NotificationService {
       }
     }
     
+    // Fix: Set method based on whether FCM was attempted, not just success
+    // This ensures delivery_method is 'fcm' when FCM is initialized and attempted,
+    // even if no tokens were sent or delivery failed
     const success = (fcmResult?.success && fcmResult.sent > 0);
-    const method = fcmResult?.sent > 0 ? 'fcm' : 'none';
+    const method = fcmService.initialized ? 'fcm' : 'none';
     
     return { 
       success, 
