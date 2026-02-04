@@ -3,9 +3,6 @@ const fcmService = require('./fcmService');
 
 class NotificationService {
   constructor() {
-    this.onlineUsers = new Map(); // Map<userId, Set<socketId>>
-    this.io = null;
-    
     // Notification batching
     this.notificationQueue = new Map(); // Map<userId, Array<notificationData>>
     this.batchTimer = null;
@@ -19,63 +16,12 @@ class NotificationService {
     this.INITIAL_RETRY_DELAY = 2000; // 2 seconds
     this.MAX_RETRY_DELAY = 30000; // 30 seconds
 
-    // 🔧 OPTIMIZATION: Socket health check interval
-    // SIGNIFICANCE: Prevents stale sockets from causing notification failures
-    this.socketHealthCheckInterval = null;
-    this.SOCKET_HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
-    this.startSocketHealthCheck();
-
-    // 🔧 OPTIMIZATION: In-memory duplicate cache
-    // SIGNIFICANCE: Reduces database queries by 80% for duplicate detection
+    // In-memory duplicate cache
     this.duplicateCache = new Map(); // Map<key, timestamp>
-    this.DUPLICATE_CACHE_TTL = 30000; // 30 seconds - increased to prevent duplicates from rapid retries
+    this.DUPLICATE_CACHE_TTL = 30000; // 30 seconds
     this.startDuplicateCacheCleanup();
   }
 
-  setSocketIO(io) {
-    this.io = io;
-  }
-
-  // 🔧 OPTIMIZATION: Socket health check
-  // SIGNIFICANCE: Automatically removes disconnected sockets from tracking
-  startSocketHealthCheck() {
-    if (this.socketHealthCheckInterval) return;
-    
-    this.socketHealthCheckInterval = setInterval(() => {
-      this.cleanupStaleSockets();
-    }, this.SOCKET_HEALTH_CHECK_INTERVAL);
-  }
-
-  cleanupStaleSockets() {
-    if (!this.io) return;
-    
-    let cleanedCount = 0;
-    for (const [userId, socketIds] of this.onlineUsers.entries()) {
-      const validSocketIds = new Set();
-      
-      for (const socketId of socketIds) {
-        const socket = this.io.sockets.sockets.get(socketId);
-        if (socket && socket.connected) {
-          validSocketIds.add(socketId);
-        } else {
-          cleanedCount++;
-        }
-      }
-      
-      if (validSocketIds.size === 0) {
-        this.onlineUsers.delete(userId);
-      } else if (validSocketIds.size < socketIds.size) {
-        this.onlineUsers.set(userId, validSocketIds);
-      }
-    }
-    
-    if (cleanedCount > 0) {
-      console.log(`[v1/Notification] Cleaned ${cleanedCount} stale sockets`);
-    }
-  }
-
-  // 🔧 OPTIMIZATION: Duplicate cache cleanup
-  // SIGNIFICANCE: Prevents memory leaks from cache
   startDuplicateCacheCleanup() {
     setInterval(() => {
       const now = Date.now();
@@ -87,78 +33,7 @@ class NotificationService {
     }, this.DUPLICATE_CACHE_TTL);
   }
 
-  registerOnlineUser(userId, socketId) {
-    if (!this.onlineUsers.has(userId)) {
-      this.onlineUsers.set(userId, new Set());
-    }
-    this.onlineUsers.get(userId).add(socketId);
-    console.log(`[v1/Notification] User ${userId} registered (socket: ${socketId}, total: ${this.onlineUsers.get(userId).size})`);
-  }
-
-  unregisterOnlineUser(userId, socketId) {
-    if (!this.onlineUsers.has(userId)) return;
-    const sockets = this.onlineUsers.get(userId);
-    sockets.delete(socketId);
-    if (sockets.size === 0) {
-      this.onlineUsers.delete(userId);
-      console.log(`[v1/Notification] User ${userId} is now offline`);
-    }
-  }
-
-  // 🔧 CRITICAL CHANGE: Enhanced isUserOnline with socket validation
-  // SIGNIFICANCE: Prevents false positives - only returns true if sockets are actually connected
-  isUserOnline(userId) {
-    if (!this.onlineUsers.has(userId)) return false;
-    
-    const socketIds = this.onlineUsers.get(userId);
-    if (socketIds.size === 0) return false;
-    
-    // Verify at least one socket is actually connected
-    if (this.io) {
-      for (const socketId of socketIds) {
-        const socket = this.io.sockets.sockets.get(socketId);
-        if (socket && socket.connected) {
-          return true;
-        }
-      }
-      // All sockets disconnected, clean up
-      this.onlineUsers.delete(userId);
-      return false;
-    }
-    
-    return true;
-  }
-
-  isUserInChatRoom(userId, applicationId) {
-    if (!this.io || !this.isUserOnline(userId)) {
-      return false;
-    }
-
-    const roomName = `app_${applicationId}`;
-    const room = this.io.sockets.adapter.rooms.get(roomName);
-    if (!room || room.size === 0) {
-      return false;
-    }
-
-    // Check if any of user's sockets are in the room
-    const userSockets = this.onlineUsers.get(userId);
-    if (!userSockets || userSockets.size === 0) {
-      return false;
-    }
-
-    for (const socketId of userSockets) {
-      if (room.has(socketId)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  // 🔧 OPTIMIZATION: Non-blocking logDeliveryAttempt
-  // SIGNIFICANCE: Doesn't block notification delivery - improves latency by 10-20ms
   async logDeliveryAttempt(notificationId, method, success, details = {}) {
-    // Fire and forget - don't block notification delivery
     Promise.resolve().then(async () => {
       try {
         await supabaseAdmin.from('v1_notification_delivery_attempts').insert({
@@ -169,61 +44,13 @@ class NotificationService {
           attempted_at: new Date().toISOString(),
         });
       } catch (err) {
-        // Silent fail - logging shouldn't block notifications
         console.error('[v1/Notification] Failed to log delivery attempt:', err);
       }
     });
   }
 
-  // 🔧 CRITICAL CHANGE: Enhanced sendSocketNotification with validation
-  // SIGNIFICANCE: Validates sockets before sending, auto-cleans invalid sockets
-  sendSocketNotification(userId, notificationData) {
-    if (!this.io) {
-      return { sent: false, reason: 'not_initialized' };
-    }
-    
-    if (!this.isUserOnline(userId)) {
-      return { sent: false, reason: 'offline' };
-    }
-    
-    const socketIds = Array.from(this.onlineUsers.get(userId));
-    let sentCount = 0;
-    let failedCount = 0;
-    const failedSockets = [];
-    
-    // 🔧 OPTIMIZATION: Use for...of for better performance
-    for (const socketId of socketIds) {
-      try {
-        const socket = this.io.sockets.sockets.get(socketId);
-        
-        // 🔧 CRITICAL: Verify socket exists AND is connected
-        if (socket && socket.connected) {
-          socket.emit('notification', notificationData);
-          sentCount++;
-        } else {
-          failedCount++;
-          failedSockets.push(socketId);
-          // Auto-cleanup invalid socket
-          this.unregisterOnlineUser(userId, socketId);
-        }
-      } catch (err) {
-        failedCount++;
-        failedSockets.push(socketId);
-        this.unregisterOnlineUser(userId, socketId);
-      }
-    }
-    
-    return {
-      sent: sentCount > 0,
-      count: sentCount,
-      failed: failedCount,
-      failedSockets,
-    };
-  }
-
   async sendFCMNotification(userId, notificationData) {
     try {
-      // 🔧 FIX: Check FCM initialization before attempting to send
       if (!fcmService.initialized) {
         console.warn(`[v1/Notification] FCM service not initialized, cannot send notification to user ${userId}`);
         return { 
@@ -246,12 +73,10 @@ class NotificationService {
         badge: notificationData.badge || 1,
       });
 
-      // Add reason for clarity
       if (result.success && result.sent === 0 && !result.reason) {
         result.reason = 'no_tokens';
       }
 
-      // 🔧 FIX: Improved logging for FCM results
       if (!result.success) {
         console.error(`[v1/Notification] FCM send failed for user ${userId}:`, {
           error: result.error,
@@ -278,228 +103,75 @@ class NotificationService {
     }
   }
 
-  // 🔧 CRITICAL CHANGE: Context-aware notification delivery
-  // SIGNIFICANCE: Prevents duplicate notifications while ensuring delivery
-  // - Sends socket if user is online
-  // - Sends FCM if user is offline OR not viewing relevant screen
-  // - Avoids duplicates by checking if user is actively viewing the notification context
-  // - FIXED: Always sends FCM for offline users, even if viewing screen (multi-device support)
   async sendNotification(userId, notificationData, notificationId = null) {
-    const online = this.isUserOnline(userId);
-    let socketResult = null;
     let fcmResult = null;
     
-    // 🔧 FIX: Call isUserViewingRelevantScreen once and reuse the result
-    let isViewingRelevantScreen = false;
-    if (online) {
-      isViewingRelevantScreen = await this.isUserViewingRelevantScreen(userId, notificationData);
-    }
-    
-    // Try socket first if user is online
-    if (online) {
-      socketResult = this.sendSocketNotification(userId, notificationData);
-      
+    if (!fcmService.initialized) {
+      console.warn(`[v1/Notification] FCM not initialized, cannot send push notification to user ${userId}`);
       if (notificationId) {
-        this.logDeliveryAttempt(notificationId, 'socket', socketResult.sent, {
-          socketCount: socketResult.count || 0,
-          failedCount: socketResult.failed || 0,
-          failedSockets: socketResult.failedSockets || [],
+        this.logDeliveryAttempt(notificationId, 'fcm', false, {
+          error: 'FCM not initialized',
+          reason: 'service_not_initialized'
         });
       }
-      
-      // If socket failed, retry once
-      if (!socketResult.sent && socketResult.failed > 0 && socketResult.count === 0) {
-        await new Promise(resolve => setTimeout(resolve, 300)); // Wait 300ms
-        socketResult = this.sendSocketNotification(userId, notificationData);
-        
-        if (notificationId) {
-          this.logDeliveryAttempt(notificationId, 'socket_retry', socketResult.sent, {
-            socketCount: socketResult.count || 0,
-          });
-        }
-      }
-    }
-    
-    // 🔧 FIX: Send FCM in these cases:
-    // 1. User is offline (always send FCM)
-    // 2. Socket failed completely (no sockets succeeded)
-    // 🔧 CRITICAL FIX: Don't send FCM if socket succeeded - prevents duplicate notifications
-    // Only send FCM if socket completely failed OR user is offline
-    // This ensures users get either socket OR FCM, not both (prevents duplicates)
-    const shouldSendFCM = !online || (socketResult && !socketResult.sent && socketResult.count === 0);
-    
-    if (shouldSendFCM) {
-      // 🔧 FIX: Check FCM initialization before sending
-      if (!fcmService.initialized) {
-        console.warn(`[v1/Notification] FCM not initialized, cannot send push notification to user ${userId}`);
-        if (notificationId) {
-          this.logDeliveryAttempt(notificationId, 'fcm', false, {
-            error: 'FCM not initialized',
-            reason: 'service_not_initialized'
-          });
-        }
-      } else {
-        fcmResult = await this.sendFCMNotification(userId, notificationData);
-        
-        if (notificationId) {
-          // 🔧 FIX: Improved success criteria - sent: 0 is only success if reason is 'no_tokens' (user has no tokens)
-          const fcmSuccess = fcmResult.success && fcmResult.sent > 0;
-          const fcmHasTokens = fcmResult.success && fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error;
-          
-          this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess || fcmHasTokens, {
-            sent: fcmResult.sent || 0,
-            failed: fcmResult.failed || 0,
-            error: fcmResult.error || null,
-            reason: fcmResult.reason || null,
-            details: fcmResult.details || null,
-            hasTokens: fcmHasTokens,
-          });
-          
-          // 🔧 FIX: Better logging for FCM failures
-          if (!fcmSuccess && !fcmHasTokens) {
-            console.error(`[v1/Notification] FCM delivery failed for user ${userId}, notification ${notificationId}:`, {
-              error: fcmResult.error,
-              reason: fcmResult.reason,
-              sent: fcmResult.sent,
-              failed: fcmResult.failed
-            });
-          } else if (fcmHasTokens) {
-            console.log(`[v1/Notification] FCM skipped for user ${userId} - no active tokens`);
-          }
-        }
-      }
     } else {
-      // Log when FCM is skipped
+      fcmResult = await this.sendFCMNotification(userId, notificationData);
+      
       if (notificationId) {
-        if (online && socketResult?.sent) {
-          console.log(`[v1/Notification] FCM skipped for user ${userId}, notification ${notificationId} - socket delivery succeeded`);
-        } else {
-          console.log(`[v1/Notification] FCM skipped for user ${userId}, notification ${notificationId}`);
+        const fcmSuccess = fcmResult.success && fcmResult.sent > 0;
+        const fcmHasTokens = fcmResult.success && fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error;
+        
+        this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess || fcmHasTokens, {
+          sent: fcmResult.sent || 0,
+          failed: fcmResult.failed || 0,
+          error: fcmResult.error || null,
+          reason: fcmResult.reason || null,
+          details: fcmResult.details || null,
+          hasTokens: fcmHasTokens,
+        });
+        
+        if (!fcmSuccess && !fcmHasTokens) {
+          console.error(`[v1/Notification] FCM delivery failed for user ${userId}, notification ${notificationId}:`, {
+            error: fcmResult.error,
+            reason: fcmResult.reason,
+            sent: fcmResult.sent,
+            failed: fcmResult.failed
+          });
+        } else if (fcmHasTokens) {
+          console.log(`[v1/Notification] FCM skipped for user ${userId} - no active tokens`);
         }
       }
     }
     
-    const success = (socketResult?.sent > 0) || (fcmResult?.success && fcmResult.sent > 0);
-    const method = socketResult?.sent && fcmResult?.sent > 0 
-      ? 'socket+fcm' 
-      : socketResult?.sent 
-        ? 'socket' 
-        : fcmResult?.sent > 0
-          ? 'fcm'
-          : 'none';
+    const success = (fcmResult?.success && fcmResult.sent > 0);
+    const method = fcmResult?.sent > 0 ? 'fcm' : 'none';
     
     return { 
       success, 
       method, 
-      socketResult: socketResult || null, 
       fcmResult: fcmResult || null,
-      skippedFCM: shouldSendFCM === false && online && socketResult?.sent
     };
   }
 
-  // 🔧 NEW: Helper method to check if user is viewing relevant screen
-  // SIGNIFICANCE: Prevents duplicate notifications by checking if user is actively viewing the notification context
-  async isUserViewingRelevantScreen(userId, notificationData) {
-    if (!this.io) return false;
-    
-    try {
-      const { type, data } = notificationData;
-      
-      // For chat messages, check if user is in conversation room
-      if (type === 'CHAT_MESSAGE' && data?.applicationId) {
-        return this.isUserInChatRoom(userId, data.applicationId);
-      }
-      
-      // For application-related notifications, check if user is on application screen
-      if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'APPLICATION_APPROVED', 
-           'APPLICATION_CANCELLED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW',
-           'WORK_SUBMITTED', 'WORK_REVIEW', 'MOU_ACCEPTED', 'MOU_FULLY_ACCEPTED',
-           'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'FLOW_STATE_CHANGE'].includes(type) && data?.applicationId) {
-        const roomName = `app_${data.applicationId}`;
-        const userRoom = `user_${userId}`;
-        
-        const userRoomSockets = this.io.sockets.adapter.rooms.get(userRoom);
-        if (!userRoomSockets || userRoomSockets.size === 0) return false;
-        
-        const appRoom = this.io.sockets.adapter.rooms.get(roomName);
-        if (!appRoom || appRoom.size === 0) return false;
-        
-        // Check if any of user's sockets are in the application room
-        for (const socketId of userRoomSockets) {
-          if (appRoom.has(socketId)) {
-            return true; // User is viewing this application
-          }
-        }
-        return false;
-      }
-      
-      // For campaign updates, check if user is in campaign room
-      if (type === 'CAMPAIGN_UPDATE' && data?.campaignId) {
-        const roomName = `campaign_${data.campaignId}`;
-        const userRoom = `user_${userId}`;
-        
-        const userRoomSockets = this.io.sockets.adapter.rooms.get(userRoom);
-        if (!userRoomSockets || userRoomSockets.size === 0) return false;
-        
-        const campaignRoom = this.io.sockets.adapter.rooms.get(roomName);
-        if (!campaignRoom || campaignRoom.size === 0) return false;
-        
-        for (const socketId of userRoomSockets) {
-          if (campaignRoom.has(socketId)) {
-            return true; // User is viewing this campaign
-          }
-        }
-        return false;
-      }
-      
-      // For other notification types, assume user is not viewing relevant screen
-      // (safer to send FCM to ensure delivery)
-      return false;
-    } catch (error) {
-      console.warn('[v1/Notification] Error checking screen context:', error);
-      // On error, default to false (send FCM to be safe)
-      return false;
-    }
-  }
-
-  // 🔧 FIX: Generate duplicate detection key based on notification type
-  // SIGNIFICANCE: Prevents duplicate notifications across all types
   generateDuplicateKey(notificationData) {
     const { userId, type, data } = notificationData;
     
-    // For chat messages, use applicationId and senderId
     if (type === 'CHAT_MESSAGE' && data?.applicationId && data?.senderId) {
       return `${userId}_${type}_${data.applicationId}_${data.senderId}`;
     }
     
-    // For application-related notifications, use applicationId
-    if (['APPLICATION_ACCEPTED', 'APPLICATION_APPROVED', 'APPLICATION_CANCELLED', 
-         'APPLICATION_CREATED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW', 'WORK_SUBMITTED', 
-         'WORK_REVIEW', 'MOU_ACCEPTED', 'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 
-         'PAYMENT_COMPLETED', 'FLOW_STATE_CHANGE', 'CONVERSATION_CLOSED'].includes(type) && 
+    if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW', 
+         'WORK_SUBMITTED', 'WORK_REVIEW', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
+         'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'].includes(type) && 
         data?.applicationId) {
-      // Include phase for FLOW_STATE_CHANGE to allow different phases
-      if (type === 'FLOW_STATE_CHANGE' && data?.newPhase) {
-        return `${userId}_${type}_${data.applicationId}_${data.newPhase}`;
-      }
       return `${userId}_${type}_${data.applicationId}`;
     }
     
-    // For campaign updates, use campaignId
-    if (type === 'CAMPAIGN_UPDATE' && data?.campaignId) {
-      return `${userId}_${type}_${data.campaignId}`;
-    }
-    
-    // For other types, use type and userId (less specific but prevents rapid duplicates)
     return `${userId}_${type}_${JSON.stringify(data || {})}`;
   }
 
-  // 🔧 OPTIMIZATION: Enhanced storeNotification with in-memory cache
-  // SIGNIFICANCE: Reduces database queries by 80%, improves latency by 50ms
-  // 🔧 FIX: Extended duplicate detection to all notification types
   async storeNotification(notificationData) {
     try {
-      // 🔧 FIX: Check in-memory cache for ALL notification types
       const cacheKey = this.generateDuplicateKey(notificationData);
       const cached = this.duplicateCache.get(cacheKey);
       
@@ -508,7 +180,6 @@ class NotificationService {
         return { success: true, notification: { id: 'cached' }, duplicate: true };
       }
       
-      // 🔧 FIX: Check database for duplicates with appropriate time window and fields
       const timeWindow = 30; // 30 seconds window for duplicate detection
       const timeWindowAgo = new Date(Date.now() - timeWindow * 1000).toISOString();
       
@@ -520,24 +191,15 @@ class NotificationService {
         .gte('created_at', timeWindowAgo)
         .limit(1);
       
-      // Add type-specific filters for better duplicate detection
       if (notificationData.type === 'CHAT_MESSAGE' && notificationData.data?.applicationId && notificationData.data?.senderId) {
         existingQuery = existingQuery
           .eq('data->>applicationId', notificationData.data.applicationId)
           .eq('data->>senderId', notificationData.data.senderId);
-      } else if (['APPLICATION_ACCEPTED', 'APPLICATION_APPROVED', 'APPLICATION_CANCELLED', 
-                  'APPLICATION_CREATED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW', 'WORK_SUBMITTED', 
-                  'WORK_REVIEW', 'MOU_ACCEPTED', 'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 
-                  'PAYMENT_COMPLETED', 'CONVERSATION_CLOSED'].includes(notificationData.type) && 
+      } else if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW', 
+                  'WORK_SUBMITTED', 'WORK_REVIEW', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
+                  'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'].includes(notificationData.type) && 
                  notificationData.data?.applicationId) {
         existingQuery = existingQuery.eq('data->>applicationId', notificationData.data.applicationId);
-        
-        // For FLOW_STATE_CHANGE, also check the phase to allow different phases
-        if (notificationData.type === 'FLOW_STATE_CHANGE' && notificationData.data?.newPhase) {
-          existingQuery = existingQuery.eq('data->>newPhase', notificationData.data.newPhase);
-        }
-      } else if (notificationData.type === 'CAMPAIGN_UPDATE' && notificationData.data?.campaignId) {
-        existingQuery = existingQuery.eq('data->>campaignId', notificationData.data.campaignId);
       }
       
       const { data: existing } = await existingQuery.maybeSingle();
@@ -548,10 +210,8 @@ class NotificationService {
         return { success: true, notification: existing, duplicate: true };
       }
       
-      // Add to cache before storing to prevent race conditions
       this.duplicateCache.set(cacheKey, Date.now());
       
-      // 🔧 OPTIMIZATION: Let database set timestamps (more efficient)
       const { data, error } = await supabaseAdmin
         .from('v1_notifications')
         .insert({
@@ -562,7 +222,6 @@ class NotificationService {
           data: notificationData.data || {},
           read: false,
           delivery_status: 'PENDING',
-          // Removed created_at - let DB handle it
         })
         .select()
         .single();
@@ -579,20 +238,16 @@ class NotificationService {
     }
   }
 
-  // 🔧 OPTIMIZATION: Non-blocking updateNotificationStatus
-  // SIGNIFICANCE: Doesn't block notification flow
   async updateNotificationStatus(notificationId, status, method = null) {
     try {
       const updateData = {
         delivery_status: status,
-        // Removed updated_at - let DB handle it
       };
       
       if (method) {
         updateData.delivery_method = method;
       }
       
-      // 🔧 OPTIMIZATION: Fire and forget for status updates
       Promise.resolve().then(async () => {
         await supabaseAdmin
           .from('v1_notifications')
@@ -607,7 +262,6 @@ class NotificationService {
   }
 
   async sendAndStoreNotification(userId, notificationData) {
-    // 🔧 FIX: Add logging to track notification attempts
     console.log(`[v1/Notification] Attempting to send notification to user ${userId}, type: ${notificationData.type}`);
     
     const shouldBatch = this.shouldBatchNotification(notificationData.type);
@@ -622,13 +276,11 @@ class NotificationService {
       return { stored: false, sent: false, error: storeResult.error };
     }
 
-    // 🔧 FIX: Handle duplicate notifications - skip delivery entirely for duplicates
-    // Duplicates should not be sent again to prevent multiple notifications
     if (storeResult.duplicate) {
       console.log(`[v1/Notification] Duplicate notification detected for user ${userId}, type: ${notificationData.type}, skipping delivery`);
       return {
         stored: true,
-        sent: false, // 🔧 FIX: Mark as not sent to prevent duplicate delivery
+        sent: false,
         duplicate: true,
         notification: storeResult.notification,
         skipped: 'duplicate_detected',
@@ -643,18 +295,12 @@ class NotificationService {
     } else {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
       
-      // Schedule retry for failed notifications
-      // Retry if:
-      // 1. FCM failed with an error (not just no_tokens)
-      // 2. Socket failed and FCM also failed or wasn't sent
-      // 3. Both methods failed
       const fcmFailed = sendResult.fcmResult && (
         !sendResult.fcmResult.success || 
         (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
       );
-      const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
       
-      if (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) {
+      if (fcmFailed) {
         await this.scheduleRetry(notificationId, {
           userId,
           notificationData,
@@ -668,24 +314,19 @@ class NotificationService {
       sent: sendResult.success,
       method: sendResult.method,
       notification: storeResult.notification,
-      deliveryResult: sendResult.deliveryResult,
     };
   }
 
   shouldBatchNotification(type) {
-    // Batch notifications that can be grouped together
     return ['CHAT_MESSAGE', 'APPLICATION_CREATED'].includes(type);
   }
 
-  // 🔧 OPTIMIZATION: Non-blocking batchNotification
-  // SIGNIFICANCE: Prevents blocking notification flow, improves throughput
   async batchNotification(userId, notificationData) {
     if (!this.notificationQueue.has(userId)) {
       this.notificationQueue.set(userId, []);
     }
     this.notificationQueue.get(userId).push(notificationData);
     
-    // 🔧 OPTIMIZATION: Use Promise.resolve() for non-blocking execution
     Promise.resolve().then(async () => {
       try {
         if (!this.batchTimer) {
@@ -701,7 +342,6 @@ class NotificationService {
         
         const userQueue = this.notificationQueue.get(userId);
         if (userQueue && userQueue.length >= this.MAX_BATCH_SIZE) {
-          // Don't await - let it process in background
           this.flushBatchForUser(userId).catch(err => {
             console.error(`[v1/Notification] Error flushing batch for user ${userId}:`, err);
           });
@@ -714,13 +354,10 @@ class NotificationService {
     return { stored: true, sent: true, batched: true };
   }
 
-  // 🔧 CRITICAL CHANGE: Enhanced flushBatchForUser with error recovery
-  // SIGNIFICANCE: Prevents notification loss on errors
   async flushBatchForUser(userId) {
     const queue = this.notificationQueue.get(userId);
     if (!queue || queue.length === 0) return;
     
-    // Remove from queue first to prevent race conditions
     this.notificationQueue.delete(userId);
     
     try {
@@ -729,7 +366,6 @@ class NotificationService {
       
       const storeResult = await this.storeNotification({ ...batchedData, userId });
       if (!storeResult.success) {
-        // 🔧 CRITICAL: Re-queue on failure to prevent loss
         if (!this.notificationQueue.has(userId)) {
           this.notificationQueue.set(userId, []);
         }
@@ -745,14 +381,12 @@ class NotificationService {
       } else {
         this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
         
-        // Schedule retry for failed batched notifications
         const fcmFailed = sendResult.fcmResult && (
           !sendResult.fcmResult.success || 
           (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
         );
-        const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
         
-        if (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) {
+        if (fcmFailed) {
           await this.scheduleRetry(notificationId, {
             userId,
             notificationData: batchedData,
@@ -762,7 +396,6 @@ class NotificationService {
       }
     } catch (error) {
       console.error(`[v1/Notification] Error flushing batch for user ${userId}:`, error);
-      // Re-queue on error
       if (!this.notificationQueue.has(userId)) {
         this.notificationQueue.set(userId, []);
       }
@@ -777,7 +410,6 @@ class NotificationService {
     }
     
     const userIds = Array.from(this.notificationQueue.keys());
-    // Process batches sequentially to prevent race conditions
     for (const userId of userIds) {
       try {
         await this.flushBatchForUser(userId);
@@ -797,7 +429,6 @@ class NotificationService {
 
     if (type === 'CHAT_MESSAGE') {
       const count = notifications.length;
-      const lastNotification = notifications[notifications.length - 1];
       return {
         type: 'CHAT_MESSAGE',
         title: count === 1 ? 'New Message' : `${count} New Messages`,
@@ -839,7 +470,6 @@ class NotificationService {
       return;
     }
 
-    // Calculate delay with exponential backoff
     const delay = Math.min(
       this.INITIAL_RETRY_DELAY * Math.pow(2, attempts),
       this.MAX_RETRY_DELAY
@@ -853,7 +483,6 @@ class NotificationService {
       nextRetry
     });
 
-    // Start retry timer if not running
     if (!this.retryTimer) {
       this.startRetryProcessor();
     }
@@ -868,7 +497,7 @@ class NotificationService {
 
     this.retryTimer = setInterval(async () => {
       await this.processRetryQueue();
-    }, 1000); // Check every second
+    }, 1000);
   }
 
   async processRetryQueue() {
@@ -886,7 +515,6 @@ class NotificationService {
       await this.retryNotification(notificationId, retryData);
     }
 
-    // Stop timer if queue is empty
     if (this.retryQueue.size === 0 && this.retryTimer) {
       clearInterval(this.retryTimer);
       this.retryTimer = null;
@@ -908,17 +536,11 @@ class NotificationService {
     } else {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
       
-      // Continue retrying if:
-      // 1. FCM failed with an error (not just no_tokens)
-      // 2. Both socket and FCM failed
-      // 3. Haven't reached max retries
       const fcmFailed = sendResult.fcmResult && (
         !sendResult.fcmResult.success || 
         (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
       );
-      const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
-      const shouldRetry = (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) && 
-                          retryData.attempts < this.MAX_RETRIES;
+      const shouldRetry = fcmFailed && retryData.attempts < this.MAX_RETRIES;
       
       if (shouldRetry) {
         await this.scheduleRetry(notificationId, retryData);
@@ -927,7 +549,6 @@ class NotificationService {
       }
     }
   }
-
 
   async getDeliveryStats(notificationId) {
     try {
@@ -943,7 +564,6 @@ class NotificationService {
 
       const stats = {
         totalAttempts: attempts?.length || 0,
-        socketAttempts: attempts?.filter((a) => a.method === 'socket').length || 0,
         fcmAttempts: attempts?.filter((a) => a.method === 'fcm').length || 0,
         successfulAttempts: attempts?.filter((a) => a.success).length || 0,
         failedAttempts: attempts?.filter((a) => !a.success).length || 0,
@@ -957,8 +577,41 @@ class NotificationService {
     }
   }
 
-  // Domain-specific notifications
+  // ============================================
+  // Domain-specific notifications (15 triggers)
+  // ============================================
 
+  // 1. When influencer applies for a campaign, brand_owner is notified
+  async notifyApplicationCreated(applicationId, campaignId, influencerId, brandId) {
+    try {
+      const { data: campaign } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('id, title')
+        .eq('id', campaignId)
+        .single();
+
+      const { data: influencer } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', influencerId)
+        .single();
+
+      const notificationData = {
+        type: 'APPLICATION_CREATED',
+        title: 'New Application',
+        body: `"${influencer?.name || 'influencer_name'}" applied for "${campaign?.title || 'campaign_name'}"`,
+        clickAction: `/applications/${applicationId}`,
+        data: { applicationId, campaignId, influencerId, brandId },
+      };
+
+      return await this.sendAndStoreNotification(brandId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Application created error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // 2. When brand_owner accepts an application, influencer is notified
   async notifyApplicationAccepted(applicationId, influencerId, brandId) {
     try {
       const { data: application } = await supabaseAdmin
@@ -975,8 +628,8 @@ class NotificationService {
 
       const notificationData = {
         type: 'APPLICATION_ACCEPTED',
-        title: 'Application Accepted! 🎉',
-        body: `${brand?.brand_name || 'Brand'} accepted your application for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        title: 'Application Accepted!',
+        body: `"${brand?.brand_name || 'brand_owner'}" accepted your application for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
         clickAction: `/applications/${applicationId}`,
         data: { applicationId, brandId, influencerId },
       };
@@ -988,36 +641,8 @@ class NotificationService {
     }
   }
 
-  async notifyApplicationCancelled(applicationId, cancelledById, otherUserId, reason = null) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, influencer_id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const { data: canceller } = await supabaseAdmin
-        .from('v1_users')
-        .select('name')
-        .eq('id', cancelledById)
-        .single();
-
-      const notificationData = {
-        type: 'APPLICATION_CANCELLED',
-        title: 'Application Cancelled',
-        body: `${canceller?.name || 'User'} cancelled the application for "${application?.v1_campaigns?.title || 'campaign'}"`,
-        clickAction: `/applications/${applicationId}`,
-        data: { applicationId, cancelledById, reason },
-      };
-
-      return await this.sendAndStoreNotification(otherUserId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] Application cancelled error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyPaymentCompleted(applicationId, brandId, influencerId) {
+  // 3. When brand_owner accepts the MOU, influencer is notified
+  async notifyMOUAcceptedByBrand(mouId, applicationId, brandId, influencerId) {
     try {
       const { data: application } = await supabaseAdmin
         .from('v1_applications')
@@ -1025,21 +650,143 @@ class NotificationService {
         .eq('id', applicationId)
         .single();
 
-      const { data: paymentOrder } = await supabaseAdmin
-        .from('v1_payment_orders')
-        .select('amount')
-        .eq('application_id', applicationId)
-        .eq('status', 'VERIFIED')
-        .order('created_at', { ascending: false })
-        .limit(1)
+      const { data: brand } = await supabaseAdmin
+        .from('v1_brand_profiles')
+        .select('brand_name')
+        .eq('user_id', brandId)
         .single();
+
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+
+      const notificationData = {
+        type: 'MOU_ACCEPTED_BY_BRAND',
+        title: 'MOU acceptance',
+        body: `"${brand?.brand_name || 'brand_owner'}" accepted the MOU for "${campaignTitle}"`,
+        clickAction: `/applications/${applicationId}/mou`,
+        data: { mouId, applicationId, brandId, influencerId },
+      };
+
+      return await this.sendAndStoreNotification(influencerId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] MOU accepted by brand error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // 4. When influencer accepts the MOU, brand_owner is notified
+  async notifyMOUAcceptedByInfluencer(mouId, applicationId, brandId, influencerId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+
+      const notificationData = {
+        type: 'MOU_ACCEPTED_BY_INFLUENCER',
+        title: 'MOU acceptance',
+        body: `"Influencer" accepted the MOU for "${campaignTitle}"`,
+        clickAction: `/applications/${applicationId}/mou`,
+        data: { mouId, applicationId, brandId, influencerId },
+      };
+
+      return await this.sendAndStoreNotification(brandId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] MOU accepted by influencer error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // 5. When both have accepted the MOU, brand_owner is notified
+  // 6. When both have accepted the MOU, influencer is notified
+  async notifyMOUFullyAccepted(mouId, applicationId, brandId, influencerId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+
+      // Notify brand_owner
+      const brandNotificationData = {
+        type: 'MOU_FULLY_ACCEPTED',
+        title: 'MOU accepted by both',
+        body: 'Both party accepted the MOU, proceed with payment',
+        clickAction: `/applications/${applicationId}/payment`,
+        data: { 
+          mouId, 
+          applicationId, 
+          brandId, 
+          influencerId,
+          recipient: 'brand'
+        },
+      };
+      await this.sendAndStoreNotification(brandId, brandNotificationData);
+
+      // Notify influencer
+      const influencerNotificationData = {
+        type: 'MOU_FULLY_ACCEPTED',
+        title: 'MOU accepted by both',
+        body: 'Both party accepted the MOU, wait for payment completion',
+        clickAction: `/applications/${applicationId}`,
+        data: { 
+          mouId, 
+          applicationId, 
+          brandId, 
+          influencerId,
+          recipient: 'influencer'
+        },
+      };
+      await this.sendAndStoreNotification(influencerId, influencerNotificationData);
+
+      return { success: true };
+    } catch (error) {
+      console.error('[v1/Notification] MOU fully accepted error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // 7. When brand_owner pays after accepting the MOU, influencer is notified
+  async notifyPaymentCompleted(applicationId, brandId, influencerId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title, requires_script)')
+        .eq('id', applicationId)
+        .single();
+
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const requiresScript = application?.v1_campaigns?.requires_script || false;
+      
+      // Check if script was already accepted (if script is required)
+      let scriptAccepted = false;
+      if (requiresScript) {
+        const { data: script } = await supabaseAdmin
+          .from('v1_scripts')
+          .select('status')
+          .eq('application_id', applicationId)
+          .eq('status', 'ACCEPTED')
+          .maybeSingle();
+        scriptAccepted = !!script;
+      }
+
+      let body;
+      if (requiresScript && !scriptAccepted) {
+        body = `Payment Successful for the campaign "${campaignTitle}", submit your script`;
+      } else {
+        body = `Payment Successful for the campaign "${campaignTitle}", submit your work`;
+      }
 
       const notificationData = {
         type: 'PAYMENT_COMPLETED',
-        title: 'Payment Received! 💰',
-        body: `Payment of ₹${paymentOrder?.amount || 0} completed for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        title: 'Payment Successful',
+        body,
         clickAction: `/applications/${applicationId}`,
-        data: { applicationId, brandId, influencerId, amount: paymentOrder?.amount || 0 },
+        data: { applicationId, brandId, influencerId },
       };
 
       return await this.sendAndStoreNotification(influencerId, notificationData);
@@ -1049,6 +796,37 @@ class NotificationService {
     }
   }
 
+  // 8. When influencer submits the script, brand_owner is notified
+  async notifyScriptSubmitted(scriptId, applicationId, brandId, influencerId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const { data: influencer } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', influencerId)
+        .maybeSingle();
+
+      const notificationData = {
+        type: 'SCRIPT_SUBMITTED',
+        title: 'Script submitted',
+        body: `"${influencer?.name || 'influencer_name'}" submitted a script for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
+        clickAction: `/applications/${applicationId}/scripts`,
+        data: { scriptId, applicationId, brandId, influencerId },
+      };
+
+      return await this.sendAndStoreNotification(brandId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Script submitted error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // 9. When brand_owner chooses one of the 3 options for script: accept, revise or reject, influencer is notified
   async notifyScriptReview(scriptId, applicationId, brandId, influencerId, status, remarks = null) {
     try {
       const { data: script } = await supabaseAdmin
@@ -1063,19 +841,19 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      let title;
-      let body;
-      const campaignTitle = script?.v1_applications?.v1_campaigns?.title || 'campaign';
+      const campaignTitle = script?.v1_applications?.v1_campaigns?.title || 'Campaign_name';
+      const brandName = brand?.brand_name || 'brand_owner_name';
 
+      let title, body;
       if (status === 'ACCEPTED') {
-        title = 'Script Accepted! ✅';
-        body = `${brand?.brand_name || 'Brand'} accepted your script for "${campaignTitle}"`;
+        title = 'Script accepted';
+        body = `"${brandName}" accepted your script for "${campaignTitle}". Proceed for work submission`;
       } else if (status === 'REVISION') {
-        title = 'Script Revision Required';
-        body = `${brand?.brand_name || 'Brand'} requested revisions for "${campaignTitle}"`;
+        title = 'Script revised';
+        body = `"${brandName}" revised your script for "${campaignTitle}"`;
       } else {
-        title = 'Script Rejected';
-        body = `${brand?.brand_name || 'Brand'} rejected your script for "${campaignTitle}"`;
+        title = 'Script rejected';
+        body = `"${brandName}" rejected your script for "${campaignTitle}"`;
       }
 
       const notificationData = {
@@ -1093,6 +871,37 @@ class NotificationService {
     }
   }
 
+  // 10. When influencer submits the work, brand_owner is notified
+  async notifyWorkSubmitted(workSubmissionId, applicationId, brandId, influencerId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const { data: influencer } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', influencerId)
+        .maybeSingle();
+
+      const notificationData = {
+        type: 'WORK_SUBMITTED',
+        title: 'Work submitted',
+        body: `"${influencer?.name || 'influencer_name'}" submitted a work for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
+        clickAction: `/applications/${applicationId}/work`,
+        data: { workSubmissionId, applicationId, brandId, influencerId },
+      };
+
+      return await this.sendAndStoreNotification(brandId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Work submitted error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // 11. When brand_owner chooses one of the 3 options for work: accept, revise or reject, influencer is notified
   async notifyWorkReview(workSubmissionId, applicationId, brandId, influencerId, status, remarks = null) {
     try {
       const { data: work } = await supabaseAdmin
@@ -1107,19 +916,19 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = work?.v1_applications?.v1_campaigns?.title || 'campaign';
-      let title;
-      let body;
+      const campaignTitle = work?.v1_applications?.v1_campaigns?.title || 'Campaign_name';
+      const brandName = brand?.brand_name || 'brand_owner_name';
 
+      let title, body;
       if (status === 'ACCEPTED') {
-        title = 'Work Approved! 🎊';
-        body = `${brand?.brand_name || 'Brand'} approved your work for "${campaignTitle}"`;
+        title = 'Work accepted';
+        body = `"${brandName}" accepted your work for "${campaignTitle}". Wait for your payout.`;
       } else if (status === 'REVISION') {
-        title = 'Work Revision Required';
-        body = `${brand?.brand_name || 'Brand'} requested revisions for "${campaignTitle}"`;
+        title = 'Work revised';
+        body = `"${brandName}" revised your work for "${campaignTitle}"`;
       } else {
-        title = 'Work Rejected';
-        body = `${brand?.brand_name || 'Brand'} rejected your work for "${campaignTitle}"`;
+        title = 'Work rejected';
+        body = `"${brandName}" rejected your work for "${campaignTitle}"`;
       }
 
       const notificationData = {
@@ -1137,35 +946,36 @@ class NotificationService {
     }
   }
 
-  async notifyChatMessage(applicationId, senderId, recipientId, messagePreview) {
+  // 12 & 14. When campaign gets completed, brand_owner is notified
+  async notifyCampaignCompleted(campaignId, brandId) {
     try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, v1_campaigns(title)')
-        .eq('id', applicationId)
+      const { data: campaign } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('id, title')
+        .eq('id', campaignId)
         .single();
 
-      const { data: sender } = await supabaseAdmin
-        .from('v1_users')
-        .select('name')
-        .eq('id', senderId)
-        .maybeSingle();
+      const campaignTitle = campaign?.title || 'campaign_name';
 
       const notificationData = {
-        type: 'CHAT_MESSAGE',
-        title: `${sender?.name || 'Someone'}`,
-        body: `${messagePreview ? `: ${messagePreview.substring(0, 50)}${messagePreview.length > 50 ? '...' : ''}` : ''}`,
-        clickAction: `/applications/${applicationId}/chat`,
-        data: { applicationId, senderId, recipientId },
+        type: 'CAMPAIGN_COMPLETED',
+        title: 'Campaign completed',
+        body: `Congratulations! Your campaign named "${campaignTitle}" is now complete.`,
+        clickAction: `/campaigns/${campaignId}`,
+        data: { 
+          campaignId, 
+          brandId
+        },
       };
 
-      return await this.sendAndStoreNotification(recipientId, notificationData);
+      return await this.sendAndStoreNotification(brandId, notificationData);
     } catch (error) {
-      console.error('[v1/Notification] Chat message error:', error);
+      console.error('[v1/Notification] Campaign completed error:', error);
       return { success: false, error: error.message };
     }
   }
 
+  // 13. When influencer gets payout, influencer is notified
   async notifyPayoutReleased(payoutId, applicationId, influencerId, amount) {
     try {
       const { data: application } = await supabaseAdmin
@@ -1174,10 +984,12 @@ class NotificationService {
         .eq('id', applicationId)
         .single();
 
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+
       const notificationData = {
         type: 'PAYOUT_RELEASED',
-        title: 'Payout Released! 💸',
-        body: `Your payout of ₹${amount || 0} has been released for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        title: 'Payout Released',
+        body: `Your payout for "${campaignTitle}" has been released`,
         clickAction: `/applications/${applicationId}`,
         data: { payoutId, applicationId, influencerId, amount },
       };
@@ -1189,277 +1001,26 @@ class NotificationService {
     }
   }
 
-  async notifyApplicationCreated(applicationId, campaignId, influencerId, brandId) {
+  // 15. New chat message will be notified
+  async notifyChatMessage(applicationId, senderId, recipientId, messagePreview) {
     try {
-      const { data: campaign } = await supabaseAdmin
-        .from('v1_campaigns')
-        .select('id, title, image_url')
-        .eq('id', campaignId)
-        .single();
-
-      const { data: influencer } = await supabaseAdmin
+      const { data: sender } = await supabaseAdmin
         .from('v1_users')
         .select('name')
-        .eq('id', influencerId)
-        .single();
-
-      const notificationData = {
-        type: 'APPLICATION_CREATED',
-        title: 'New Application Received',
-        body: `${influencer?.name || 'An influencer'} sent an application for "${campaign?.title || 'campaign'}"`,
-        clickAction: `/applications/${applicationId}`,
-        data: { applicationId, campaignId, influencerId, brandId },
-      };
-
-      return await this.sendAndStoreNotification(brandId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] Application created error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyApplicationApproved(applicationId, influencerId, brandId) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const { data: brand } = await supabaseAdmin
-        .from('v1_brand_profiles')
-        .select('brand_name')
-        .eq('user_id', brandId)
-        .single();
-
-      const notificationData = {
-        type: 'APPLICATION_APPROVED',
-        title: 'Application Approved! 🎉',
-        body: `${brand?.brand_name || 'Brand'} approved your application for "${application?.v1_campaigns?.title || 'campaign'}"`,
-        clickAction: `/applications/${applicationId}`,
-        data: { applicationId, brandId, influencerId },
-      };
-
-      return await this.sendAndStoreNotification(influencerId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] Application approved error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyFlowStateChange(applicationId, newPhase, userId, customMessage = null) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const phaseMessages = {
-        'APPLIED': 'Your application has been submitted',
-        'ACCEPTED': 'Your application has been accepted! You can now proceed with payment',
-        'SCRIPT': 'Time to submit your script',
-        'WORK': 'Time to submit your work',
-        'PAYOUT': 'Your work has been approved! Payout will be processed soon',
-        'COMPLETED': 'Application completed successfully! 🎊',
-        'CANCELLED': 'Application has been cancelled'
-      };
-
-      const message = customMessage || phaseMessages[newPhase] || `Application phase changed to ${newPhase}`;
-
-      const notificationData = {
-        type: 'FLOW_STATE_CHANGE',
-        title: 'Application Update',
-        body: message,
-        clickAction: `/applications/${applicationId}`,
-        data: { applicationId, newPhase, userId },
-      };
-
-      return await this.sendAndStoreNotification(userId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] Flow state change error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyConversationClosed(applicationId, closedById, otherUserId, message = null) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const { data: closer } = await supabaseAdmin
-        .from('v1_users')
-        .select('name')
-        .eq('id', closedById)
+        .eq('id', senderId)
         .maybeSingle();
 
       const notificationData = {
-        type: 'CONVERSATION_CLOSED',
-        title: 'Conversation Closed',
-        body: message || `Conversation for "${application?.v1_campaigns?.title || 'campaign'}" has been closed by ${closer?.name || 'admin'}`,
+        type: 'CHAT_MESSAGE',
+        title: sender?.name || 'Sender name',
+        body: messagePreview || 'message sent',
         clickAction: `/applications/${applicationId}/chat`,
-        data: { applicationId, closedById, otherUserId },
+        data: { applicationId, senderId, recipientId },
       };
 
-      return await this.sendAndStoreNotification(otherUserId, notificationData);
+      return await this.sendAndStoreNotification(recipientId, notificationData);
     } catch (error) {
-      console.error('[v1/Notification] Conversation closed error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyCampaignUpdate(campaignId, userId, title, body, data = {}) {
-    try {
-      const notificationData = {
-        type: 'CAMPAIGN_UPDATE',
-        title: title || 'Campaign Update',
-        body: body || 'Your campaign has been updated',
-        clickAction: `/campaigns/${campaignId}`,
-        data: { campaignId, userId, ...data },
-      };
-
-      return await this.sendAndStoreNotification(userId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] Campaign update error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyScriptSubmitted(scriptId, applicationId, brandId, influencerId) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const { data: influencer } = await supabaseAdmin
-        .from('v1_users')
-        .select('name')
-        .eq('id', influencerId)
-        .maybeSingle();
-
-      const notificationData = {
-        type: 'SCRIPT_SUBMITTED',
-        title: 'New Script Submitted',
-        body: `${influencer?.name || 'Influencer'} submitted a script for "${application?.v1_campaigns?.title || 'campaign'}"`,
-        clickAction: `/applications/${applicationId}/scripts`,
-        data: { scriptId, applicationId, brandId, influencerId },
-      };
-
-      return await this.sendAndStoreNotification(brandId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] Script submitted error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyWorkSubmitted(workSubmissionId, applicationId, brandId, influencerId) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const { data: influencer } = await supabaseAdmin
-        .from('v1_users')
-        .select('name')
-        .eq('id', influencerId)
-        .maybeSingle();
-
-      const notificationData = {
-        type: 'WORK_SUBMITTED',
-        title: 'New Work Submitted',
-        body: `${influencer?.name || 'Influencer'} submitted work for "${application?.v1_campaigns?.title || 'campaign'}"`,
-        clickAction: `/applications/${applicationId}/work`,
-        data: { workSubmissionId, applicationId, brandId, influencerId },
-      };
-
-      return await this.sendAndStoreNotification(brandId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] Work submitted error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyMOUAccepted(mouId, applicationId, acceptedByUserId, otherUserId, userRole) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, influencer_id, brand_id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const { data: mou } = await supabaseAdmin
-        .from('v1_mous')
-        .select('accepted_by_influencer, accepted_by_brand, status')
-        .eq('id', mouId)
-        .maybeSingle();
-
-      const { data: accepter } = await supabaseAdmin
-        .from('v1_users')
-        .select('name')
-        .eq('id', acceptedByUserId)
-        .maybeSingle();
-
-      const fullyAccepted = mou?.accepted_by_influencer && mou?.accepted_by_brand;
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign';
-
-      let title, body;
-      if (fullyAccepted) {
-        title = 'MOU Fully Accepted! ✅';
-        body = `Both parties have accepted the MOU for "${campaignTitle}". You can now proceed.`;
-      } else {
-        title = 'MOU Accepted';
-        body = `${accepter?.name || 'The other party'} accepted the MOU for "${campaignTitle}". Please accept your MOU to proceed.`;
-      }
-
-      const notificationData = {
-        type: 'MOU_ACCEPTED',
-        title,
-        body,
-        clickAction: `/applications/${applicationId}/mou`,
-        data: { mouId, applicationId, acceptedByUserId, otherUserId, fullyAccepted },
-      };
-
-      return await this.sendAndStoreNotification(otherUserId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] MOU accepted error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async notifyMOUFullyAccepted(mouId, applicationId, brandId, influencerId) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign';
-
-      const notificationData = {
-        type: 'MOU_FULLY_ACCEPTED',
-        title: 'MOU Accepted by Both Parties! ✅',
-        body: `Both parties have accepted the MOU for "${campaignTitle}". Please proceed with payment to continue.`,
-        clickAction: `/applications/${applicationId}/payment`,
-        data: { 
-          mouId, 
-          applicationId, 
-          brandId, 
-          influencerId,
-          action: 'proceed_with_payment'
-        },
-      };
-
-      return await this.sendAndStoreNotification(brandId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] MOU fully accepted error:', error);
+      console.error('[v1/Notification] Chat message error:', error);
       return { success: false, error: error.message };
     }
   }
@@ -1467,4 +1028,3 @@ class NotificationService {
 }
 
 module.exports = new NotificationService();
-

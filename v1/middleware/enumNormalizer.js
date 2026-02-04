@@ -49,9 +49,10 @@ function normalizeEnums(req, res, next) {
     }
 
     // Campaign status enum
+    // Allowed: DRAFT, LIVE, IN_PROGRESS, COMPLETED, EXPIRED, CANCELLED
     if (req.body.status !== undefined && req.body.status !== null) {
       const normalized = String(req.body.status).toUpperCase().trim();
-      const validStatuses = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+      const validStatuses = ["DRAFT", "LIVE", "IN_PROGRESS", "COMPLETED", "EXPIRED", "CANCELLED"];
       if (validStatuses.includes(normalized)) {
         req.body.status = normalized;
       }
@@ -147,9 +148,10 @@ function normalizeEnums(req, res, next) {
     // Normalize query parameters
     if (req.query) {
       // Campaign status filter
+      // Allowed: DRAFT, LIVE, IN_PROGRESS, COMPLETED, EXPIRED, CANCELLED
       if (req.query.status !== undefined && req.query.status !== null) {
         const normalized = String(req.query.status).toUpperCase().trim();
-        const validStatuses = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
+        const validStatuses = ["DRAFT", "LIVE", "IN_PROGRESS", "COMPLETED", "EXPIRED", "CANCELLED"];
         if (validStatuses.includes(normalized)) {
           req.query.status = normalized;
         }
