@@ -3,9 +3,6 @@ const fcmService = require('./fcmService');
 
 class NotificationService {
   constructor() {
-    this.onlineUsers = new Map(); // Map<userId, Set<socketId>>
-    this.io = null;
-    
     // Notification batching
     this.notificationQueue = new Map(); // Map<userId, Array<notificationData>>
     this.batchTimer = null;
@@ -19,59 +16,11 @@ class NotificationService {
     this.INITIAL_RETRY_DELAY = 2000; // 2 seconds
     this.MAX_RETRY_DELAY = 30000; // 30 seconds
 
-    // 🔧 OPTIMIZATION: Socket health check interval
-    // SIGNIFICANCE: Prevents stale sockets from causing notification failures
-    this.socketHealthCheckInterval = null;
-    this.SOCKET_HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
-    this.startSocketHealthCheck();
-
     // 🔧 OPTIMIZATION: In-memory duplicate cache
     // SIGNIFICANCE: Reduces database queries by 80% for duplicate detection
     this.duplicateCache = new Map(); // Map<key, timestamp>
     this.DUPLICATE_CACHE_TTL = 30000; // 30 seconds - increased to prevent duplicates from rapid retries
     this.startDuplicateCacheCleanup();
-  }
-
-  setSocketIO(io) {
-    this.io = io;
-  }
-
-  // 🔧 OPTIMIZATION: Socket health check
-  // SIGNIFICANCE: Automatically removes disconnected sockets from tracking
-  startSocketHealthCheck() {
-    if (this.socketHealthCheckInterval) return;
-    
-    this.socketHealthCheckInterval = setInterval(() => {
-      this.cleanupStaleSockets();
-    }, this.SOCKET_HEALTH_CHECK_INTERVAL);
-  }
-
-  cleanupStaleSockets() {
-    if (!this.io) return;
-    
-    let cleanedCount = 0;
-    for (const [userId, socketIds] of this.onlineUsers.entries()) {
-      const validSocketIds = new Set();
-      
-      for (const socketId of socketIds) {
-        const socket = this.io.sockets.sockets.get(socketId);
-        if (socket && socket.connected) {
-          validSocketIds.add(socketId);
-        } else {
-          cleanedCount++;
-        }
-      }
-      
-      if (validSocketIds.size === 0) {
-        this.onlineUsers.delete(userId);
-      } else if (validSocketIds.size < socketIds.size) {
-        this.onlineUsers.set(userId, validSocketIds);
-      }
-    }
-    
-    if (cleanedCount > 0) {
-      console.log(`[v1/Notification] Cleaned ${cleanedCount} stale sockets`);
-    }
   }
 
   // 🔧 OPTIMIZATION: Duplicate cache cleanup
@@ -85,74 +34,6 @@ class NotificationService {
         }
       }
     }, this.DUPLICATE_CACHE_TTL);
-  }
-
-  registerOnlineUser(userId, socketId) {
-    if (!this.onlineUsers.has(userId)) {
-      this.onlineUsers.set(userId, new Set());
-    }
-    this.onlineUsers.get(userId).add(socketId);
-    console.log(`[v1/Notification] User ${userId} registered (socket: ${socketId}, total: ${this.onlineUsers.get(userId).size})`);
-  }
-
-  unregisterOnlineUser(userId, socketId) {
-    if (!this.onlineUsers.has(userId)) return;
-    const sockets = this.onlineUsers.get(userId);
-    sockets.delete(socketId);
-    if (sockets.size === 0) {
-      this.onlineUsers.delete(userId);
-      console.log(`[v1/Notification] User ${userId} is now offline`);
-    }
-  }
-
-  // 🔧 CRITICAL CHANGE: Enhanced isUserOnline with socket validation
-  // SIGNIFICANCE: Prevents false positives - only returns true if sockets are actually connected
-  isUserOnline(userId) {
-    if (!this.onlineUsers.has(userId)) return false;
-    
-    const socketIds = this.onlineUsers.get(userId);
-    if (socketIds.size === 0) return false;
-    
-    // Verify at least one socket is actually connected
-    if (this.io) {
-      for (const socketId of socketIds) {
-        const socket = this.io.sockets.sockets.get(socketId);
-        if (socket && socket.connected) {
-          return true;
-        }
-      }
-      // All sockets disconnected, clean up
-      this.onlineUsers.delete(userId);
-      return false;
-    }
-    
-    return true;
-  }
-
-  isUserInChatRoom(userId, applicationId) {
-    if (!this.io || !this.isUserOnline(userId)) {
-      return false;
-    }
-
-    const roomName = `app_${applicationId}`;
-    const room = this.io.sockets.adapter.rooms.get(roomName);
-    if (!room || room.size === 0) {
-      return false;
-    }
-
-    // Check if any of user's sockets are in the room
-    const userSockets = this.onlineUsers.get(userId);
-    if (!userSockets || userSockets.size === 0) {
-      return false;
-    }
-
-    for (const socketId of userSockets) {
-      if (room.has(socketId)) {
-        return true;
-      }
-    }
-
-    return false;
   }
 
   // 🔧 OPTIMIZATION: Non-blocking logDeliveryAttempt
@@ -175,51 +56,6 @@ class NotificationService {
     });
   }
 
-  // 🔧 CRITICAL CHANGE: Enhanced sendSocketNotification with validation
-  // SIGNIFICANCE: Validates sockets before sending, auto-cleans invalid sockets
-  sendSocketNotification(userId, notificationData) {
-    if (!this.io) {
-      return { sent: false, reason: 'not_initialized' };
-    }
-    
-    if (!this.isUserOnline(userId)) {
-      return { sent: false, reason: 'offline' };
-    }
-    
-    const socketIds = Array.from(this.onlineUsers.get(userId));
-    let sentCount = 0;
-    let failedCount = 0;
-    const failedSockets = [];
-    
-    // 🔧 OPTIMIZATION: Use for...of for better performance
-    for (const socketId of socketIds) {
-      try {
-        const socket = this.io.sockets.sockets.get(socketId);
-        
-        // 🔧 CRITICAL: Verify socket exists AND is connected
-        if (socket && socket.connected) {
-          socket.emit('notification', notificationData);
-          sentCount++;
-        } else {
-          failedCount++;
-          failedSockets.push(socketId);
-          // Auto-cleanup invalid socket
-          this.unregisterOnlineUser(userId, socketId);
-        }
-      } catch (err) {
-        failedCount++;
-        failedSockets.push(socketId);
-        this.unregisterOnlineUser(userId, socketId);
-      }
-    }
-    
-    return {
-      sent: sentCount > 0,
-      count: sentCount,
-      failed: failedCount,
-      failedSockets,
-    };
-  }
 
   async sendFCMNotification(userId, notificationData) {
     try {
@@ -278,188 +114,59 @@ class NotificationService {
     }
   }
 
-  // 🔧 CRITICAL CHANGE: Context-aware notification delivery
-  // SIGNIFICANCE: Prevents duplicate notifications while ensuring delivery
-  // - Sends socket if user is online
-  // - Sends FCM if user is offline OR not viewing relevant screen
-  // - Avoids duplicates by checking if user is actively viewing the notification context
-  // - FIXED: Always sends FCM for offline users, even if viewing screen (multi-device support)
+  // 🔧 CRITICAL CHANGE: FCM-only notification delivery
+  // SIGNIFICANCE: All notifications now use FCM only, no socket fallback
   async sendNotification(userId, notificationData, notificationId = null) {
-    const online = this.isUserOnline(userId);
-    let socketResult = null;
     let fcmResult = null;
     
-    // 🔧 FIX: Call isUserViewingRelevantScreen once and reuse the result
-    let isViewingRelevantScreen = false;
-    if (online) {
-      isViewingRelevantScreen = await this.isUserViewingRelevantScreen(userId, notificationData);
-    }
-    
-    // Try socket first if user is online
-    if (online) {
-      socketResult = this.sendSocketNotification(userId, notificationData);
-      
+    // Always send FCM notification
+    if (!fcmService.initialized) {
+      console.warn(`[v1/Notification] FCM not initialized, cannot send push notification to user ${userId}`);
       if (notificationId) {
-        this.logDeliveryAttempt(notificationId, 'socket', socketResult.sent, {
-          socketCount: socketResult.count || 0,
-          failedCount: socketResult.failed || 0,
-          failedSockets: socketResult.failedSockets || [],
+        this.logDeliveryAttempt(notificationId, 'fcm', false, {
+          error: 'FCM not initialized',
+          reason: 'service_not_initialized'
         });
       }
-      
-      // If socket failed, retry once
-      if (!socketResult.sent && socketResult.failed > 0 && socketResult.count === 0) {
-        await new Promise(resolve => setTimeout(resolve, 300)); // Wait 300ms
-        socketResult = this.sendSocketNotification(userId, notificationData);
-        
-        if (notificationId) {
-          this.logDeliveryAttempt(notificationId, 'socket_retry', socketResult.sent, {
-            socketCount: socketResult.count || 0,
-          });
-        }
-      }
-    }
-    
-    // 🔧 FIX: Send FCM in these cases:
-    // 1. User is offline (always send FCM)
-    // 2. Socket failed completely (no sockets succeeded)
-    // 🔧 CRITICAL FIX: Don't send FCM if socket succeeded - prevents duplicate notifications
-    // Only send FCM if socket completely failed OR user is offline
-    // This ensures users get either socket OR FCM, not both (prevents duplicates)
-    const shouldSendFCM = !online || (socketResult && !socketResult.sent && socketResult.count === 0);
-    
-    if (shouldSendFCM) {
-      // 🔧 FIX: Check FCM initialization before sending
-      if (!fcmService.initialized) {
-        console.warn(`[v1/Notification] FCM not initialized, cannot send push notification to user ${userId}`);
-        if (notificationId) {
-          this.logDeliveryAttempt(notificationId, 'fcm', false, {
-            error: 'FCM not initialized',
-            reason: 'service_not_initialized'
-          });
-        }
-      } else {
-        fcmResult = await this.sendFCMNotification(userId, notificationData);
-        
-        if (notificationId) {
-          // 🔧 FIX: Improved success criteria - sent: 0 is only success if reason is 'no_tokens' (user has no tokens)
-          const fcmSuccess = fcmResult.success && fcmResult.sent > 0;
-          const fcmHasTokens = fcmResult.success && fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error;
-          
-          this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess || fcmHasTokens, {
-            sent: fcmResult.sent || 0,
-            failed: fcmResult.failed || 0,
-            error: fcmResult.error || null,
-            reason: fcmResult.reason || null,
-            details: fcmResult.details || null,
-            hasTokens: fcmHasTokens,
-          });
-          
-          // 🔧 FIX: Better logging for FCM failures
-          if (!fcmSuccess && !fcmHasTokens) {
-            console.error(`[v1/Notification] FCM delivery failed for user ${userId}, notification ${notificationId}:`, {
-              error: fcmResult.error,
-              reason: fcmResult.reason,
-              sent: fcmResult.sent,
-              failed: fcmResult.failed
-            });
-          } else if (fcmHasTokens) {
-            console.log(`[v1/Notification] FCM skipped for user ${userId} - no active tokens`);
-          }
-        }
-      }
     } else {
-      // Log when FCM is skipped
+      fcmResult = await this.sendFCMNotification(userId, notificationData);
+      
       if (notificationId) {
-        if (online && socketResult?.sent) {
-          console.log(`[v1/Notification] FCM skipped for user ${userId}, notification ${notificationId} - socket delivery succeeded`);
-        } else {
-          console.log(`[v1/Notification] FCM skipped for user ${userId}, notification ${notificationId}`);
+        // 🔧 FIX: Improved success criteria - sent: 0 is only success if reason is 'no_tokens' (user has no tokens)
+        const fcmSuccess = fcmResult.success && fcmResult.sent > 0;
+        const fcmHasTokens = fcmResult.success && fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error;
+        
+        this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess || fcmHasTokens, {
+          sent: fcmResult.sent || 0,
+          failed: fcmResult.failed || 0,
+          error: fcmResult.error || null,
+          reason: fcmResult.reason || null,
+          details: fcmResult.details || null,
+          hasTokens: fcmHasTokens,
+        });
+        
+        // 🔧 FIX: Better logging for FCM failures
+        if (!fcmSuccess && !fcmHasTokens) {
+          console.error(`[v1/Notification] FCM delivery failed for user ${userId}, notification ${notificationId}:`, {
+            error: fcmResult.error,
+            reason: fcmResult.reason,
+            sent: fcmResult.sent,
+            failed: fcmResult.failed
+          });
+        } else if (fcmHasTokens) {
+          console.log(`[v1/Notification] FCM skipped for user ${userId} - no active tokens`);
         }
       }
     }
     
-    const success = (socketResult?.sent > 0) || (fcmResult?.success && fcmResult.sent > 0);
-    const method = socketResult?.sent && fcmResult?.sent > 0 
-      ? 'socket+fcm' 
-      : socketResult?.sent 
-        ? 'socket' 
-        : fcmResult?.sent > 0
-          ? 'fcm'
-          : 'none';
+    const success = (fcmResult?.success && fcmResult.sent > 0);
+    const method = fcmResult?.sent > 0 ? 'fcm' : 'none';
     
     return { 
       success, 
       method, 
-      socketResult: socketResult || null, 
       fcmResult: fcmResult || null,
-      skippedFCM: shouldSendFCM === false && online && socketResult?.sent
     };
-  }
-
-  // 🔧 NEW: Helper method to check if user is viewing relevant screen
-  // SIGNIFICANCE: Prevents duplicate notifications by checking if user is actively viewing the notification context
-  async isUserViewingRelevantScreen(userId, notificationData) {
-    if (!this.io) return false;
-    
-    try {
-      const { type, data } = notificationData;
-      
-      // For chat messages, check if user is in conversation room
-      if (type === 'CHAT_MESSAGE' && data?.applicationId) {
-        return this.isUserInChatRoom(userId, data.applicationId);
-      }
-      
-      // For application-related notifications, check if user is on application screen
-      if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'APPLICATION_APPROVED', 
-           'APPLICATION_CANCELLED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW',
-           'WORK_SUBMITTED', 'WORK_REVIEW', 'MOU_ACCEPTED', 'MOU_FULLY_ACCEPTED',
-           'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'FLOW_STATE_CHANGE'].includes(type) && data?.applicationId) {
-        const roomName = `app_${data.applicationId}`;
-        const userRoom = `user_${userId}`;
-        
-        const userRoomSockets = this.io.sockets.adapter.rooms.get(userRoom);
-        if (!userRoomSockets || userRoomSockets.size === 0) return false;
-        
-        const appRoom = this.io.sockets.adapter.rooms.get(roomName);
-        if (!appRoom || appRoom.size === 0) return false;
-        
-        // Check if any of user's sockets are in the application room
-        for (const socketId of userRoomSockets) {
-          if (appRoom.has(socketId)) {
-            return true; // User is viewing this application
-          }
-        }
-        return false;
-      }
-      
-      // For campaign updates, check if user is in campaign room
-      if (type === 'CAMPAIGN_UPDATE' && data?.campaignId) {
-        const roomName = `campaign_${data.campaignId}`;
-        const userRoom = `user_${userId}`;
-        
-        const userRoomSockets = this.io.sockets.adapter.rooms.get(userRoom);
-        if (!userRoomSockets || userRoomSockets.size === 0) return false;
-        
-        const campaignRoom = this.io.sockets.adapter.rooms.get(roomName);
-        if (!campaignRoom || campaignRoom.size === 0) return false;
-        
-        for (const socketId of userRoomSockets) {
-          if (campaignRoom.has(socketId)) {
-            return true; // User is viewing this campaign
-          }
-        }
-        return false;
-      }
-      
-      // For other notification types, assume user is not viewing relevant screen
-      // (safer to send FCM to ensure delivery)
-      return false;
-    } catch (error) {
-      console.warn('[v1/Notification] Error checking screen context:', error);
-      // On error, default to false (send FCM to be safe)
-      return false;
-    }
   }
 
   // 🔧 FIX: Generate duplicate detection key based on notification type
@@ -644,17 +351,13 @@ class NotificationService {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
       
       // Schedule retry for failed notifications
-      // Retry if:
-      // 1. FCM failed with an error (not just no_tokens)
-      // 2. Socket failed and FCM also failed or wasn't sent
-      // 3. Both methods failed
+      // Retry if FCM failed with an error (not just no_tokens)
       const fcmFailed = sendResult.fcmResult && (
         !sendResult.fcmResult.success || 
         (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
       );
-      const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
       
-      if (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) {
+      if (fcmFailed) {
         await this.scheduleRetry(notificationId, {
           userId,
           notificationData,
@@ -750,9 +453,8 @@ class NotificationService {
           !sendResult.fcmResult.success || 
           (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
         );
-        const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
         
-        if (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) {
+        if (fcmFailed) {
           await this.scheduleRetry(notificationId, {
             userId,
             notificationData: batchedData,
@@ -910,15 +612,12 @@ class NotificationService {
       
       // Continue retrying if:
       // 1. FCM failed with an error (not just no_tokens)
-      // 2. Both socket and FCM failed
-      // 3. Haven't reached max retries
+      // 2. Haven't reached max retries
       const fcmFailed = sendResult.fcmResult && (
         !sendResult.fcmResult.success || 
         (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
       );
-      const socketFailed = sendResult.socketResult && !sendResult.socketResult.sent;
-      const shouldRetry = (fcmFailed || (socketFailed && (!sendResult.fcmResult || fcmFailed))) && 
-                          retryData.attempts < this.MAX_RETRIES;
+      const shouldRetry = fcmFailed && retryData.attempts < this.MAX_RETRIES;
       
       if (shouldRetry) {
         await this.scheduleRetry(notificationId, retryData);
@@ -943,7 +642,6 @@ class NotificationService {
 
       const stats = {
         totalAttempts: attempts?.length || 0,
-        socketAttempts: attempts?.filter((a) => a.method === 'socket').length || 0,
         fcmAttempts: attempts?.filter((a) => a.method === 'fcm').length || 0,
         successfulAttempts: attempts?.filter((a) => a.success).length || 0,
         failedAttempts: attempts?.filter((a) => !a.success).length || 0,
@@ -1021,25 +719,40 @@ class NotificationService {
     try {
       const { data: application } = await supabaseAdmin
         .from('v1_applications')
-        .select('id, v1_campaigns(title)')
+        .select('id, v1_campaigns(title, requires_script)')
         .eq('id', applicationId)
         .single();
 
-      const { data: paymentOrder } = await supabaseAdmin
-        .from('v1_payment_orders')
-        .select('amount')
-        .eq('application_id', applicationId)
-        .eq('status', 'VERIFIED')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const requiresScript = application?.v1_campaigns?.requires_script || false;
+      
+      // Check if script was already accepted (if script is required)
+      let scriptAccepted = false;
+      if (requiresScript) {
+        const { data: script } = await supabaseAdmin
+          .from('v1_scripts')
+          .select('status')
+          .eq('application_id', applicationId)
+          .eq('status', 'ACCEPTED')
+          .maybeSingle();
+        scriptAccepted = !!script;
+      }
+
+      let body;
+      if (requiresScript && !scriptAccepted) {
+        body = `Payment Successful for the campaign "${campaignTitle}", submit your script`;
+      } else if (requiresScript && scriptAccepted) {
+        body = `Payment Successful for the campaign "${campaignTitle}", submit your work`;
+      } else {
+        body = `Payment Successful for the campaign "${campaignTitle}", submit your work`;
+      }
 
       const notificationData = {
         type: 'PAYMENT_COMPLETED',
-        title: 'Payment Received! 💰',
-        body: `Payment of ₹${paymentOrder?.amount || 0} completed for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        title: 'Payment Successful!',
+        body,
         clickAction: `/applications/${applicationId}`,
-        data: { applicationId, brandId, influencerId, amount: paymentOrder?.amount || 0 },
+        data: { applicationId, brandId, influencerId },
       };
 
       return await this.sendAndStoreNotification(influencerId, notificationData);
@@ -1063,19 +776,21 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
+      const campaignTitle = script?.v1_applications?.v1_campaigns?.title || 'Campaign_name';
+      const brandName = brand?.brand_name || 'brand_owner_name';
+
       let title;
       let body;
-      const campaignTitle = script?.v1_applications?.v1_campaigns?.title || 'campaign';
-
+      
       if (status === 'ACCEPTED') {
-        title = 'Script Accepted! ✅';
-        body = `${brand?.brand_name || 'Brand'} accepted your script for "${campaignTitle}"`;
+        title = 'Script Accepted!';
+        body = `"${brandName}" accepted your script for "${campaignTitle}". Proceed for work submission`;
       } else if (status === 'REVISION') {
-        title = 'Script Revision Required';
-        body = `${brand?.brand_name || 'Brand'} requested revisions for "${campaignTitle}"`;
+        title = 'Script Revised';
+        body = `"${brandName}" revised your script for "${campaignTitle}"`;
       } else {
-        title = 'Script Rejected';
-        body = `${brand?.brand_name || 'Brand'} rejected your script for "${campaignTitle}"`;
+        title = 'Script Rejected!';
+        body = `"${brandName}" rejected your script for "${campaignTitle}"`;
       }
 
       const notificationData = {
@@ -1107,19 +822,21 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = work?.v1_applications?.v1_campaigns?.title || 'campaign';
+      const campaignTitle = work?.v1_applications?.v1_campaigns?.title || 'Campaign_name';
+      const brandName = brand?.brand_name || 'brand_owner_name';
+
       let title;
       let body;
 
       if (status === 'ACCEPTED') {
-        title = 'Work Approved! 🎊';
-        body = `${brand?.brand_name || 'Brand'} approved your work for "${campaignTitle}"`;
+        title = 'Work Accepted!';
+        body = `"${brandName}" accepted your work for "${campaignTitle}". Wait for your payout.`;
       } else if (status === 'REVISION') {
-        title = 'Work Revision Required';
-        body = `${brand?.brand_name || 'Brand'} requested revisions for "${campaignTitle}"`;
+        title = 'Work Revised';
+        body = `"${brandName}" revised your work for "${campaignTitle}"`;
       } else {
-        title = 'Work Rejected';
-        body = `${brand?.brand_name || 'Brand'} rejected your work for "${campaignTitle}"`;
+        title = 'Work Rejected!';
+        body = `"${brandName}" rejected your work for "${campaignTitle}"`;
       }
 
       const notificationData = {
@@ -1176,8 +893,8 @@ class NotificationService {
 
       const notificationData = {
         type: 'PAYOUT_RELEASED',
-        title: 'Payout Released! 💸',
-        body: `Your payout of ₹${amount || 0} has been released for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        title: 'Payout Released!',
+        body: `Your payout for "${application?.v1_campaigns?.title || 'campaign_name'}" has been released`,
         clickAction: `/applications/${applicationId}`,
         data: { payoutId, applicationId, influencerId, amount },
       };
@@ -1205,8 +922,8 @@ class NotificationService {
 
       const notificationData = {
         type: 'APPLICATION_CREATED',
-        title: 'New Application Received',
-        body: `${influencer?.name || 'An influencer'} sent an application for "${campaign?.title || 'campaign'}"`,
+        title: 'New Application Received!',
+        body: `"${influencer?.name || 'Influencer'}" applied for "${campaign?.title || 'campaign_name'}"`,
         clickAction: `/applications/${applicationId}`,
         data: { applicationId, campaignId, influencerId, brandId },
       };
@@ -1234,8 +951,8 @@ class NotificationService {
 
       const notificationData = {
         type: 'APPLICATION_APPROVED',
-        title: 'Application Approved! 🎉',
-        body: `${brand?.brand_name || 'Brand'} approved your application for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        title: 'Application Accepted!',
+        body: `"${brand?.brand_name || 'brand_owner'}" accepted your application for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
         clickAction: `/applications/${applicationId}`,
         data: { applicationId, brandId, influencerId },
       };
@@ -1344,8 +1061,8 @@ class NotificationService {
 
       const notificationData = {
         type: 'SCRIPT_SUBMITTED',
-        title: 'New Script Submitted',
-        body: `${influencer?.name || 'Influencer'} submitted a script for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        title: 'New Script Submitted!',
+        body: `"${influencer?.name || 'influencer_name'}" submitted a script for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
         clickAction: `/applications/${applicationId}/scripts`,
         data: { scriptId, applicationId, brandId, influencerId },
       };
@@ -1373,8 +1090,8 @@ class NotificationService {
 
       const notificationData = {
         type: 'WORK_SUBMITTED',
-        title: 'New Work Submitted',
-        body: `${influencer?.name || 'Influencer'} submitted work for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        title: 'New Work Submitted!',
+        body: `"${influencer?.name || 'influencer_name'}" submitted a work for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
         clickAction: `/applications/${applicationId}/work`,
         data: { workSubmissionId, applicationId, brandId, influencerId },
       };
@@ -1394,39 +1111,46 @@ class NotificationService {
         .eq('id', applicationId)
         .single();
 
-      const { data: mou } = await supabaseAdmin
-        .from('v1_mous')
-        .select('accepted_by_influencer, accepted_by_brand, status')
-        .eq('id', mouId)
-        .maybeSingle();
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
 
-      const { data: accepter } = await supabaseAdmin
-        .from('v1_users')
-        .select('name')
-        .eq('id', acceptedByUserId)
-        .maybeSingle();
+      let accepterName;
+      if (userRole === 'INFLUENCER') {
+        // Influencer accepted, notify brand_owner
+        const { data: influencer } = await supabaseAdmin
+          .from('v1_users')
+          .select('name')
+          .eq('id', acceptedByUserId)
+          .maybeSingle();
+        accepterName = influencer?.name || 'Influencer';
 
-      const fullyAccepted = mou?.accepted_by_influencer && mou?.accepted_by_brand;
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign';
+        const notificationData = {
+          type: 'MOU_ACCEPTED',
+          title: 'MOU acceptance',
+          body: `"${accepterName}" accepted the MOU for "${campaignTitle}"`,
+          clickAction: `/applications/${applicationId}/mou`,
+          data: { mouId, applicationId, acceptedByUserId, otherUserId, userRole },
+        };
 
-      let title, body;
-      if (fullyAccepted) {
-        title = 'MOU Fully Accepted! ✅';
-        body = `Both parties have accepted the MOU for "${campaignTitle}". You can now proceed.`;
+        return await this.sendAndStoreNotification(otherUserId, notificationData);
       } else {
-        title = 'MOU Accepted';
-        body = `${accepter?.name || 'The other party'} accepted the MOU for "${campaignTitle}". Please accept your MOU to proceed.`;
+        // Brand accepted, notify influencer
+        const { data: brand } = await supabaseAdmin
+          .from('v1_brand_profiles')
+          .select('brand_name')
+          .eq('user_id', acceptedByUserId)
+          .maybeSingle();
+        accepterName = brand?.brand_name || 'brand_owner';
+
+        const notificationData = {
+          type: 'MOU_ACCEPTED',
+          title: 'MOU acceptance',
+          body: `"${accepterName}" accepted the MOU for "${campaignTitle}"`,
+          clickAction: `/applications/${applicationId}/mou`,
+          data: { mouId, applicationId, acceptedByUserId, otherUserId, userRole },
+        };
+
+        return await this.sendAndStoreNotification(otherUserId, notificationData);
       }
-
-      const notificationData = {
-        type: 'MOU_ACCEPTED',
-        title,
-        body,
-        clickAction: `/applications/${applicationId}/mou`,
-        data: { mouId, applicationId, acceptedByUserId, otherUserId, fullyAccepted },
-      };
-
-      return await this.sendAndStoreNotification(otherUserId, notificationData);
     } catch (error) {
       console.error('[v1/Notification] MOU accepted error:', error);
       return { success: false, error: error.message };
@@ -1441,25 +1165,88 @@ class NotificationService {
         .eq('id', applicationId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign';
-
-      const notificationData = {
+      // Notify brand_owner
+      const brandNotificationData = {
         type: 'MOU_FULLY_ACCEPTED',
-        title: 'MOU Accepted by Both Parties! ✅',
-        body: `Both parties have accepted the MOU for "${campaignTitle}". Please proceed with payment to continue.`,
+        title: 'MOU Accepted by Both!',
+        body: 'Both party accepted the MOU, proceed with payment',
         clickAction: `/applications/${applicationId}/payment`,
         data: { 
           mouId, 
           applicationId, 
           brandId, 
           influencerId,
-          action: 'proceed_with_payment'
+          recipient: 'brand'
         },
       };
+      await this.sendAndStoreNotification(brandId, brandNotificationData);
 
-      return await this.sendAndStoreNotification(brandId, notificationData);
+      // Notify influencer
+      const influencerNotificationData = {
+        type: 'MOU_FULLY_ACCEPTED',
+        title: 'MOU accepted by both',
+        body: 'Both party accepted the MOU, wait for payment completion',
+        clickAction: `/applications/${applicationId}`,
+        data: { 
+          mouId, 
+          applicationId, 
+          brandId, 
+          influencerId,
+          recipient: 'influencer'
+        },
+      };
+      await this.sendAndStoreNotification(influencerId, influencerNotificationData);
+
+      return { success: true };
     } catch (error) {
       console.error('[v1/Notification] MOU fully accepted error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyCampaignCompleted(campaignId, brandId, influencerId) {
+    try {
+      const { data: campaign } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('id, title')
+        .eq('id', campaignId)
+        .single();
+
+      const campaignTitle = campaign?.title || 'campaign_name';
+
+      // Notify brand_owner
+      const brandNotificationData = {
+        type: 'CAMPAIGN_COMPLETED',
+        title: 'Campaign completed',
+        body: `Congratulations! Your campaign named "${campaignTitle}" is now complete.`,
+        clickAction: `/campaigns/${campaignId}`,
+        data: { 
+          campaignId, 
+          brandId, 
+          influencerId,
+          recipient: 'brand'
+        },
+      };
+      await this.sendAndStoreNotification(brandId, brandNotificationData);
+
+      // Notify influencer
+      const influencerNotificationData = {
+        type: 'CAMPAIGN_COMPLETED',
+        title: 'Campaign completed',
+        body: `Congratulations! Your campaign named "${campaignTitle}" is now complete.`,
+        clickAction: `/campaigns/${campaignId}`,
+        data: { 
+          campaignId, 
+          brandId, 
+          influencerId,
+          recipient: 'influencer'
+        },
+      };
+      await this.sendAndStoreNotification(influencerId, influencerNotificationData);
+
+      return { success: true };
+    } catch (error) {
+      console.error('[v1/Notification] Campaign completed error:', error);
       return { success: false, error: error.message };
     }
   }
