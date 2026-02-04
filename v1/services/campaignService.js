@@ -954,22 +954,29 @@ class CampaignService {
 
   /**
    * Check and complete NORMAL campaign when work is submitted
+   * For NORMAL campaigns, completion occurs when the single accepted application's work is accepted (moves to PAYOUT phase)
+   * 
+   * @param {string} campaignId - The campaign ID to check
+   * @param {string} applicationId - The application ID that triggered this check
+   * @returns {Promise<Object>} Result object with success status and message
    */
   async completeNormalCampaignOnWorkSubmission(campaignId, applicationId) {
     try {
-      // Get campaign details
+      // Get campaign details (filter deleted campaigns in query for better performance)
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
         .select("id, status, is_deleted")
         .eq("id", campaignId)
+        .eq("is_deleted", false)
         .maybeSingle();
 
       if (campaignError) {
-        console.error("[v1/completeNormalCampaignOnWorkSubmission] Campaign fetch error:", campaignError);
+        console.error(`[v1/completeNormalCampaignOnWorkSubmission] Campaign fetch error for campaignId=${campaignId}, applicationId=${applicationId}:`, campaignError);
         return { success: false, error: campaignError.message };
       }
 
-      if (!campaign || campaign.is_deleted) {
+      if (!campaign) {
+        console.warn(`[v1/completeNormalCampaignOnWorkSubmission] Campaign not found or deleted: campaignId=${campaignId}`);
         return { success: false, message: "Campaign not found or deleted" };
       }
 
@@ -978,6 +985,7 @@ class CampaignService {
       }
 
       // Check if application has work accepted (is in PAYOUT phase)
+      // Note: Index on v1_applications(id, phase) recommended for performance
       const { data: application, error: appError } = await supabaseAdmin
         .from("v1_applications")
         .select("id, phase")
@@ -985,11 +993,12 @@ class CampaignService {
         .maybeSingle();
 
       if (appError) {
-        console.error("[v1/completeNormalCampaignOnWorkSubmission] Application fetch error:", appError);
+        console.error(`[v1/completeNormalCampaignOnWorkSubmission] Application fetch error for applicationId=${applicationId}, campaignId=${campaignId}:`, appError);
         return { success: false, error: appError.message };
       }
 
       if (!application) {
+        console.warn(`[v1/completeNormalCampaignOnWorkSubmission] Application not found: applicationId=${applicationId}`);
         return { success: false, message: "Application not found" };
       }
 
@@ -1001,10 +1010,11 @@ class CampaignService {
           .eq("id", campaignId);
 
         if (updateError) {
-          console.error("[v1/completeNormalCampaignOnWorkSubmission] Update error:", updateError);
+          console.error(`[v1/completeNormalCampaignOnWorkSubmission] Update error for campaignId=${campaignId}:`, updateError);
           return { success: false, error: updateError.message };
         }
 
+        console.log(`[v1/completeNormalCampaignOnWorkSubmission] NORMAL campaign completed: campaignId=${campaignId}, applicationId=${applicationId}`);
         return { 
           success: true, 
           message: "NORMAL campaign auto-completed successfully",
@@ -1014,18 +1024,30 @@ class CampaignService {
 
       return { success: true, message: "Application work not yet accepted" };
     } catch (err) {
-      console.error("[v1/completeNormalCampaignOnWorkSubmission] Exception:", err);
+      console.error(`[v1/completeNormalCampaignOnWorkSubmission] Exception for campaignId=${campaignId}, applicationId=${applicationId}:`, err);
       return { success: false, error: err.message };
     }
   }
 
   /**
    * Check and complete BULK campaign when all selected applications' work is submitted
+   * For BULK campaigns, completion occurs when all selected applications (those with verified CAMPAIGN payments)
+   * have their work accepted (are in PAYOUT or COMPLETED phase)
+   * 
+   * Performance Note: For campaigns with many applications (>1000), consider batching the query
+   * or adding pagination to avoid memory issues.
+   * 
+   * @param {string} campaignId - The campaign ID to check
+   * @returns {Promise<Object>} Result object with success status and message
    */
   async completeBulkCampaignOnWorkSubmission(campaignId) {
     try {
       // Get all selected applications for this campaign
       // Selected applications are those in v1_application_payments with verified CAMPAIGN payments
+      // Note: Indexes recommended on:
+      //   - v1_application_payments(application_id, payment_order_id)
+      //   - v1_payment_orders(payable_type, payable_id, status)
+      //   - v1_applications(campaign_id, id, phase)
       const { data: selectedApplications, error: selectedError } = await supabaseAdmin
         .from("v1_application_payments")
         .select(`
@@ -1045,7 +1067,7 @@ class CampaignService {
         .eq("v1_payment_orders.status", PaymentStatus.VERIFIED);
 
       if (selectedError) {
-        console.error("[v1/completeBulkCampaignOnWorkSubmission] Selected applications fetch error:", selectedError);
+        console.error(`[v1/completeBulkCampaignOnWorkSubmission] Selected applications fetch error for campaignId=${campaignId}:`, selectedError);
         return { success: false, error: selectedError.message };
       }
 
@@ -1056,7 +1078,10 @@ class CampaignService {
       // Get application IDs that are selected
       const selectedApplicationIds = selectedApplications.map(sa => sa.application_id);
 
+      // Performance consideration: For large datasets (>1000 applications), consider batching
+      // For now, we fetch all at once as most campaigns will have manageable numbers
       // Get all selected applications and check their phases
+      // Note: Index on v1_applications(campaign_id, id, phase) recommended
       const { data: applications, error: appsError } = await supabaseAdmin
         .from("v1_applications")
         .select("id, phase")
@@ -1064,15 +1089,18 @@ class CampaignService {
         .in("id", selectedApplicationIds);
 
       if (appsError) {
-        console.error("[v1/completeBulkCampaignOnWorkSubmission] Applications fetch error:", appsError);
+        console.error(`[v1/completeBulkCampaignOnWorkSubmission] Applications fetch error for campaignId=${campaignId}:`, appsError);
         return { success: false, error: appsError.message };
       }
 
       if (!applications || applications.length === 0) {
+        console.warn(`[v1/completeBulkCampaignOnWorkSubmission] No applications found for campaignId=${campaignId} despite selected applications existing`);
         return { success: true, message: "No applications found" };
       }
 
       // Check if all selected applications have work accepted (are in PAYOUT or COMPLETED phase)
+      // Using .every() is efficient for typical campaign sizes (<100 applications)
+      // For very large campaigns, consider database-level aggregation instead
       const allWorkAccepted = applications.every(app => 
         app.phase === ApplicationPhase.PAYOUT || app.phase === ApplicationPhase.COMPLETED
       );
@@ -1085,10 +1113,11 @@ class CampaignService {
           .eq("id", campaignId);
 
         if (updateError) {
-          console.error("[v1/completeBulkCampaignOnWorkSubmission] Update error:", updateError);
+          console.error(`[v1/completeBulkCampaignOnWorkSubmission] Update error for campaignId=${campaignId}:`, updateError);
           return { success: false, error: updateError.message };
         }
 
+        console.log(`[v1/completeBulkCampaignOnWorkSubmission] BULK campaign completed: campaignId=${campaignId}, selectedApplications=${selectedApplicationIds.length}`);
         return { 
           success: true, 
           message: "BULK campaign auto-completed successfully",
@@ -1096,9 +1125,17 @@ class CampaignService {
         };
       }
 
+      // Log progress for debugging (only in development to avoid noise)
+      if (process.env.NODE_ENV === 'development') {
+        const acceptedCount = applications.filter(app => 
+          app.phase === ApplicationPhase.PAYOUT || app.phase === ApplicationPhase.COMPLETED
+        ).length;
+        console.log(`[v1/completeBulkCampaignOnWorkSubmission] Campaign ${campaignId}: ${acceptedCount}/${applications.length} applications have work accepted`);
+      }
+
       return { success: true, message: "Not all selected applications have work accepted yet" };
     } catch (err) {
-      console.error("[v1/completeBulkCampaignOnWorkSubmission] Exception:", err);
+      console.error(`[v1/completeBulkCampaignOnWorkSubmission] Exception for campaignId=${campaignId}:`, err);
       return { success: false, error: err.message };
     }
   }
@@ -1147,22 +1184,28 @@ class CampaignService {
   /**
    * Move campaign from LIVE to IN_PROGRESS when first application is accepted
    * This should be called after accepting an application
+   * 
+   * @param {string} campaignId - The campaign ID to update
+   * @returns {Promise<Object>} Result object with success status and statusChanged flag
    */
   async moveCampaignToInProgress(campaignId) {
     try {
-      // Get campaign details
+      // Get campaign details (filter deleted campaigns in query for better performance)
+      // Note: Index on v1_campaigns(id, status, is_deleted) recommended
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
         .select("id, status, is_deleted")
         .eq("id", campaignId)
+        .eq("is_deleted", false)
         .maybeSingle();
 
       if (campaignError) {
-        console.error("[v1/moveCampaignToInProgress] Campaign fetch error:", campaignError);
+        console.error(`[v1/moveCampaignToInProgress] Campaign fetch error for campaignId=${campaignId}:`, campaignError);
         return { success: false, error: campaignError.message };
       }
 
-      if (!campaign || campaign.is_deleted) {
+      if (!campaign) {
+        console.warn(`[v1/moveCampaignToInProgress] Campaign not found or deleted: campaignId=${campaignId}`);
         return { success: false, message: "Campaign not found or deleted" };
       }
 
@@ -1174,10 +1217,11 @@ class CampaignService {
           .eq("id", campaignId);
 
         if (updateError) {
-          console.error("[v1/moveCampaignToInProgress] Update error:", updateError);
+          console.error(`[v1/moveCampaignToInProgress] Update error for campaignId=${campaignId}:`, updateError);
           return { success: false, error: updateError.message };
         }
 
+        console.log(`[v1/moveCampaignToInProgress] Campaign moved to IN_PROGRESS: campaignId=${campaignId}`);
         return { 
           success: true, 
           message: "Campaign moved to IN_PROGRESS successfully",
@@ -1186,13 +1230,16 @@ class CampaignService {
       }
 
       // If already IN_PROGRESS or other status, no change needed
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[v1/moveCampaignToInProgress] Campaign ${campaignId} already in ${campaign.status} status, no change needed`);
+      }
       return { 
         success: true, 
         message: `Campaign already in ${campaign.status} status, no change needed`,
         statusChanged: false
       };
     } catch (err) {
-      console.error("[v1/moveCampaignToInProgress] Exception:", err);
+      console.error(`[v1/moveCampaignToInProgress] Exception for campaignId=${campaignId}:`, err);
       return { success: false, error: err.message };
     }
   }
@@ -1200,10 +1247,18 @@ class CampaignService {
   /**
    * Check and expire campaigns that have passed their applications_accepted_till timestamp without any accepted applications
    * This should be called periodically (e.g., via cron job or scheduled task)
+   * 
    * A campaign expires if:
    * 1. It's in LIVE status
    * 2. applications_accepted_till has passed
    * 3. No applications have been accepted (accepted_count = 0)
+   * 
+   * Performance Note: For large numbers of campaigns, consider adding pagination or batch processing.
+   * Recommended indexes:
+   *   - v1_campaigns(status, applications_accepted_till, accepted_count, is_deleted)
+   *   - Composite index for the expiry check query
+   * 
+   * @returns {Promise<Object>} Result object with success status, expiredCount, and expiredCampaignIds
    */
   async checkAndExpireCampaigns() {
     try {
@@ -1214,6 +1269,10 @@ class CampaignService {
       // 2. Have applications_accepted_till set
       // 3. applications_accepted_till has passed
       // 4. Have no accepted applications (accepted_count = 0)
+      // 5. Are not deleted
+      // 
+      // Note: Index on (status, applications_accepted_till, accepted_count, is_deleted) recommended
+      // for optimal query performance
       const { data: expiredCampaigns, error: fetchError } = await supabaseAdmin
         .from("v1_campaigns")
         .select("id, title, applications_accepted_till, accepted_count")
@@ -1224,14 +1283,16 @@ class CampaignService {
         .eq("is_deleted", false);
 
       if (fetchError) {
-        console.error("[v1/checkAndExpireCampaigns] Fetch error:", fetchError);
+        console.error(`[v1/checkAndExpireCampaigns] Fetch error:`, fetchError);
         return { success: false, error: fetchError.message };
       }
 
       if (!expiredCampaigns || expiredCampaigns.length === 0) {
-        return { success: true, message: "No campaigns to expire", expiredCount: 0 };
+        return { success: true, message: "No campaigns to expire", expiredCount: 0, expiredCampaignIds: [] };
       }
 
+      // Performance consideration: For very large batches (>1000 campaigns), consider processing in chunks
+      // For now, we process all at once as typical expiry batches should be manageable
       // Update all expired campaigns to EXPIRED status
       const campaignIds = expiredCampaigns.map(c => c.id);
       const { error: updateError } = await supabaseAdmin
@@ -1240,7 +1301,7 @@ class CampaignService {
         .in("id", campaignIds);
 
       if (updateError) {
-        console.error("[v1/checkAndExpireCampaigns] Update error:", updateError);
+        console.error(`[v1/checkAndExpireCampaigns] Update error for ${campaignIds.length} campaigns:`, updateError);
         return { success: false, error: updateError.message };
       }
 
@@ -1253,7 +1314,7 @@ class CampaignService {
         expiredCampaignIds: campaignIds
       };
     } catch (err) {
-      console.error("[v1/checkAndExpireCampaigns] Exception:", err);
+      console.error(`[v1/checkAndExpireCampaigns] Exception:`, err);
       return { success: false, error: err.message };
     }
   }
