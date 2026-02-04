@@ -113,7 +113,7 @@ const io = initSocket(server);
   // Schedule periodic checks
   setInterval(() => runExpiryCheck("interval"), 1 * 60 * 1000);
   
-  console.log(`✅ [CampaignExpiry] Automatic expiry check enabled (runs every  minute)`);
+  console.log(`✅ [CampaignExpiry] Automatic expiry check enabled (runs every minute)`);
 })();
 
 // Global Error Handler
