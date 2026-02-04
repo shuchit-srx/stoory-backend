@@ -106,7 +106,10 @@ const io = initSocket(server);
         if (result.expiredCount > 0) {
           console.log(`✅ [CampaignExpiry] Completed (${reason}) → Expired ${result.expiredCount} campaigns: ${result.expiredCampaignIds.join(", ")}`);
         } else {
-          console.log(`✅ [CampaignExpiry] Completed (${reason}) → No campaigns to expire`);
+          // Only log in development to reduce noise
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`✅ [CampaignExpiry] Completed (${reason}) → No campaigns to expire`);
+          }
         }
       } else {
         console.error(`❌ [CampaignExpiry] Failed (${reason}):`, result.error || result.message);
@@ -117,10 +120,21 @@ const io = initSocket(server);
   };
 
   // Run once on startup (delayed slightly to ensure DB is ready)
-  setTimeout(() => runExpiryCheck("startup"), 5000);
+  const startupTimeout = setTimeout(() => runExpiryCheck("startup"), 5000);
   
-  // Schedule periodic checks
-  setInterval(() => runExpiryCheck("interval"), EXPIRY_CHECK_MINUTES * 60 * 1000);
+  // Schedule periodic checks and store interval ID
+  const expiryIntervalId = setInterval(() => runExpiryCheck("interval"), EXPIRY_CHECK_MINUTES * 60 * 1000);
+  
+  // Cleanup on shutdown to prevent memory leaks
+  const cleanup = () => {
+    clearTimeout(startupTimeout);
+    clearInterval(expiryIntervalId);
+    console.log("🛑 [CampaignExpiry] Cleaned up expiry check scheduler");
+  };
+  
+  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", cleanup);
+  process.on("exit", cleanup);
   
   console.log(`✅ [CampaignExpiry] Automatic expiry check enabled (runs every ${EXPIRY_CHECK_MINUTES} minutes)`);
 })();

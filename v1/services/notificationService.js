@@ -644,6 +644,39 @@ class NotificationService {
     }
   }
 
+  // 2.5. When an application is cancelled, the other party is notified
+  async notifyApplicationCancelled(applicationId, otherUserId, cancelledByRole) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, influencer_id, v1_campaigns(title, brand_id)')
+        .eq('id', applicationId)
+        .single();
+
+      if (!application) {
+        return { success: false, error: 'Application not found' };
+      }
+
+      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const cancelledByName = cancelledByRole === 'INFLUENCER' 
+        ? 'The influencer' 
+        : 'The brand owner';
+
+      const notificationData = {
+        type: 'APPLICATION_CANCELLED',
+        title: 'Application Cancelled',
+        body: `${cancelledByName} cancelled the application for "${campaignTitle}"`,
+        clickAction: `/applications/${applicationId}`,
+        data: { applicationId, cancelledByRole },
+      };
+
+      return await this.sendAndStoreNotification(otherUserId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Application cancelled error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
   // 3. When brand_owner accepts the MOU, influencer is notified
   async notifyMOUAcceptedByBrand(mouId, applicationId, brandId, influencerId) {
     try {

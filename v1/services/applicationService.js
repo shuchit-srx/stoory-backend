@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require('../db/config');
 const { canTransition } = require('./applicationStateMachine');
+const { CampaignStatus, CampaignType, ApplicationPhase } = require('../utils/constants');
 
 class ApplicationService {
   /**
@@ -17,7 +18,7 @@ class ApplicationService {
         .from('v1_applications')
         .select('*', { count: 'exact', head: true })
         .eq('campaign_id', campaignId)
-        .in('phase', ['ACCEPTED', 'COMPLETED']);
+        .in('phase', [ApplicationPhase.ACCEPTED, ApplicationPhase.COMPLETED]);
 
       if (countError) {
         console.error('[ApplicationService/updateCampaignAcceptedCount] Count error:', countError);
@@ -141,9 +142,9 @@ class ApplicationService {
     // Allow LIVE status for all campaigns
     // Allow IN_PROGRESS status only for BULK campaigns (can accept more applications)
     // Block COMPLETED and EXPIRED campaigns
-    if (campaign.status === 'LIVE') {
+    if (campaign.status === CampaignStatus.LIVE) {
       // LIVE campaigns can always accept applications
-    } else if (campaign.status === 'IN_PROGRESS' && campaign.type === 'BULK') {
+    } else if (campaign.status === CampaignStatus.IN_PROGRESS && campaign.type === CampaignType.BULK) {
       // BULK campaigns in IN_PROGRESS can still accept applications
     } else {
       return { 
@@ -181,7 +182,7 @@ class ApplicationService {
         campaign_id: campaignId,
         influencer_id: influencerId,
         brand_id: campaign.brand_id,
-        phase: 'APPLIED',
+        phase: ApplicationPhase.APPLIED,
         budget_amount: campaign.budget ?? null,
         platform_fee_percentage: campaign.platform_fee_percentage ?? null,
         platform_fee_amount: campaign.platform_fee_amount ?? null,
@@ -304,7 +305,7 @@ class ApplicationService {
           }
 
           // Check state transition
-          if (!canTransition(existingApp.phase, 'ACCEPTED')) {
+          if (!canTransition(existingApp.phase, ApplicationPhase.ACCEPTED)) {
             individualResult.message = `Cannot accept application. Current phase: ${existingApp.phase}`;
             errors.push({ applicationId, error: individualResult.message });
             results.push(individualResult);
@@ -320,7 +321,7 @@ class ApplicationService {
           const { data: updated, error: updateError } = await supabaseAdmin
             .from('v1_applications')
             .update({
-              phase: 'ACCEPTED',
+              phase: ApplicationPhase.ACCEPTED,
               budget_amount: campaign.budget ?? null,
               platform_fee_percentage: campaign.platform_fee_percentage ?? null,
               platform_fee_amount: campaign.platform_fee_amount ?? null,
@@ -444,7 +445,7 @@ class ApplicationService {
       const app = ownershipCheck.application;
 
       // Check state transition
-      if (!canTransition(app.phase, 'ACCEPTED')) {
+      if (!canTransition(app.phase, ApplicationPhase.ACCEPTED)) {
         return {
           success: false,
           message: `Cannot accept application. Current phase: ${app.phase}`,
@@ -482,7 +483,7 @@ class ApplicationService {
       const { data: updated, error: updateError } = await supabaseAdmin
         .from('v1_applications')
         .update({
-          phase: 'ACCEPTED',
+          phase: ApplicationPhase.ACCEPTED,
           budget_amount: campaign.budget ?? null,
           platform_fee_percentage: campaign.platform_fee_percentage ?? null,
           platform_fee_amount: campaign.platform_fee_amount ?? null,
@@ -588,7 +589,7 @@ class ApplicationService {
       const app = permissionCheck.application;
 
       // Check state transition
-      if (!canTransition(app.phase, 'CANCELLED')) {
+      if (!canTransition(app.phase, ApplicationPhase.CANCELLED)) {
         return {
           success: false,
           message: `Cannot cancel application. Current phase: ${app.phase}`,
@@ -599,7 +600,7 @@ class ApplicationService {
       const { data: updated, error: updateError } = await supabaseAdmin
         .from('v1_applications')
         .update({
-          phase: 'CANCELLED'
+          phase: ApplicationPhase.CANCELLED
         })
         .eq('id', applicationId)
         .select()
@@ -613,8 +614,9 @@ class ApplicationService {
         };
       }
 
-      // Determine who to notify (the other party)
+      // Send notification to the other party
       try {
+        const NotificationService = require('./notificationService');
         const { data: applicationData } = await supabaseAdmin
           .from('v1_applications')
           .select('influencer_id, v1_campaigns!inner(brand_id)')
@@ -626,6 +628,13 @@ class ApplicationService {
             ? applicationData.v1_campaigns?.brand_id 
             : app.influencer_id;
 
+          if (otherUserId) {
+            await NotificationService.notifyApplicationCancelled(
+              applicationId,
+              otherUserId,
+              user.role
+            );
+          }
         }
       } catch (notifError) {
         console.error('[ApplicationService/cancel] Failed to send notification:', notifError);

@@ -4,6 +4,7 @@ const {
   normalizeCampaignType,
   normalizeCampaignStatus,
 } = require("../utils/enumNormalizer");
+const { CampaignStatus, CampaignType, ApplicationPhase, PaymentStatus } = require("../utils/constants");
 
 /**
  * Campaign Service
@@ -14,39 +15,32 @@ class CampaignService {
    * Validate campaign status enum
    */
   validateStatus(status) {
-    const validStatuses = [
-      "DRAFT",
-      "LIVE",
-      "IN_PROGRESS",
-      "COMPLETED",
-      "EXPIRED",
-      "CANCELLED",
-    ];
-    return validStatuses.includes(status?.toUpperCase());
+    const { VALID_CAMPAIGN_STATUSES } = require("../utils/constants");
+    return VALID_CAMPAIGN_STATUSES.includes(status?.toUpperCase());
   }
 
   /**
    * Validate campaign type enum
    */
   validateType(type) {
-    const validTypes = ["NORMAL", "BULK"];
-    return validTypes.includes(type?.toUpperCase());
+    const { VALID_CAMPAIGN_TYPES } = require("../utils/constants");
+    return VALID_CAMPAIGN_TYPES.includes(type?.toUpperCase());
   }
 
   /**
    * Normalize status to uppercase
    */
   normalizeStatus(status) {
-    if (!status) return "DRAFT";
-    return normalizeCampaignStatus(status) || "DRAFT";
+    if (!status) return CampaignStatus.DRAFT;
+    return normalizeCampaignStatus(status) || CampaignStatus.DRAFT;
   }
 
   /**
    * Normalize type to uppercase
    */
   normalizeType(type) {
-    if (!type) return "NORMAL";
-    return normalizeCampaignType(type) || "NORMAL";
+    if (!type) return CampaignType.NORMAL;
+    return normalizeCampaignType(type) || CampaignType.NORMAL;
   }
 
   /**
@@ -106,7 +100,7 @@ class CampaignService {
         }
   
         // Validate status
-        const status = normalizeCampaignStatus(campaignData.status) || "DRAFT";
+        const status = normalizeCampaignStatus(campaignData.status) || CampaignStatus.DRAFT;
         if (!this.validateStatus(status)) {
           return {
             success: false,
@@ -199,7 +193,6 @@ class CampaignService {
           script_deadline: campaignData.script_deadline ?? null,
           applications_accepted_till: campaignData.applications_accepted_till ?? null,
           buffer_days: campaignData.buffer_days ?? 0,
-          expiry_time: campaignData.expiry_time ?? null,
         };
   
         // Insert campaign
@@ -744,7 +737,7 @@ class CampaignService {
             };
           }
           // Prevent manual completion - campaigns can only be completed automatically
-          if (status === "COMPLETED") {
+          if (status === CampaignStatus.COMPLETED) {
             return {
               success: false,
               message: "Campaign status cannot be manually set to COMPLETED. Campaigns are completed automatically when all work is submitted.",
@@ -834,11 +827,6 @@ class CampaignService {
   
         if (updateData.buffer_days !== undefined) {
           update.buffer_days = updateData.buffer_days ?? 0;
-        }
-
-        // Expiry time field
-        if (updateData.expiry_time !== undefined) {
-          update.expiry_time = updateData.expiry_time ?? null;
         }
 
         // If no updates, return early
@@ -965,10 +953,159 @@ class CampaignService {
   }
 
   /**
+   * Check and complete NORMAL campaign when work is submitted
+   */
+  async completeNormalCampaignOnWorkSubmission(campaignId, applicationId) {
+    try {
+      // Get campaign details
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from("v1_campaigns")
+        .select("id, status, is_deleted")
+        .eq("id", campaignId)
+        .maybeSingle();
+
+      if (campaignError) {
+        console.error("[v1/completeNormalCampaignOnWorkSubmission] Campaign fetch error:", campaignError);
+        return { success: false, error: campaignError.message };
+      }
+
+      if (!campaign || campaign.is_deleted) {
+        return { success: false, message: "Campaign not found or deleted" };
+      }
+
+      if (campaign.status === CampaignStatus.COMPLETED) {
+        return { success: true, message: "Campaign already completed" };
+      }
+
+      // Check if application has work accepted (is in PAYOUT phase)
+      const { data: application, error: appError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("id, phase")
+        .eq("id", applicationId)
+        .maybeSingle();
+
+      if (appError) {
+        console.error("[v1/completeNormalCampaignOnWorkSubmission] Application fetch error:", appError);
+        return { success: false, error: appError.message };
+      }
+
+      if (!application) {
+        return { success: false, message: "Application not found" };
+      }
+
+      // If application is in PAYOUT phase (work accepted), complete the campaign
+      if (application.phase === ApplicationPhase.PAYOUT) {
+        const { error: updateError } = await supabaseAdmin
+          .from("v1_campaigns")
+          .update({ status: CampaignStatus.COMPLETED })
+          .eq("id", campaignId);
+
+        if (updateError) {
+          console.error("[v1/completeNormalCampaignOnWorkSubmission] Update error:", updateError);
+          return { success: false, error: updateError.message };
+        }
+
+        return { 
+          success: true, 
+          message: "NORMAL campaign auto-completed successfully",
+          campaignCompleted: true
+        };
+      }
+
+      return { success: true, message: "Application work not yet accepted" };
+    } catch (err) {
+      console.error("[v1/completeNormalCampaignOnWorkSubmission] Exception:", err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Check and complete BULK campaign when all selected applications' work is submitted
+   */
+  async completeBulkCampaignOnWorkSubmission(campaignId) {
+    try {
+      // Get all selected applications for this campaign
+      // Selected applications are those in v1_application_payments with verified CAMPAIGN payments
+      const { data: selectedApplications, error: selectedError } = await supabaseAdmin
+        .from("v1_application_payments")
+        .select(`
+          application_id,
+          v1_applications!inner(
+            campaign_id
+          ),
+          v1_payment_orders!inner(
+            status,
+            payable_type,
+            payable_id
+          )
+        `)
+        .eq("v1_applications.campaign_id", campaignId)
+        .eq("v1_payment_orders.payable_type", "CAMPAIGN")
+        .eq("v1_payment_orders.payable_id", campaignId)
+        .eq("v1_payment_orders.status", PaymentStatus.VERIFIED);
+
+      if (selectedError) {
+        console.error("[v1/completeBulkCampaignOnWorkSubmission] Selected applications fetch error:", selectedError);
+        return { success: false, error: selectedError.message };
+      }
+
+      if (!selectedApplications || selectedApplications.length === 0) {
+        return { success: true, message: "No selected applications found for bulk campaign" };
+      }
+
+      // Get application IDs that are selected
+      const selectedApplicationIds = selectedApplications.map(sa => sa.application_id);
+
+      // Get all selected applications and check their phases
+      const { data: applications, error: appsError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("id, phase")
+        .eq("campaign_id", campaignId)
+        .in("id", selectedApplicationIds);
+
+      if (appsError) {
+        console.error("[v1/completeBulkCampaignOnWorkSubmission] Applications fetch error:", appsError);
+        return { success: false, error: appsError.message };
+      }
+
+      if (!applications || applications.length === 0) {
+        return { success: true, message: "No applications found" };
+      }
+
+      // Check if all selected applications have work accepted (are in PAYOUT or COMPLETED phase)
+      const allWorkAccepted = applications.every(app => 
+        app.phase === ApplicationPhase.PAYOUT || app.phase === ApplicationPhase.COMPLETED
+      );
+
+      if (allWorkAccepted) {
+        // Update campaign status to COMPLETED
+        const { error: updateError } = await supabaseAdmin
+          .from("v1_campaigns")
+          .update({ status: CampaignStatus.COMPLETED })
+          .eq("id", campaignId);
+
+        if (updateError) {
+          console.error("[v1/completeBulkCampaignOnWorkSubmission] Update error:", updateError);
+          return { success: false, error: updateError.message };
+        }
+
+        return { 
+          success: true, 
+          message: "BULK campaign auto-completed successfully",
+          campaignCompleted: true
+        };
+      }
+
+      return { success: true, message: "Not all selected applications have work accepted yet" };
+    } catch (err) {
+      console.error("[v1/completeBulkCampaignOnWorkSubmission] Exception:", err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
    * Check and auto-complete campaigns when work is submitted
-   * For NORMAL campaigns: Complete when the single application's work is accepted
-   * For BULK campaigns: Complete when all selected applications' work is accepted
-   * This should be called after work is accepted (moves application to PAYOUT phase)
+   * Routes to appropriate method based on campaign type
    */
   async checkAndCompleteCampaignOnWorkSubmission(campaignId, applicationId) {
     try {
@@ -989,127 +1126,18 @@ class CampaignService {
       }
 
       // Don't update if already completed
-      if (campaign.status === "COMPLETED") {
+      if (campaign.status === CampaignStatus.COMPLETED) {
         return { success: true, message: "Campaign already completed" };
       }
 
-      if (campaign.type === "NORMAL") {
-        // For NORMAL campaigns: Complete when the single application's work is accepted
-        // Check if this application has work accepted (is in PAYOUT phase)
-        const { data: application, error: appError } = await supabaseAdmin
-          .from("v1_applications")
-          .select("id, phase")
-          .eq("id", applicationId)
-          .maybeSingle();
-
-        if (appError) {
-          console.error("[v1/checkAndCompleteCampaignOnWorkSubmission] Application fetch error:", appError);
-          return { success: false, error: appError.message };
-        }
-
-        if (!application) {
-          return { success: false, message: "Application not found" };
-        }
-
-        // If application is in PAYOUT phase (work accepted), complete the campaign
-        if (application.phase === "PAYOUT") {
-          const { error: updateError } = await supabaseAdmin
-            .from("v1_campaigns")
-            .update({ status: "COMPLETED" })
-            .eq("id", campaignId);
-
-          if (updateError) {
-            console.error("[v1/checkAndCompleteCampaignOnWorkSubmission] Update error:", updateError);
-            return { success: false, error: updateError.message };
-          }
-
-          return { 
-            success: true, 
-            message: "NORMAL campaign auto-completed successfully",
-            campaignCompleted: true
-          };
-        }
-
-        return { success: true, message: "Application work not yet accepted" };
-      } else if (campaign.type === "BULK") {
-        // For BULK campaigns: Complete when all selected applications' work is accepted
-        // Selected applications are tracked in v1_application_payments table
-        // Get all selected applications for this campaign (those in v1_application_payments with verified CAMPAIGN payments)
-        // Selected applications are those linked to payment orders where payable_type='CAMPAIGN' and payable_id=campaignId
-        const { data: selectedApplications, error: selectedError } = await supabaseAdmin
-          .from("v1_application_payments")
-          .select(`
-            application_id,
-            v1_applications!inner(
-              campaign_id
-            ),
-            v1_payment_orders!inner(
-              status,
-              payable_type,
-              payable_id
-            )
-          `)
-          .eq("v1_applications.campaign_id", campaignId)
-          .eq("v1_payment_orders.payable_type", "CAMPAIGN")
-          .eq("v1_payment_orders.payable_id", campaignId)
-          .eq("v1_payment_orders.status", "VERIFIED");
-
-        if (selectedError) {
-          console.error("[v1/checkAndCompleteCampaignOnWorkSubmission] Selected applications fetch error:", selectedError);
-          return { success: false, error: selectedError.message };
-        }
-
-        if (!selectedApplications || selectedApplications.length === 0) {
-          return { success: true, message: "No selected applications found for bulk campaign" };
-        }
-
-        // Get application IDs that are selected
-        const selectedApplicationIds = selectedApplications.map(sa => sa.application_id);
-
-        // Get all selected applications and check their phases
-        const { data: applications, error: appsError } = await supabaseAdmin
-          .from("v1_applications")
-          .select("id, phase")
-          .eq("campaign_id", campaignId)
-          .in("id", selectedApplicationIds);
-
-        if (appsError) {
-          console.error("[v1/checkAndCompleteCampaignOnWorkSubmission] Applications fetch error:", appsError);
-          return { success: false, error: appsError.message };
-        }
-
-        if (!applications || applications.length === 0) {
-          return { success: true, message: "No applications found" };
-        }
-
-        // Check if all selected applications have work accepted (are in PAYOUT or COMPLETED phase)
-        const allWorkAccepted = applications.every(app => 
-          app.phase === "PAYOUT" || app.phase === "COMPLETED"
-        );
-
-        if (allWorkAccepted) {
-          // Update campaign status to COMPLETED
-          const { error: updateError } = await supabaseAdmin
-            .from("v1_campaigns")
-            .update({ status: "COMPLETED" })
-            .eq("id", campaignId);
-
-          if (updateError) {
-            console.error("[v1/checkAndCompleteCampaignOnWorkSubmission] Update error:", updateError);
-            return { success: false, error: updateError.message };
-          }
-
-          return { 
-            success: true, 
-            message: "BULK campaign auto-completed successfully",
-            campaignCompleted: true
-          };
-        }
-
-        return { success: true, message: "Not all selected applications have work accepted yet" };
+      // Route to appropriate completion method
+      if (campaign.type === CampaignType.NORMAL) {
+        return await this.completeNormalCampaignOnWorkSubmission(campaignId, applicationId);
+      } else if (campaign.type === CampaignType.BULK) {
+        return await this.completeBulkCampaignOnWorkSubmission(campaignId);
       }
 
-      return { success: true, message: "Unknown campaign type" };
+      return { success: false, message: "Unknown campaign type" };
     } catch (err) {
       console.error("[v1/checkAndCompleteCampaignOnWorkSubmission] Exception:", err);
       return { success: false, error: err.message };
@@ -1139,10 +1167,10 @@ class CampaignService {
       }
 
       // Only move from LIVE to IN_PROGRESS
-      if (campaign.status === "LIVE") {
+      if (campaign.status === CampaignStatus.LIVE) {
         const { error: updateError } = await supabaseAdmin
           .from("v1_campaigns")
-          .update({ status: "IN_PROGRESS" })
+          .update({ status: CampaignStatus.IN_PROGRESS })
           .eq("id", campaignId);
 
         if (updateError) {
@@ -1170,24 +1198,28 @@ class CampaignService {
   }
 
   /**
-   * Check and expire campaigns that have passed their expiry time without any accepted applications
+   * Check and expire campaigns that have passed their applications_accepted_till timestamp without any accepted applications
    * This should be called periodically (e.g., via cron job or scheduled task)
+   * A campaign expires if:
+   * 1. It's in LIVE status
+   * 2. applications_accepted_till has passed
+   * 3. No applications have been accepted (accepted_count = 0)
    */
   async checkAndExpireCampaigns() {
     try {
       const now = new Date().toISOString();
 
       // Find campaigns that:
-      // 1. Are in LIVE or IN_PROGRESS status
-      // 2. Have expiry_time set
-      // 3. expiry_time has passed
+      // 1. Are in LIVE status
+      // 2. Have applications_accepted_till set
+      // 3. applications_accepted_till has passed
       // 4. Have no accepted applications (accepted_count = 0)
       const { data: expiredCampaigns, error: fetchError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, expiry_time, accepted_count")
-        .in("status", ["LIVE", "IN_PROGRESS"])
-        .not("expiry_time", "is", null)
-        .lt("expiry_time", now)
+        .select("id, title, applications_accepted_till, accepted_count")
+        .eq("status", CampaignStatus.LIVE)
+        .not("applications_accepted_till", "is", null)
+        .lt("applications_accepted_till", now)
         .eq("accepted_count", 0)
         .eq("is_deleted", false);
 
@@ -1204,7 +1236,7 @@ class CampaignService {
       const campaignIds = expiredCampaigns.map(c => c.id);
       const { error: updateError } = await supabaseAdmin
         .from("v1_campaigns")
-        .update({ status: "EXPIRED" })
+        .update({ status: CampaignStatus.EXPIRED })
         .in("id", campaignIds);
 
       if (updateError) {
