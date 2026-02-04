@@ -391,20 +391,6 @@ class PayoutService {
           .eq('id', payout.application_id)
           .maybeSingle();
 
-        if (!appError && application) {
-          // Auto-complete NORMAL campaigns when all applications are completed
-          try {
-            const CampaignService = require('./campaignService');
-            const campaignResult = await CampaignService.checkAndCompleteNormalCampaign(application.campaign_id);
-            if (campaignResult.success && campaignResult.campaignCompleted) {
-              console.log(`[PayoutService/verifyPayoutPayment] Campaign ${application.campaign_id} auto-completed`);
-            }
-          } catch (campaignError) {
-            console.error(`[PayoutService/verifyPayoutPayment] Failed to check campaign completion:`, campaignError);
-            // Don't fail payout verification if campaign check fails, but log it
-          }
-        }
-
       }
 
       // Create transaction record (all amounts in RUPEES)

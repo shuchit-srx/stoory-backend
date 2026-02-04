@@ -86,6 +86,36 @@ app.use("/api/v1", router);
 // Initialize Socket.io
 const io = initSocket(server);
 
+// Initialize automatic campaign expiry checker
+(() => {
+  const CampaignService = require("./services/campaignService");
+  
+  const runExpiryCheck = async (reason = "scheduled") => {
+    try {
+      const result = await CampaignService.checkAndExpireCampaigns();
+      if (result.success) {
+        if (result.expiredCount > 0) {
+          console.log(`✅ [CampaignExpiry] Completed (${reason}) → Expired ${result.expiredCount} campaigns: ${result.expiredCampaignIds.join(", ")}`);
+        } else {
+          console.log(`✅ [CampaignExpiry] Completed (${reason}) → No campaigns to expire`);
+        }
+      } else {
+        console.error(`❌ [CampaignExpiry] Failed (${reason}):`, result.error || result.message);
+      }
+    } catch (e) {
+      console.error(`❌ [CampaignExpiry] Exception (${reason}):`, e);
+    }
+  };
+
+  // Run once on startup (delayed slightly to ensure DB is ready)
+  setTimeout(() => runExpiryCheck("startup"), 5000);
+  
+  // Schedule periodic checks
+  setInterval(() => runExpiryCheck("interval"), EXPIRY_CHECK_MINUTES * 60 * 1000);
+  
+  console.log(`✅ [CampaignExpiry] Automatic expiry check enabled (runs every ${EXPIRY_CHECK_MINUTES} minutes)`);
+})();
+
 // Global Error Handler
 app.use((err, req, res, next) => {
   console.error(err.stack);

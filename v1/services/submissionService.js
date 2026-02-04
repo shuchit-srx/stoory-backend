@@ -669,6 +669,23 @@ class SubmissionService {
               }
             }
           }
+
+          // Check and auto-complete campaign when work is accepted
+          // For NORMAL campaigns: Complete when work is accepted
+          // For BULK campaigns: Complete when all selected applications' work is accepted
+          try {
+            const CampaignService = require('./campaignService');
+            const campaignResult = await CampaignService.checkAndCompleteCampaignOnWorkSubmission(
+              application.campaign_id,
+              application.id
+            );
+            if (campaignResult.success && campaignResult.campaignCompleted) {
+              console.log(`[SubmissionService/reviewWork] Campaign ${application.campaign_id} auto-completed`);
+            }
+          } catch (campaignError) {
+            console.error(`[SubmissionService/reviewWork] Failed to check campaign completion:`, campaignError);
+            // Don't fail work review if campaign check fails, but log it
+          }
         }
       }
 
