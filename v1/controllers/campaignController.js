@@ -128,8 +128,14 @@ class CampaignController {
   /**
    * Get all campaigns with filtering and pagination
    * GET /api/v1/campaigns/all
+   * Returns only:
+   * - LIVE campaigns (all types)
+   * - IN_PROGRESS campaigns (BULK type only)
+   * 
    * - Influencers: See all campaigns
    * - Brand Owners: See all campaigns (can filter by brand_id)
+   * 
+   * Note: Status filter is not accepted - the endpoint automatically returns only LIVE and IN_PROGRESS (BULK) campaigns
    */
   async getCampaigns(req, res) {
     try {
@@ -142,8 +148,8 @@ class CampaignController {
       }
 
       // Extract filters from query params
+      // Note: status filter is ignored - endpoint returns only LIVE and IN_PROGRESS (BULK) campaigns
       const filters = {
-        status: req.query.status,
         type: req.query.type,
         brand_id: req.query.brand_id,
         min_budget: req.query.min_budget

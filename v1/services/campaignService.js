@@ -228,12 +228,15 @@ class CampaignService {
 
   /**
    * Get all campaigns with filtering and pagination
+   * Returns only:
+   * - LIVE campaigns (all types)
+   * - IN_PROGRESS campaigns (BULK type only)
+   * 
    * Influencers can see all campaigns, Brand owners see their own + all
    */
   async getCampaigns(filters = {}, pagination = {}) {
     try {
-      const { status, type, brand_id, min_budget, max_budget, search } =
-        filters;
+      const { type, brand_id, min_budget, max_budget, search } = filters;
 
       // Accept offset + limit for infinite scroll support
       const { limit = 20, offset = 0 } = pagination;
@@ -242,21 +245,16 @@ class CampaignService {
       const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items
       const validatedOffset = Math.max(0, parseInt(offset) || 0);
 
-      // Build query - select only required fields
+      // Build query - select only required fields including status and type for filtering
+      // Filter: LIVE campaigns (all types) OR IN_PROGRESS campaigns (BULK only)
       let query = supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, budget, platform, content_type, brand_id", { count: "exact" })
+        .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type", { count: "exact" })
         .eq("is_deleted", false)
+        .in("status", [CampaignStatus.LIVE, CampaignStatus.IN_PROGRESS])
         .order("created_at", { ascending: false });
 
-      // Apply filters
-      if (status) {
-        const normalizedStatus = normalizeCampaignStatus(status) || "DRAFT";
-        if (this.validateStatus(normalizedStatus)) {
-          query = query.eq("status", normalizedStatus);
-        }
-      }
-
+      // Apply type filter if provided
       if (type) {
         const normalizedType = normalizeCampaignType(type) || "NORMAL";
         if (this.validateType(normalizedType)) {
@@ -315,9 +313,22 @@ class CampaignService {
         }
       }
 
+      // Filter campaigns based on business rules:
+      // - LIVE campaigns: all types allowed
+      // - IN_PROGRESS campaigns: only BULK type allowed
+      const filteredCampaigns = (data || []).filter(campaign => {
+        if (campaign.status === CampaignStatus.LIVE) {
+          return true; // All LIVE campaigns are allowed
+        }
+        if (campaign.status === CampaignStatus.IN_PROGRESS) {
+          return campaign.type === CampaignType.BULK; // Only BULK campaigns in IN_PROGRESS
+        }
+        return false; // Other statuses are not allowed
+      });
+
       // Attach brand details to each campaign - simplified structure
       // Filter out campaigns where brand owner is deleted
-      const campaignsWithBrand = (data || [])
+      const campaignsWithBrand = filteredCampaigns
         .filter(campaign => brandMap[campaign.brand_id]) // Only include campaigns with non-deleted brand owners
         .map(campaign => {
           const brandUser = brandMap[campaign.brand_id];
