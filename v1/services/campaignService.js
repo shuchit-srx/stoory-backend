@@ -11,6 +11,8 @@ const { CampaignStatus, CampaignType, ApplicationPhase, PaymentStatus } = requir
  * Handles all business logic for campaign CRUD operations
  */
 class CampaignService {
+  // Performance constants
+  static MAX_APPLICATIONS_FOR_BATCH = 1000; // Maximum applications to process in a single batch before using aggregation
   /**
    * Validate campaign status enum
    */
@@ -983,12 +985,19 @@ class CampaignService {
 
       if (campaignError) {
         console.error(`[v1/completeNormalCampaignOnWorkSubmission] Campaign fetch error for campaignId=${campaignId}, applicationId=${applicationId}:`, campaignError);
-        return { success: false, error: campaignError.message };
+        return { 
+          success: false, 
+          error: campaignError.message,
+          details: process.env.NODE_ENV === 'development' ? campaignError : undefined
+        };
       }
 
+      // Note: Query already filters deleted campaigns, so if campaign is null, it doesn't exist
       if (!campaign) {
-        console.warn(`[v1/completeNormalCampaignOnWorkSubmission] Campaign not found or deleted: campaignId=${campaignId}`);
-        return { success: false, message: "Campaign not found or deleted" };
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`[v1/completeNormalCampaignOnWorkSubmission] Campaign not found: campaignId=${campaignId}`);
+        }
+        return { success: false, message: "Campaign not found" };
       }
 
       if (campaign.status === CampaignStatus.COMPLETED) {
@@ -1005,11 +1014,17 @@ class CampaignService {
 
       if (appError) {
         console.error(`[v1/completeNormalCampaignOnWorkSubmission] Application fetch error for applicationId=${applicationId}, campaignId=${campaignId}:`, appError);
-        return { success: false, error: appError.message };
+        return { 
+          success: false, 
+          error: appError.message,
+          details: process.env.NODE_ENV === 'development' ? appError : undefined
+        };
       }
 
       if (!application) {
-        console.warn(`[v1/completeNormalCampaignOnWorkSubmission] Application not found: applicationId=${applicationId}`);
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`[v1/completeNormalCampaignOnWorkSubmission] Application not found: applicationId=${applicationId}`);
+        }
         return { success: false, message: "Application not found" };
       }
 
@@ -1022,7 +1037,11 @@ class CampaignService {
 
         if (updateError) {
           console.error(`[v1/completeNormalCampaignOnWorkSubmission] Update error for campaignId=${campaignId}:`, updateError);
-          return { success: false, error: updateError.message };
+          return { 
+            success: false, 
+            error: updateError.message,
+            details: process.env.NODE_ENV === 'development' ? updateError : undefined
+          };
         }
 
         console.log(`[v1/completeNormalCampaignOnWorkSubmission] NORMAL campaign completed: campaignId=${campaignId}, applicationId=${applicationId}`);
@@ -1036,7 +1055,12 @@ class CampaignService {
       return { success: true, message: "Application work not yet accepted" };
     } catch (err) {
       console.error(`[v1/completeNormalCampaignOnWorkSubmission] Exception for campaignId=${campaignId}, applicationId=${applicationId}:`, err);
-      return { success: false, error: err.message };
+      console.error(`[v1/completeNormalCampaignOnWorkSubmission] Stack trace:`, err.stack);
+      return { 
+        success: false, 
+        error: err.message,
+        details: process.env.NODE_ENV === 'development' ? { stack: err.stack, ...err } : undefined
+      };
     }
   }
 
@@ -1079,7 +1103,11 @@ class CampaignService {
 
       if (selectedError) {
         console.error(`[v1/completeBulkCampaignOnWorkSubmission] Selected applications fetch error for campaignId=${campaignId}:`, selectedError);
-        return { success: false, error: selectedError.message };
+        return { 
+          success: false, 
+          error: selectedError.message,
+          details: process.env.NODE_ENV === 'development' ? selectedError : undefined
+        };
       }
 
       if (!selectedApplications || selectedApplications.length === 0) {
@@ -1088,9 +1116,14 @@ class CampaignService {
 
       // Get application IDs that are selected
       const selectedApplicationIds = selectedApplications.map(sa => sa.application_id);
+      
+      // Performance safeguard: Warn and use aggregation for very large datasets
+      if (selectedApplicationIds.length > CampaignService.MAX_APPLICATIONS_FOR_BATCH) {
+        console.warn(`[v1/completeBulkCampaignOnWorkSubmission] Large dataset detected for campaignId=${campaignId}: ${selectedApplicationIds.length} applications. Consider database-level aggregation.`);
+        // For very large datasets, use database-level aggregation instead
+        return await this.completeBulkCampaignOnWorkSubmissionWithAggregation(campaignId, selectedApplicationIds);
+      }
 
-      // Performance consideration: For large datasets (>1000 applications), consider batching
-      // For now, we fetch all at once as most campaigns will have manageable numbers
       // Get all selected applications and check their phases
       // Note: Index on v1_applications(campaign_id, id, phase) recommended
       const { data: applications, error: appsError } = await supabaseAdmin
@@ -1101,11 +1134,17 @@ class CampaignService {
 
       if (appsError) {
         console.error(`[v1/completeBulkCampaignOnWorkSubmission] Applications fetch error for campaignId=${campaignId}:`, appsError);
-        return { success: false, error: appsError.message };
+        return { 
+          success: false, 
+          error: appsError.message,
+          details: process.env.NODE_ENV === 'development' ? appsError : undefined
+        };
       }
 
       if (!applications || applications.length === 0) {
-        console.warn(`[v1/completeBulkCampaignOnWorkSubmission] No applications found for campaignId=${campaignId} despite selected applications existing`);
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`[v1/completeBulkCampaignOnWorkSubmission] No applications found for campaignId=${campaignId} despite selected applications existing`);
+        }
         return { success: true, message: "No applications found" };
       }
 
@@ -1125,7 +1164,11 @@ class CampaignService {
 
         if (updateError) {
           console.error(`[v1/completeBulkCampaignOnWorkSubmission] Update error for campaignId=${campaignId}:`, updateError);
-          return { success: false, error: updateError.message };
+          return { 
+            success: false, 
+            error: updateError.message,
+            details: process.env.NODE_ENV === 'development' ? updateError : undefined
+          };
         }
 
         console.log(`[v1/completeBulkCampaignOnWorkSubmission] BULK campaign completed: campaignId=${campaignId}, selectedApplications=${selectedApplicationIds.length}`);
@@ -1147,7 +1190,98 @@ class CampaignService {
       return { success: true, message: "Not all selected applications have work accepted yet" };
     } catch (err) {
       console.error(`[v1/completeBulkCampaignOnWorkSubmission] Exception for campaignId=${campaignId}:`, err);
-      return { success: false, error: err.message };
+      console.error(`[v1/completeBulkCampaignOnWorkSubmission] Stack trace:`, err.stack);
+      return { 
+        success: false, 
+        error: err.message,
+        details: process.env.NODE_ENV === 'development' ? { stack: err.stack, ...err } : undefined
+      };
+    }
+  }
+
+  /**
+   * Complete BULK campaign using database-level aggregation for large datasets
+   * This method uses COUNT queries instead of fetching all rows
+   * 
+   * @param {string} campaignId - The campaign ID to check
+   * @param {string[]} selectedApplicationIds - Array of selected application IDs
+   * @returns {Promise<Object>} Result object with success status and message
+   */
+  async completeBulkCampaignOnWorkSubmissionWithAggregation(campaignId, selectedApplicationIds) {
+    try {
+      // Use database-level aggregation to count applications in required phases
+      // This is more efficient for large datasets than fetching all rows
+      const { count: totalSelected, error: countError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("*", { count: "exact", head: true })
+        .eq("campaign_id", campaignId)
+        .in("id", selectedApplicationIds);
+
+      if (countError) {
+        console.error(`[v1/completeBulkCampaignOnWorkSubmissionWithAggregation] Count error for campaignId=${campaignId}:`, countError);
+        return { 
+          success: false, 
+          error: countError.message,
+          details: process.env.NODE_ENV === 'development' ? countError : undefined
+        };
+      }
+
+      // Count applications in PAYOUT or COMPLETED phase
+      const { count: completedCount, error: completedCountError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("*", { count: "exact", head: true })
+        .eq("campaign_id", campaignId)
+        .in("id", selectedApplicationIds)
+        .in("phase", [ApplicationPhase.PAYOUT, ApplicationPhase.COMPLETED]);
+
+      if (completedCountError) {
+        console.error(`[v1/completeBulkCampaignOnWorkSubmissionWithAggregation] Completed count error for campaignId=${campaignId}:`, completedCountError);
+        return { 
+          success: false, 
+          error: completedCountError.message,
+          details: process.env.NODE_ENV === 'development' ? completedCountError : undefined
+        };
+      }
+
+      // Check if all selected applications have work accepted
+      if (totalSelected > 0 && completedCount === totalSelected) {
+        // Update campaign status to COMPLETED
+        const { error: updateError } = await supabaseAdmin
+          .from("v1_campaigns")
+          .update({ status: CampaignStatus.COMPLETED })
+          .eq("id", campaignId);
+
+        if (updateError) {
+          console.error(`[v1/completeBulkCampaignOnWorkSubmissionWithAggregation] Update error for campaignId=${campaignId}:`, updateError);
+          return { 
+            success: false, 
+            error: updateError.message,
+            details: process.env.NODE_ENV === 'development' ? updateError : undefined
+          };
+        }
+
+        console.log(`[v1/completeBulkCampaignOnWorkSubmissionWithAggregation] BULK campaign completed (large dataset): campaignId=${campaignId}, selectedApplications=${totalSelected}`);
+        return { 
+          success: true, 
+          message: "BULK campaign auto-completed successfully",
+          campaignCompleted: true
+        };
+      }
+
+      // Log progress for debugging (only in development)
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[v1/completeBulkCampaignOnWorkSubmissionWithAggregation] Campaign ${campaignId}: ${completedCount}/${totalSelected} applications have work accepted`);
+      }
+
+      return { success: true, message: "Not all selected applications have work accepted yet" };
+    } catch (err) {
+      console.error(`[v1/completeBulkCampaignOnWorkSubmissionWithAggregation] Exception for campaignId=${campaignId}:`, err);
+      console.error(`[v1/completeBulkCampaignOnWorkSubmissionWithAggregation] Stack trace:`, err.stack);
+      return { 
+        success: false, 
+        error: err.message,
+        details: process.env.NODE_ENV === 'development' ? { stack: err.stack, ...err } : undefined
+      };
     }
   }
 
@@ -1212,12 +1346,19 @@ class CampaignService {
 
       if (campaignError) {
         console.error(`[v1/moveCampaignToInProgress] Campaign fetch error for campaignId=${campaignId}:`, campaignError);
-        return { success: false, error: campaignError.message };
+        return { 
+          success: false, 
+          error: campaignError.message,
+          details: process.env.NODE_ENV === 'development' ? campaignError : undefined
+        };
       }
 
+      // Note: Query already filters deleted campaigns, so if campaign is null, it doesn't exist
       if (!campaign) {
-        console.warn(`[v1/moveCampaignToInProgress] Campaign not found or deleted: campaignId=${campaignId}`);
-        return { success: false, message: "Campaign not found or deleted" };
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`[v1/moveCampaignToInProgress] Campaign not found: campaignId=${campaignId}`);
+        }
+        return { success: false, message: "Campaign not found" };
       }
 
       // Only move from LIVE to IN_PROGRESS
@@ -1229,7 +1370,11 @@ class CampaignService {
 
         if (updateError) {
           console.error(`[v1/moveCampaignToInProgress] Update error for campaignId=${campaignId}:`, updateError);
-          return { success: false, error: updateError.message };
+          return { 
+            success: false, 
+            error: updateError.message,
+            details: process.env.NODE_ENV === 'development' ? updateError : undefined
+          };
         }
 
         console.log(`[v1/moveCampaignToInProgress] Campaign moved to IN_PROGRESS: campaignId=${campaignId}`);
@@ -1251,7 +1396,12 @@ class CampaignService {
       };
     } catch (err) {
       console.error(`[v1/moveCampaignToInProgress] Exception for campaignId=${campaignId}:`, err);
-      return { success: false, error: err.message };
+      console.error(`[v1/moveCampaignToInProgress] Stack trace:`, err.stack);
+      return { 
+        success: false, 
+        error: err.message,
+        details: process.env.NODE_ENV === 'development' ? { stack: err.stack, ...err } : undefined
+      };
     }
   }
 
@@ -1295,7 +1445,11 @@ class CampaignService {
 
       if (fetchError) {
         console.error(`[v1/checkAndExpireCampaigns] Fetch error:`, fetchError);
-        return { success: false, error: fetchError.message };
+        return { 
+          success: false, 
+          error: fetchError.message,
+          details: process.env.NODE_ENV === 'development' ? fetchError : undefined
+        };
       }
 
       if (!expiredCampaigns || expiredCampaigns.length === 0) {
@@ -1313,7 +1467,11 @@ class CampaignService {
 
       if (updateError) {
         console.error(`[v1/checkAndExpireCampaigns] Update error for ${campaignIds.length} campaigns:`, updateError);
-        return { success: false, error: updateError.message };
+        return { 
+          success: false, 
+          error: updateError.message,
+          details: process.env.NODE_ENV === 'development' ? updateError : undefined
+        };
       }
 
       console.log(`[v1/checkAndExpireCampaigns] Expired ${expiredCampaigns.length} campaigns: ${campaignIds.join(", ")}`);
@@ -1326,7 +1484,12 @@ class CampaignService {
       };
     } catch (err) {
       console.error(`[v1/checkAndExpireCampaigns] Exception:`, err);
-      return { success: false, error: err.message };
+      console.error(`[v1/checkAndExpireCampaigns] Stack trace:`, err.stack);
+      return { 
+        success: false, 
+        error: err.message,
+        details: process.env.NODE_ENV === 'development' ? { stack: err.stack, ...err } : undefined
+      };
     }
   }
 
