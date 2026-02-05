@@ -52,7 +52,7 @@ const corsOptions = {
         }
         
         // Log the blocked origin for debugging
-        console.log('CORS blocked origin:', origin);
+        console.log(`[v1/CORS] Blocked origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -89,14 +89,35 @@ const io = initSocket(server);
 // Initialize automatic campaign expiry checker
 (() => {
   const CampaignService = require("./services/campaignService");
-  const EXPIRY_CHECK_MINUTES = process.env.ENABLE_EXPIRY_CHECK ? parseInt(process.env.EXPIRY_CHECK_MINUTES || -1) : -1;
-
-  if(EXPIRY_CHECK_MINUTES === -1) {
-    console.log("⏳ [CampaignExpiry] Disabled via ENABLE_EXPIRY_CHECK");
+  
+  // Validate environment variables
+  const ENABLE_EXPIRY_CHECK = process.env.ENABLE_EXPIRY_CHECK;
+  const EXPIRY_CHECK_MINUTES_STR = process.env.EXPIRY_CHECK_MINUTES;
+  
+  // Validate ENABLE_EXPIRY_CHECK
+  if (ENABLE_EXPIRY_CHECK !== undefined && ENABLE_EXPIRY_CHECK !== 'true' && ENABLE_EXPIRY_CHECK !== 'false') {
+    console.error("❌ [CampaignExpiry] Invalid ENABLE_EXPIRY_CHECK value. Must be 'true' or 'false'. Disabling expiry check.");
     return;
   }
-  else {
-    console.log(`✅ [CampaignExpiry] Enabled (runs every ${EXPIRY_CHECK_MINUTES} minutes)`);
+  
+  // If explicitly disabled, return early
+  if (ENABLE_EXPIRY_CHECK === 'false') {
+    console.log("⏳ [CampaignExpiry] Disabled via ENABLE_EXPIRY_CHECK=false");
+    return;
+  }
+  
+  // Validate EXPIRY_CHECK_MINUTES
+  let EXPIRY_CHECK_MINUTES;
+  if (EXPIRY_CHECK_MINUTES_STR !== undefined) {
+    EXPIRY_CHECK_MINUTES = parseInt(EXPIRY_CHECK_MINUTES_STR, 10);
+    if (isNaN(EXPIRY_CHECK_MINUTES) || EXPIRY_CHECK_MINUTES < 1) {
+      console.error(`❌ [CampaignExpiry] Invalid EXPIRY_CHECK_MINUTES value: "${EXPIRY_CHECK_MINUTES_STR}". Must be a positive integer. Disabling expiry check.`);
+      return;
+    }
+  } else {
+    // Default to 60 minutes if not specified
+    EXPIRY_CHECK_MINUTES = 60;
+    console.warn("⚠️ [CampaignExpiry] EXPIRY_CHECK_MINUTES not set, using default: 60 minutes");
   }
 
   const runExpiryCheck = async (reason = "scheduled") => {
@@ -106,7 +127,10 @@ const io = initSocket(server);
         if (result.expiredCount > 0) {
           console.log(`✅ [CampaignExpiry] Completed (${reason}) → Expired ${result.expiredCount} campaigns: ${result.expiredCampaignIds.join(", ")}`);
         } else {
-          console.log(`✅ [CampaignExpiry] Completed (${reason}) → No campaigns to expire`);
+          // Only log in development to reduce noise
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`✅ [CampaignExpiry] Completed (${reason}) → No campaigns to expire`);
+          }
         }
       } else {
         console.error(`❌ [CampaignExpiry] Failed (${reason}):`, result.error || result.message);
@@ -117,28 +141,30 @@ const io = initSocket(server);
   };
 
   // Run once on startup (delayed slightly to ensure DB is ready)
-  setTimeout(() => runExpiryCheck("startup"), 5000);
+  const startupTimeout = setTimeout(() => runExpiryCheck("startup"), 5000);
   
-  // Schedule periodic checks
-  setInterval(() => runExpiryCheck("interval"), EXPIRY_CHECK_MINUTES * 60 * 1000);
+  // Schedule periodic checks and store interval ID
+  const expiryIntervalId = setInterval(() => runExpiryCheck("interval"), EXPIRY_CHECK_MINUTES * 60 * 1000);
+  
+  // Cleanup on shutdown to prevent memory leaks
+  const cleanup = () => {
+    clearTimeout(startupTimeout);
+    clearInterval(expiryIntervalId);
+    console.log("🛑 [CampaignExpiry] Cleaned up expiry check scheduler");
+  };
+  
+  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", cleanup);
+  process.on("exit", cleanup);
   
   console.log(`✅ [CampaignExpiry] Automatic expiry check enabled (runs every ${EXPIRY_CHECK_MINUTES} minutes)`);
 })();
 
 // Global Error Handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error(`[v1/ErrorHandler] ${err.stack}`);
   res.status(500).send('Something broke!');
 });
-
-// Server startup moved to root index.js
-// const PORT = process.env.PORT || 3000;
-// 
-// server.listen(PORT, () => {
-//   console.log(`Server running on port ${PORT}`);
-//   console.log(`Socket.io initialized`);
-//   console.log(`✅ v1 API routes mounted at /api/v1`);
-// });
 
 // Export app, server, io, and router for use by root index.js
 module.exports = {
