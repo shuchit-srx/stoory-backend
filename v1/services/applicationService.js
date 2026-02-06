@@ -366,6 +366,21 @@ class ApplicationService {
           
           console.log(`✅ [ApplicationService/bulkAccept] MOU generated successfully for application ${applicationId}`);
 
+          // Notify the influencer that their application was accepted
+          try {
+            const NotificationService = require('./notificationService');
+            const { data: appForNotif } = await supabaseAdmin
+              .from('v1_applications')
+              .select('influencer_id')
+              .eq('id', applicationId)
+              .maybeSingle();
+            if (appForNotif?.influencer_id) {
+              await NotificationService.notifyApplicationAccepted(applicationId, appForNotif.influencer_id, brandId);
+            }
+          } catch (notifError) {
+            console.error(`[ApplicationService/bulkAccept] Notification error for ${applicationId}:`, notifError);
+          }
+
           individualResult = {
             applicationId,
             success: true,
@@ -710,6 +725,39 @@ class ApplicationService {
       } catch (chatError) {
         console.error(`[ApplicationService/complete] Failed to close chat:`, chatError);
         // Don't fail completion if chat closure fails, but log it
+      }
+
+      // Notify both parties about completion
+      try {
+        const NotificationService = require('./notificationService');
+        const { data: completedApp } = await supabaseAdmin
+          .from('v1_applications')
+          .select('influencer_id, brand_id, v1_campaigns(id, title, brand_id)')
+          .eq('id', applicationId)
+          .maybeSingle();
+
+        if (completedApp) {
+          const brandId = completedApp.brand_id || completedApp.v1_campaigns?.brand_id;
+          const influencerId = completedApp.influencer_id;
+          const campaignTitle = completedApp.v1_campaigns?.title || 'Campaign';
+
+          // Notify influencer
+          if (influencerId) {
+            await NotificationService.sendAndStoreNotification(influencerId, {
+              type: 'CAMPAIGN_COMPLETED',
+              title: `${campaignTitle} Update`,
+              body: `Congratulations! "${campaignTitle}" is now complete. Your payout has been processed`,
+              clickAction: `/applications/${applicationId}`,
+              data: { applicationId, campaignId: completedApp.v1_campaigns?.id },
+            });
+          }
+          // Notify brand
+          if (brandId) {
+            await NotificationService.notifyCampaignCompleted(completedApp.v1_campaigns?.id, brandId);
+          }
+        }
+      } catch (notifError) {
+        console.error(`[ApplicationService/complete] Notification error:`, notifError);
       }
 
       return {
