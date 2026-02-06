@@ -842,8 +842,9 @@ class AuthService {
   /**
    * Register brand owner with email and password
    */
-  async registerBrandOwner(email, password, name) {
+  async registerBrandOwner(userData) {
     let createdUserId = null; // Track created user ID for cleanup
+    const { email, password, name, phone_number, dob, gender } = userData;
 
     try {
       // 1) Validate email format
@@ -885,6 +886,18 @@ class AuthService {
       const emailVerificationToken = this.generateEmailVerificationToken();
       const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
+      // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+      let dobValue = null;
+      if (dob !== undefined && dob !== null && dob !== "") {
+        const dobDate = new Date(dob);
+        if (!isNaN(dobDate.getTime())) {
+          dobValue = dobDate.toISOString();
+        }
+      }
+
+      // Normalize gender if provided
+      const normalizedGender = gender ? normalizeGender(gender) : null;
+
       // 6) Create user with verification token stored temporarily
       const id = crypto.randomUUID();
       const { data: created, error } = await supabaseAdmin
@@ -895,6 +908,9 @@ class AuthService {
           password_hash: passwordHash,
           role: "BRAND_OWNER",
           name: name || null,
+          phone_number: phone_number || null,
+          dob: dobValue,
+          gender: normalizedGender,
           email_verified: false,
           password_reset_token: emailVerificationToken, // Temporarily store here
           password_reset_token_expires_at: verificationExpiresAt.toISOString(),
@@ -915,11 +931,11 @@ class AuthService {
       createdUserId = created.id;
 
       // 7) Create brand profile in v1_brand_profiles table
-      // brand_name will be empty string (required field) - will be updated in complete profile
       const ProfileService = require("./profileService");
-      const profileResult = await ProfileService.createBrandProfile(created, {
-        brand_name: "", // Empty string - required field, will be set in complete profile
-      });
+      const profileResult = await ProfileService.createBrandProfile(
+        created,
+        userData || {}
+      );
 
       if (!profileResult.success) {
         console.error(
@@ -1472,6 +1488,78 @@ class AuthService {
     } catch (err) {
       console.error("[v1/resetPassword] Exception:", err);
       return { success: false, message: "Failed to reset password" };
+    }
+  }
+
+  /**
+   * Change password for a logged-in user
+   */
+  async changePassword(userId, currentPassword, newPassword) {
+    try {
+      // 1) Ensure new password length >= 8
+      if (!newPassword || newPassword.length < 8) {
+        return {
+          success: false,
+          message: "New password must be at least 8 characters",
+        };
+      }
+
+      // 2) Load user from v1_users by id, role = "BRAND_OWNER", is_deleted = false
+      const { data: user, error } = await supabaseAdmin
+        .from("v1_users")
+        .select("*")
+        .eq("id", userId)
+        .eq("role", "BRAND_OWNER")
+        .eq("is_deleted", false)
+        .single();
+
+      if (error || !user) {
+        return {
+          success: false,
+          message: "User not found or access denied",
+          code: "USER_NOT_FOUND",
+        };
+      }
+
+      // 3) If no password_hash → return { success: false, code: "PASSWORD_NOT_SET" }
+      if (!user.password_hash) {
+        return {
+          success: false,
+          message: "Password not set. Please use password reset.",
+          code: "PASSWORD_NOT_SET",
+        };
+      }
+
+      // 4) Compare currentPassword with user.password_hash using bcrypt
+      const isMatch = await this.comparePassword(currentPassword, user.password_hash);
+      if (!isMatch) {
+        return {
+          success: false,
+          message: "Current password is incorrect",
+          code: "INVALID_CURRENT_PASSWORD",
+        };
+      }
+
+      // 5) Hash new password and update v1_users.password_hash
+      const newPasswordHash = await this.hashPassword(newPassword);
+      const { error: updateError } = await supabaseAdmin
+        .from("v1_users")
+        .update({ password_hash: newPasswordHash })
+        .eq("id", userId);
+
+      if (updateError) {
+        console.error("[v1/changePassword] Update error:", updateError);
+        return { success: false, message: "Failed to update password" };
+      }
+
+      // 6) Return { success: true, message: "Password changed successfully" }
+      return {
+        success: true,
+        message: "Password changed successfully",
+      };
+    } catch (err) {
+      console.error("[v1/changePassword] Exception:", err);
+      return { success: false, message: "Failed to change password" };
     }
   }
 

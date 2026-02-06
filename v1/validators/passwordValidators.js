@@ -36,7 +36,9 @@ const validateBrandRegister = [
       const normalized = String(value).toLowerCase().trim();
       const validValues = ["android", "ios", "web", "unknown"];
       if (!validValues.includes(normalized)) {
-        throw new Error("device_type must be one of: android, ios, web, unknown");
+        throw new Error(
+          "device_type must be one of: android, ios, web, unknown"
+        );
       }
       return true;
     }),
@@ -45,6 +47,38 @@ const validateBrandRegister = [
     .isString()
     .withMessage("device_id must be a string")
     .trim(),
+  body("phone_number")
+    .optional()
+    .isString()
+    .withMessage("phone_number must be a string")
+    .trim(),
+  body("brand_name")
+    .optional()
+    .isString()
+    .withMessage("brand_name must be a string")
+    .trim(),
+  body("brand_description")
+    .optional()
+    .isString()
+    .withMessage("brand_description must be a string")
+    .trim(),
+  body("dob")
+    .optional()
+    .isISO8601()
+    .withMessage("dob must be a valid date (YYYY-MM-DD)"),
+  body("gender")
+    .optional()
+    .isString()
+    .withMessage("gender must be a string")
+    .custom((value) => {
+      if (!value) return true;
+      const normalized = String(value).toUpperCase().trim();
+      const validGenders = ["MALE", "FEMALE", "OTHER"];
+      if (!validGenders.includes(normalized)) {
+        throw new Error("gender must be one of: MALE, FEMALE, OTHER");
+      }
+      return true;
+    }),
 ];
 
 const validateBrandLogin = [
@@ -52,9 +86,7 @@ const validateBrandLogin = [
     .isEmail()
     .withMessage("Valid email address required")
     .normalizeEmail(),
-  body("password")
-    .notEmpty()
-    .withMessage("Password is required"),
+  body("password").notEmpty().withMessage("Password is required"),
   body("fcm_token")
     .optional()
     .isString()
@@ -69,7 +101,9 @@ const validateBrandLogin = [
       const normalized = String(value).toLowerCase().trim();
       const validValues = ["android", "ios", "web", "unknown"];
       if (!validValues.includes(normalized)) {
-        throw new Error("device_type must be one of: android, ios, web, unknown");
+        throw new Error(
+          "device_type must be one of: android, ios, web, unknown"
+        );
       }
       return true;
     }),
@@ -81,9 +115,7 @@ const validateBrandLogin = [
 ];
 
 const validateEmailVerification = [
-  body("token")
-    .notEmpty()
-    .withMessage("Verification token is required"),
+  body("token").notEmpty().withMessage("Verification token is required"),
 ];
 
 const validateResendEmailVerification = [
@@ -101,9 +133,20 @@ const validateForgotPassword = [
 ];
 
 const validateResetPassword = [
-  body("token")
+  body("token").notEmpty().withMessage("Reset token is required"),
+  body("new_password")
+    .isLength({ min: 8 })
+    .withMessage("Password must be at least 8 characters")
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+    .withMessage(
+      "Password must contain at least one uppercase letter, one lowercase letter, and one number"
+    ),
+];
+
+const validateChangePassword = [
+  body("current_password")
     .notEmpty()
-    .withMessage("Reset token is required"),
+    .withMessage("Current password is required"),
   body("new_password")
     .isLength({ min: 8 })
     .withMessage("Password must be at least 8 characters")
@@ -120,5 +163,5 @@ module.exports = {
   validateResendEmailVerification,
   validateForgotPassword,
   validateResetPassword,
+  validateChangePassword,
 };
-
