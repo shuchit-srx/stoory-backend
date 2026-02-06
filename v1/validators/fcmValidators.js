@@ -25,8 +25,8 @@ const validateRegisterToken = [
       if (apnsPattern.test(trimmed)) {
         throw new Error("This appears to be an APNs token. Please send FCM token from Firebase instead.");
       }
-      // Basic pattern validation
-      const fcmPattern = /^[A-Za-z0-9_-]+$/;
+      // Basic pattern validation (FCM tokens contain alphanumeric, underscore, hyphen, and colon)
+      const fcmPattern = /^[A-Za-z0-9_:=-]+$/;
       if (!fcmPattern.test(trimmed)) {
         throw new Error("FCM token contains invalid characters.");
       }
