@@ -11,6 +11,7 @@ const {
   validateForgotPassword,
   validateResetPassword,
   validateVerifyPAN,
+  validateChangePassword,
 } = require("../validators");
 const AuthService = require("../services/authService");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -77,6 +78,13 @@ router.post(
   "/brand/reset-password",
   validateResetPassword,
   AuthController.resetPassword
+);
+
+router.post(
+  "/brand/change-password",
+  authMiddleware.authenticateToken,
+  validateChangePassword,
+  AuthController.changePassword
 );
 
 // ============================================
