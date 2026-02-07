@@ -267,7 +267,6 @@ class CampaignController {
           ? parseFloat(req.query.max_budget)
           : undefined,
         search: req.query.search,
-        category: req.query.category,
       };
 
       // Remove undefined filters
