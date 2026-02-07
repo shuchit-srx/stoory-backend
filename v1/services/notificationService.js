@@ -162,9 +162,14 @@ class NotificationService {
     if (type === 'CHAT_MESSAGE' && data?.applicationId && data?.senderId) {
       return `${userId}_${type}_${data.applicationId}_${data.senderId}`;
     }
+
+    // Include status for review types so ACCEPTED vs REVISION are distinct
+    if (['SCRIPT_REVIEW', 'WORK_REVIEW'].includes(type) && data?.applicationId) {
+      return `${userId}_${type}_${data.applicationId}_${data.status || 'unknown'}`;
+    }
     
-    if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW', 
-         'WORK_SUBMITTED', 'WORK_REVIEW', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
+    if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'SCRIPT_SUBMITTED',
+         'WORK_SUBMITTED', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
          'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'].includes(type) && 
         data?.applicationId) {
       return `${userId}_${type}_${data.applicationId}`;
@@ -198,8 +203,13 @@ class NotificationService {
         existingQuery = existingQuery
           .eq('data->>applicationId', notificationData.data.applicationId)
           .eq('data->>senderId', notificationData.data.senderId);
-      } else if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'SCRIPT_SUBMITTED', 'SCRIPT_REVIEW', 
-                  'WORK_SUBMITTED', 'WORK_REVIEW', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
+      } else if (['SCRIPT_REVIEW', 'WORK_REVIEW'].includes(notificationData.type) && 
+                 notificationData.data?.applicationId) {
+        existingQuery = existingQuery
+          .eq('data->>applicationId', notificationData.data.applicationId)
+          .eq('data->>status', notificationData.data.status || 'unknown');
+      } else if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'SCRIPT_SUBMITTED',
+                  'WORK_SUBMITTED', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
                   'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'].includes(notificationData.type) && 
                  notificationData.data?.applicationId) {
         existingQuery = existingQuery.eq('data->>applicationId', notificationData.data.applicationId);
@@ -599,10 +609,11 @@ class NotificationService {
         .eq('id', influencerId)
         .single();
 
+      const campaignTitle = campaign?.title || 'Campaign';
       const notificationData = {
         type: 'APPLICATION_CREATED',
-        title: 'New Application',
-        body: `"${influencer?.name || 'influencer_name'}" applied for "${campaign?.title || 'campaign_name'}"`,
+        title: `${campaignTitle} Update`,
+        body: `"${influencer?.name || 'An influencer'}" applied for "${campaignTitle}"`,
         clickAction: `/applications/${applicationId}`,
         data: { applicationId, campaignId, influencerId, brandId },
       };
@@ -629,10 +640,11 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
       const notificationData = {
         type: 'APPLICATION_ACCEPTED',
-        title: 'Application Accepted!',
-        body: `"${brand?.brand_name || 'brand_owner'}" accepted your application for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
+        title: `${campaignTitle} Update`,
+        body: `"${brand?.brand_name || 'The brand'}" accepted your application for "${campaignTitle}"`,
         clickAction: `/applications/${applicationId}`,
         data: { applicationId, brandId, influencerId },
       };
@@ -657,14 +669,14 @@ class NotificationService {
         return { success: false, error: 'Application not found' };
       }
 
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
       const cancelledByName = cancelledByRole === 'INFLUENCER' 
         ? 'The influencer' 
-        : 'The brand owner';
+        : 'The brand';
 
       const notificationData = {
         type: 'APPLICATION_CANCELLED',
-        title: 'Application Cancelled',
+        title: `${campaignTitle} Update`,
         body: `${cancelledByName} cancelled the application for "${campaignTitle}"`,
         clickAction: `/applications/${applicationId}`,
         data: { applicationId, cancelledByRole },
@@ -692,12 +704,12 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
 
       const notificationData = {
         type: 'MOU_ACCEPTED_BY_BRAND',
-        title: 'MOU acceptance',
-        body: `"${brand?.brand_name || 'brand_owner'}" accepted the MOU for "${campaignTitle}"`,
+        title: `${campaignTitle} Update`,
+        body: `"${brand?.brand_name || 'The brand'}" accepted the MOU for "${campaignTitle}"`,
         clickAction: `/applications/${applicationId}/mou`,
         data: { mouId, applicationId, brandId, influencerId },
       };
@@ -714,16 +726,22 @@ class NotificationService {
     try {
       const { data: application } = await supabaseAdmin
         .from('v1_applications')
-        .select('id, v1_campaigns(title)')
+        .select('id, influencer_id, v1_campaigns(title)')
         .eq('id', applicationId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const { data: influencer } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', influencerId)
+        .maybeSingle();
+
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
 
       const notificationData = {
         type: 'MOU_ACCEPTED_BY_INFLUENCER',
-        title: 'MOU acceptance',
-        body: `"Influencer" accepted the MOU for "${campaignTitle}"`,
+        title: `${campaignTitle} Update`,
+        body: `"${influencer?.name || 'The influencer'}" accepted the MOU for "${campaignTitle}"`,
         clickAction: `/applications/${applicationId}/mou`,
         data: { mouId, applicationId, brandId, influencerId },
       };
@@ -745,13 +763,13 @@ class NotificationService {
         .eq('id', applicationId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
 
       // Notify brand_owner
       const brandNotificationData = {
         type: 'MOU_FULLY_ACCEPTED',
-        title: 'MOU accepted by both',
-        body: 'Both party accepted the MOU, proceed with payment',
+        title: `${campaignTitle} Update`,
+        body: `Both parties accepted the MOU for "${campaignTitle}". Proceed with payment`,
         clickAction: `/applications/${applicationId}/payment`,
         data: { 
           mouId, 
@@ -766,8 +784,8 @@ class NotificationService {
       // Notify influencer
       const influencerNotificationData = {
         type: 'MOU_FULLY_ACCEPTED',
-        title: 'MOU accepted by both',
-        body: 'Both party accepted the MOU, wait for payment completion',
+        title: `${campaignTitle} Update`,
+        body: `Both parties accepted the MOU for "${campaignTitle}". Waiting for payment`,
         clickAction: `/applications/${applicationId}`,
         data: { 
           mouId, 
@@ -795,7 +813,7 @@ class NotificationService {
         .eq('id', applicationId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
       const requiresScript = application?.v1_campaigns?.requires_script || false;
       
       // Check if script was already accepted (if script is required)
@@ -812,14 +830,14 @@ class NotificationService {
 
       let body;
       if (requiresScript && !scriptAccepted) {
-        body = `Payment Successful for the campaign "${campaignTitle}", submit your script`;
+        body = `Payment completed for "${campaignTitle}". Submit your script`;
       } else {
-        body = `Payment Successful for the campaign "${campaignTitle}", submit your work`;
+        body = `Payment completed for "${campaignTitle}". Submit your work`;
       }
 
       const notificationData = {
         type: 'PAYMENT_COMPLETED',
-        title: 'Payment Successful',
+        title: `${campaignTitle} Update`,
         body,
         clickAction: `/applications/${applicationId}`,
         data: { applicationId, brandId, influencerId },
@@ -847,10 +865,11 @@ class NotificationService {
         .eq('id', influencerId)
         .maybeSingle();
 
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
       const notificationData = {
         type: 'SCRIPT_SUBMITTED',
-        title: 'Script submitted',
-        body: `"${influencer?.name || 'influencer_name'}" submitted a script for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
+        title: `${campaignTitle} Update`,
+        body: `"${influencer?.name || 'The influencer'}" submitted a script for "${campaignTitle}"`,
         clickAction: `/applications/${applicationId}/scripts`,
         data: { scriptId, applicationId, brandId, influencerId },
       };
@@ -877,24 +896,21 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = script?.v1_applications?.v1_campaigns?.title || 'Campaign_name';
-      const brandName = brand?.brand_name || 'brand_owner_name';
+      const campaignTitle = script?.v1_applications?.v1_campaigns?.title || 'Campaign';
+      const brandName = brand?.brand_name || 'The brand';
 
-      let title, body;
+      let body;
       if (status === 'ACCEPTED') {
-        title = 'Script accepted';
-        body = `"${brandName}" accepted your script for "${campaignTitle}". Proceed for work submission`;
+        body = `"${brandName}" accepted your script for "${campaignTitle}". Submit your work`;
       } else if (status === 'REVISION') {
-        title = 'Script revised';
-        body = `"${brandName}" revised your script for "${campaignTitle}"`;
+        body = `"${brandName}" requested revision on your script for "${campaignTitle}"`;
       } else {
-        title = 'Script rejected';
         body = `"${brandName}" rejected your script for "${campaignTitle}"`;
       }
 
       const notificationData = {
         type: 'SCRIPT_REVIEW',
-        title,
+        title: `${campaignTitle} Update`,
         body,
         clickAction: `/applications/${applicationId}/scripts`,
         data: { scriptId, applicationId, brandId, influencerId, status, remarks },
@@ -922,10 +938,11 @@ class NotificationService {
         .eq('id', influencerId)
         .maybeSingle();
 
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
       const notificationData = {
         type: 'WORK_SUBMITTED',
-        title: 'Work submitted',
-        body: `"${influencer?.name || 'influencer_name'}" submitted a work for "${application?.v1_campaigns?.title || 'campaign_name'}"`,
+        title: `${campaignTitle} Update`,
+        body: `"${influencer?.name || 'The influencer'}" submitted work for "${campaignTitle}"`,
         clickAction: `/applications/${applicationId}/work`,
         data: { workSubmissionId, applicationId, brandId, influencerId },
       };
@@ -952,24 +969,21 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = work?.v1_applications?.v1_campaigns?.title || 'Campaign_name';
-      const brandName = brand?.brand_name || 'brand_owner_name';
+      const campaignTitle = work?.v1_applications?.v1_campaigns?.title || 'Campaign';
+      const brandName = brand?.brand_name || 'The brand';
 
-      let title, body;
+      let body;
       if (status === 'ACCEPTED') {
-        title = 'Work accepted';
-        body = `"${brandName}" accepted your work for "${campaignTitle}". Wait for your payout.`;
+        body = `"${brandName}" accepted your work for "${campaignTitle}". Payout will be released soon`;
       } else if (status === 'REVISION') {
-        title = 'Work revised';
-        body = `"${brandName}" revised your work for "${campaignTitle}"`;
+        body = `"${brandName}" requested revision on your work for "${campaignTitle}"`;
       } else {
-        title = 'Work rejected';
         body = `"${brandName}" rejected your work for "${campaignTitle}"`;
       }
 
       const notificationData = {
         type: 'WORK_REVIEW',
-        title,
+        title: `${campaignTitle} Update`,
         body,
         clickAction: `/applications/${applicationId}/work`,
         data: { workSubmissionId, applicationId, brandId, influencerId, status, remarks },
@@ -991,12 +1005,12 @@ class NotificationService {
         .eq('id', campaignId)
         .single();
 
-      const campaignTitle = campaign?.title || 'campaign_name';
+      const campaignTitle = campaign?.title || 'Campaign';
 
       const notificationData = {
         type: 'CAMPAIGN_COMPLETED',
-        title: 'Campaign completed',
-        body: `Congratulations! Your campaign named "${campaignTitle}" is now complete.`,
+        title: `${campaignTitle} Update`,
+        body: `Congratulations! "${campaignTitle}" is now complete`,
         clickAction: `/campaigns/${campaignId}`,
         data: { 
           campaignId, 
@@ -1020,11 +1034,11 @@ class NotificationService {
         .eq('id', applicationId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'campaign_name';
+      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
 
       const notificationData = {
         type: 'PAYOUT_RELEASED',
-        title: 'Payout Released',
+        title: `${campaignTitle} Update`,
         body: `Your payout for "${campaignTitle}" has been released`,
         clickAction: `/applications/${applicationId}`,
         data: { payoutId, applicationId, influencerId, amount },

@@ -474,10 +474,10 @@ class CampaignService {
             });
           }
 
-          // Fetch social accounts - only platform and followers_count
+          // Fetch social accounts - only platform and follower_count
           const { data: socialAccounts, error: socialAccountsError } = await supabaseAdmin
             .from("v1_influencer_social_accounts")
-            .select("user_id, platform, followers_count")
+            .select("user_id, platform, follower_count")
             .in("user_id", influencerIds)
             .eq("is_deleted", false)
             .order("created_at", { ascending: false });
@@ -491,7 +491,7 @@ class CampaignService {
               }
               socialAccountsMap[account.user_id].push({
                 platform: account.platform,
-                followers: account.followers_count
+                followers: account.follower_count
               });
             });
           }

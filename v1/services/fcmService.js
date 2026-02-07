@@ -268,10 +268,43 @@ class FCMService {
     }
   }
 
+  /**
+   * Maps notification type to the correct Android channel ID.
+   * Must match the channels created in the app's notificationManager.ts:
+   *   stoory-messages, stoory-campaigns, stoory-bids, stoory-payments, stoory-system
+   */
+  getChannelIdForType(type) {
+    const channelMap = {
+      // Chat
+      CHAT_MESSAGE: 'stoory-messages',
+      // Campaign lifecycle
+      APPLICATION_CREATED: 'stoory-campaigns',
+      APPLICATION_ACCEPTED: 'stoory-campaigns',
+      APPLICATION_CANCELLED: 'stoory-campaigns',
+      CAMPAIGN_COMPLETED: 'stoory-campaigns',
+      // MOU / bids
+      MOU_ACCEPTED_BY_BRAND: 'stoory-bids',
+      MOU_ACCEPTED_BY_INFLUENCER: 'stoory-bids',
+      MOU_FULLY_ACCEPTED: 'stoory-bids',
+      // Submissions & reviews
+      SCRIPT_SUBMITTED: 'stoory-campaigns',
+      SCRIPT_REVIEW: 'stoory-campaigns',
+      WORK_SUBMITTED: 'stoory-campaigns',
+      WORK_REVIEW: 'stoory-campaigns',
+      // Payments
+      PAYMENT_COMPLETED: 'stoory-payments',
+      PAYOUT_RELEASED: 'stoory-payments',
+    };
+    return channelMap[type] || 'stoory-system';
+  }
+
   async sendToTokens(tokens, notification) {
     if (!this.initialized) {
       throw new Error('FCM not initialized');
     }
+
+    const notificationType = notification.data?.type || 'SYSTEM';
+    const channelId = this.getChannelIdForType(notificationType);
 
     const message = {
       notification: {
@@ -279,18 +312,22 @@ class FCMService {
         body: notification.body,
         imageUrl: notification.imageUrl,
       },
-      data: {
-        ...notification.data,
-        click_action: notification.clickAction || 'FLUTTER_NOTIFICATION_CLICK',
-        title: notification.title,
-        body: notification.body,
-      },
+      data: Object.fromEntries(
+        Object.entries({
+          ...notification.data,
+          click_action: notification.clickAction || 'FLUTTER_NOTIFICATION_CLICK',
+          title: notification.title,
+          body: notification.body,
+          channelId,
+          notificationType,
+        }).map(([k, v]) => [k, v == null ? '' : String(v)])
+      ),
       android: {
         priority: 'high',
         notification: {
           sound: 'default',
           defaultSound: true,
-          channelId: 'stoory_notifications',
+          channelId,
           priority: 'high',
           visibility: 'public',
           icon: 'ic_notification',
@@ -312,8 +349,11 @@ class FCMService {
             badge: notification.badge || 1,
             'mutable-content': 1,
             'interruption-level': 'active',
+            'thread-id': channelId,
+            category: notificationType,
           },
           ...notification.data,
+          notificationType,
         },
       },
     };

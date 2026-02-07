@@ -25,7 +25,8 @@ class AuthService {
 
     const role = String(userDataRole).toLowerCase().trim();
     if (role === "influencer") return "INFLUENCER";
-    if (role === "brand_owner" || role === "brand" || role === "owner") return "BRAND_OWNER";
+    if (role === "brand_owner" || role === "brand" || role === "owner")
+      return "BRAND_OWNER";
     if (role === "admin") return "ADMIN";
     return "INFLUENCER"; // default
   }
@@ -57,7 +58,11 @@ class AuthService {
     try {
       // Bypass OTP for mock users (only if enabled)
       const mockUsersService = require("./mockUsersService");
-      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone) && otp === "123456") {
+      if (
+        mockUsersService.isMockUsersEnabled() &&
+        mockUsersService.isMockUser(phone) &&
+        otp === "123456"
+      ) {
         return { success: true };
       }
 
@@ -112,7 +117,6 @@ class AuthService {
     }
   }
 
-
   // ---------- Send OTP (login existing v1 user) ----------
 
   async sendOTP(phone, role = null) {
@@ -136,7 +140,10 @@ class AuthService {
 
       // Bypass for mock users (only if enabled)
       const mockUsersService = require("./mockUsersService");
-      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone)) {
+      if (
+        mockUsersService.isMockUsersEnabled() &&
+        mockUsersService.isMockUser(phone)
+      ) {
         return {
           success: true,
           message: "OTP sent successfully",
@@ -179,7 +186,8 @@ class AuthService {
         if (!validRoles.includes(role)) {
           return {
             success: false,
-            message: "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
+            message:
+              "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
             code: "INVALID_ROLE",
           };
         }
@@ -230,7 +238,10 @@ class AuthService {
 
       // Bypass for mock users (only if enabled)
       const mockUsersService = require("./mockUsersService");
-      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone)) {
+      if (
+        mockUsersService.isMockUsersEnabled() &&
+        mockUsersService.isMockUser(phone)
+      ) {
         return {
           success: true,
           message: "OTP sent successfully",
@@ -343,7 +354,8 @@ class AuthService {
         if (!validRoles.includes(role)) {
           return {
             success: false,
-            message: "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
+            message:
+              "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
             code: "INVALID_ROLE",
           };
         }
@@ -375,7 +387,6 @@ class AuthService {
     }
   }
 
-
   // ---------- Verify OTP & create/update v1 users + profiles ----------
 
   async verifyOTP(phone, token, userData) {
@@ -401,7 +412,11 @@ class AuthService {
 
         // Handle dob - accept ISO8601 date strings or null, always save in ISO format
         let dobValue = null;
-        if (userData?.dob !== undefined && userData?.dob !== null && userData?.dob !== "") {
+        if (
+          userData?.dob !== undefined &&
+          userData?.dob !== null &&
+          userData?.dob !== ""
+        ) {
           const dobDate = new Date(userData.dob);
           if (!isNaN(dobDate.getTime())) {
             dobValue = dobDate.toISOString();
@@ -449,7 +464,10 @@ class AuthService {
             // Continue anyway - user is created, profile can be added later
           }
         } else if (role === "BRAND_OWNER") {
-          const profileResult = await ProfileService.createBrandProfile(user, userData);
+          const profileResult = await ProfileService.createBrandProfile(
+            user,
+            userData
+          );
           if (!profileResult.success) {
             console.error(
               "[v1/verifyOTP] Failed to create brand profile:",
@@ -459,12 +477,10 @@ class AuthService {
           }
         }
         // ADMIN and AGENT don't need profiles for now
-      }
-      else if (user && user.is_deleted === true) {
+      } else if (user && user.is_deleted === true) {
         // reactivate user
         await this.reactivateUser(user);
-      }
-      else {
+      } else {
         // Existing user: optionally update basic fields
         await this.updateBasicUserFields(user, userData);
       }
@@ -485,7 +501,6 @@ class AuthService {
       return { success: false, message: "Authentication failed" };
     }
   }
-
 
   async updateBasicUserFields(user, userData) {
     if (!userData) return;
@@ -508,7 +523,10 @@ class AuthService {
         if (!isNaN(dobDate.getTime())) {
           update.dob = dobDate.toISOString();
         } else {
-          console.warn("[v1/updateBasicUserFields] Invalid dob format:", dobInput);
+          console.warn(
+            "[v1/updateBasicUserFields] Invalid dob format:",
+            dobInput
+          );
         }
       } else {
         update.dob = null;
@@ -665,7 +683,6 @@ class AuthService {
       };
     }
   }
-
 
   // ---------- JWT helpers ----------
 
@@ -842,8 +859,9 @@ class AuthService {
   /**
    * Register brand owner with email and password
    */
-  async registerBrandOwner(email, password, name) {
+  async registerBrandOwner(userData) {
     let createdUserId = null; // Track created user ID for cleanup
+    const { email, password, name, phone_number, dob, gender } = userData;
 
     try {
       // 1) Validate email format
@@ -852,20 +870,53 @@ class AuthService {
         return { success: false, message: "Invalid email format" };
       }
 
-      // 2) Check if email already exists
-      const { success, user: existing } = await this.findBrandOwnerByEmail(
-        email
-      );
-      if (!success) {
-        return { success: false, message: "Database error" };
+      // 2) Check if email already exists (across all roles)
+      const { data: existingEmailUser, error: emailCheckError } =
+        await supabaseAdmin
+          .from("v1_users")
+          .select("id")
+          .eq("email", email)
+          .eq("is_deleted", false)
+          .maybeSingle();
+
+      if (emailCheckError) {
+        return { success: false, message: "Database error checking email" };
       }
 
-      if (existing) {
+      if (existingEmailUser) {
         return {
           success: false,
-          message: "This email is already registered. Please use a different email",
+          message:
+            "This email is already registered. Please use a different email or login.",
           code: "EMAIL_ALREADY_EXISTS",
         };
+      }
+
+      // 2.1) Check if phone number already exists (if provided, across all roles)
+      if (phone_number) {
+        const { data: existingPhoneUser, error: phoneCheckError } =
+          await supabaseAdmin
+            .from("v1_users")
+            .select("id")
+            .eq("phone_number", phone_number)
+            .eq("is_deleted", false)
+            .maybeSingle();
+
+        if (phoneCheckError) {
+          return {
+            success: false,
+            message: "Database error checking phone number",
+          };
+        }
+
+        if (existingPhoneUser) {
+          return {
+            success: false,
+            message:
+              "This phone number is already registered. Please use a different phone number.",
+            code: "PHONE_ALREADY_EXISTS",
+          };
+        }
       }
 
       // 3) Validate password strength
@@ -885,6 +936,18 @@ class AuthService {
       const emailVerificationToken = this.generateEmailVerificationToken();
       const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
+      // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+      let dobValue = null;
+      if (dob !== undefined && dob !== null && dob !== "") {
+        const dobDate = new Date(dob);
+        if (!isNaN(dobDate.getTime())) {
+          dobValue = dobDate.toISOString();
+        }
+      }
+
+      // Normalize gender if provided
+      const normalizedGender = gender ? normalizeGender(gender) : null;
+
       // 6) Create user with verification token stored temporarily
       const id = crypto.randomUUID();
       const { data: created, error } = await supabaseAdmin
@@ -895,6 +958,9 @@ class AuthService {
           password_hash: passwordHash,
           role: "BRAND_OWNER",
           name: name || null,
+          phone_number: phone_number || null,
+          dob: dobValue,
+          gender: normalizedGender,
           email_verified: false,
           password_reset_token: emailVerificationToken, // Temporarily store here
           password_reset_token_expires_at: verificationExpiresAt.toISOString(),
@@ -915,11 +981,11 @@ class AuthService {
       createdUserId = created.id;
 
       // 7) Create brand profile in v1_brand_profiles table
-      // brand_name will be empty string (required field) - will be updated in complete profile
       const ProfileService = require("./profileService");
-      const profileResult = await ProfileService.createBrandProfile(created, {
-        brand_name: "", // Empty string - required field, will be set in complete profile
-      });
+      const profileResult = await ProfileService.createBrandProfile(
+        created,
+        userData || {}
+      );
 
       if (!profileResult.success) {
         console.error(
@@ -959,8 +1025,9 @@ class AuthService {
 
         return {
           success: false,
-          message: `Failed to create brand profile: ${profileResult.error || "Unknown error"
-            }`,
+          message: `Failed to create brand profile: ${
+            profileResult.error || "Unknown error"
+          }`,
         };
       }
 
@@ -1104,7 +1171,7 @@ class AuthService {
 
       return {
         success: false,
-        message: `Registration failed: ${err.message || "Unknown error"}`
+        message: `Registration failed: ${err.message || "Unknown error"}`,
       };
     }
   }
@@ -1475,7 +1542,80 @@ class AuthService {
     }
   }
 
+  /**
+   * Change password for a logged-in user
+   */
+  async changePassword(userId, currentPassword, newPassword) {
+    try {
+      // 1) Ensure new password length >= 8
+      if (!newPassword || newPassword.length < 8) {
+        return {
+          success: false,
+          message: "New password must be at least 8 characters",
+        };
+      }
 
+      // 2) Load user from v1_users by id, role = "BRAND_OWNER", is_deleted = false
+      const { data: user, error } = await supabaseAdmin
+        .from("v1_users")
+        .select("*")
+        .eq("id", userId)
+        .eq("role", "BRAND_OWNER")
+        .eq("is_deleted", false)
+        .single();
+
+      if (error || !user) {
+        return {
+          success: false,
+          message: "User not found or access denied",
+          code: "USER_NOT_FOUND",
+        };
+      }
+
+      // 3) If no password_hash → return { success: false, code: "PASSWORD_NOT_SET" }
+      if (!user.password_hash) {
+        return {
+          success: false,
+          message: "Password not set. Please use password reset.",
+          code: "PASSWORD_NOT_SET",
+        };
+      }
+
+      // 4) Compare currentPassword with user.password_hash using bcrypt
+      const isMatch = await this.comparePassword(
+        currentPassword,
+        user.password_hash
+      );
+      if (!isMatch) {
+        return {
+          success: false,
+          message: "Current password is incorrect",
+          code: "INVALID_CURRENT_PASSWORD",
+        };
+      }
+
+      // 5) Hash new password and update v1_users.password_hash
+      const newPasswordHash = await this.hashPassword(newPassword);
+      const { error: updateError } = await supabaseAdmin
+        .from("v1_users")
+        .update({ password_hash: newPasswordHash })
+        .eq("id", userId);
+
+      if (updateError) {
+        console.error("[v1/changePassword] Update error:", updateError);
+        return { success: false, message: "Failed to update password" };
+      }
+
+      // 6) Return { success: true, message: "Password changed successfully" }
+      return {
+        success: true,
+        message: "Password changed successfully",
+      };
+    } catch (err) {
+      console.error("[v1/changePassword] Exception:", err);
+      return { success: false, message: "Failed to change password" };
+    }
+  }
 }
 
 module.exports = new AuthService();
