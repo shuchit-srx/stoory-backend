@@ -484,17 +484,21 @@ class PaymentService {
       }
 
       // Aggregate budget_amount of all payable applications
-      // For each application: use budget_amount first, fallback to campaign budget
+      // Only sum the selected applications' amounts (not all campaign applications)
       const totalAmount = payableApplications.reduce((sum, app) => {
-        // Use application budget_amount first, fallback to campaign budget
-        const amount = Number(app.budget_amount ?? campaign.budget ?? 0);
+        // Use application budget_amount first, then agreed_amount, then fail if neither exists
+        // Do NOT use campaign.budget as it might be a total campaign budget, not per-application
+        const amount = Number(app.budget_amount ?? app.agreed_amount ?? 0);
+        if (isNaN(amount) || amount <= 0) {
+          console.warn(`[v1/PaymentService/createBulkPaymentOrderForCampaign] Application ${app.id} has invalid amount: budget_amount=${app.budget_amount}, agreed_amount=${app.agreed_amount}`);
+        }
         return sum + (isNaN(amount) ? 0 : amount);
       }, 0);
 
       if (!totalAmount || totalAmount <= 0) {
         return {
           success: false,
-          message: "Invalid total amount for bulk payment. Applications must have budget_amount or campaign must have budget",
+          message: "Invalid total amount for bulk payment. All selected applications must have budget_amount or agreed_amount",
         };
       }
 

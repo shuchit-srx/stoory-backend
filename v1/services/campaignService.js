@@ -383,7 +383,7 @@ class CampaignService {
       // Fetch the campaign - select only required fields
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language, work_deadline, script_deadline, applications_accepted_till, brand_id")
+        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, categories, language, work_deadline, script_deadline, applications_accepted_till, brand_id")
         .eq("id", campaignId)
         .eq("is_deleted", false)
         .maybeSingle();
@@ -533,6 +533,7 @@ class CampaignService {
         script_deadline: scriptDeadline,
         work_deadline: workDeadline,
         buffer_days: campaign.buffer_days || null,
+        categories: campaign.categories ? (Array.isArray(campaign.categories) ? campaign.categories : [campaign.categories]) : null,
         languages: campaign.language ? (Array.isArray(campaign.language) ? campaign.language : [campaign.language]) : null,
         location: null, // Field doesn't exist in schema
         applications: applicationsWithInfluencers
@@ -570,7 +571,7 @@ class CampaignService {
       // Build base query for campaigns with count
       let query = supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, type, budget, status, language, created_at", { count: "exact" })
+        .select("id, title, cover_image_url, type, budget, status, categories, language, applications_accepted_till, created_at", { count: "exact" })
         .eq("brand_id", brandId)
         .eq("is_deleted", false)
         .order("created_at", { ascending: false });
@@ -678,7 +679,9 @@ class CampaignService {
         type: campaign.type,
         budget: campaign.budget,
         status: campaign.status,
+        categories: campaign.categories ? (Array.isArray(campaign.categories) ? campaign.categories : [campaign.categories]) : null,
         language: campaign.language ? (Array.isArray(campaign.language) ? campaign.language : [campaign.language]) : null,
+        applications_accepted_till: campaign.applications_accepted_till || null,
         created_at: campaign.created_at
       }));
 
