@@ -383,6 +383,7 @@ class SubmissionService {
             id,
             campaign_id,
             phase,
+            influencer_id,
             v1_campaigns!inner(brand_id)
           )
         `)
@@ -485,15 +486,19 @@ class SubmissionService {
 
       // Send notification to influencer (includes all statuses: ACCEPTED, REJECTED, REVISION)
       try {
-        const NotificationService = require('./notificationService');
-        await NotificationService.notifyScriptReview(
-          scriptId,
-          application.id,
-          brandId,
-          application.influencer_id,
-          status,
-          remarks
-        );
+        if (!application.influencer_id) {
+          console.error('[SubmissionService/reviewScript] Cannot send notification: influencer_id is missing');
+        } else {
+          const NotificationService = require('./notificationService');
+          await NotificationService.notifyScriptReview(
+            scriptId,
+            application.id,
+            brandId,
+            application.influencer_id,
+            status,
+            remarks
+          );
+        }
       } catch (notifError) {
         console.error('[SubmissionService/reviewScript] Failed to send notification:', notifError);
         // Don't fail the operation if notification fails
@@ -524,6 +529,7 @@ class SubmissionService {
             id,
             campaign_id,
             phase,
+            influencer_id,
             v1_campaigns!inner(brand_id)
           )
         `)
@@ -691,15 +697,19 @@ class SubmissionService {
 
       // Send notification to influencer
       try {
-        const NotificationService = require('./notificationService');
-        await NotificationService.notifyWorkReview(
-          workSubmissionId,
-          application.id,
-          brandId,
-          application.influencer_id,
-          status,
-          remarks
-        );
+        if (!application.influencer_id) {
+          console.error('[SubmissionService/reviewWork] Cannot send notification: influencer_id is missing');
+        } else {
+          const NotificationService = require('./notificationService');
+          await NotificationService.notifyWorkReview(
+            workSubmissionId,
+            application.id,
+            brandId,
+            application.influencer_id,
+            status,
+            remarks
+          );
+        }
       } catch (notifError) {
         console.error('[SubmissionService/reviewWork] Failed to send notification:', notifError);
         // Don't fail the operation if notification fails
