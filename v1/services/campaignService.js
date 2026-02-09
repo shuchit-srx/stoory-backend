@@ -53,6 +53,68 @@ class CampaignService {
   }
 
   /**
+   * Calculate budget from bulk tier pricing configuration
+   * @param {Array} bulkTierPricing - Array of tier configs: [{tier: "nano", influencer_count: 5, tier_pricing: 1000}, ...]
+   * @returns {number} Total budget calculated from all tiers
+   */
+  calculateBulkBudget(bulkTierPricing) {
+    if (!Array.isArray(bulkTierPricing) || bulkTierPricing.length === 0) {
+      return 0;
+    }
+
+    return bulkTierPricing.reduce((total, tierConfig) => {
+      const influencerCount = parseInt(tierConfig.influencer_count) || 0;
+      const tierPricing = parseFloat(tierConfig.tier_pricing) || 0;
+      return total + (influencerCount * tierPricing);
+    }, 0);
+  }
+
+  /**
+   * Validate bulk tier pricing structure
+   * @param {Array} bulkTierPricing - Array of tier configs
+   * @returns {Object} {valid: boolean, message: string}
+   */
+  validateBulkTierPricing(bulkTierPricing) {
+    if (!Array.isArray(bulkTierPricing)) {
+      return { valid: false, message: "bulk_tier_pricing must be an array" };
+    }
+
+    if (bulkTierPricing.length === 0) {
+      return { valid: false, message: "bulk_tier_pricing cannot be empty" };
+    }
+
+    const validTiers = ['nano', 'mid', 'micro', 'macro'];
+    
+    for (const tierConfig of bulkTierPricing) {
+      if (!tierConfig.tier || !validTiers.includes(tierConfig.tier.toLowerCase())) {
+        return { 
+          valid: false, 
+          message: `Invalid tier: ${tierConfig.tier}. Must be one of: ${validTiers.join(', ')}` 
+        };
+      }
+
+      const influencerCount = parseInt(tierConfig.influencer_count);
+      const tierPricing = parseFloat(tierConfig.tier_pricing);
+
+      if (isNaN(influencerCount) || influencerCount <= 0) {
+        return { 
+          valid: false, 
+          message: `Invalid influencer_count for tier ${tierConfig.tier}: must be a positive integer` 
+        };
+      }
+
+      if (isNaN(tierPricing) || tierPricing <= 0) {
+        return { 
+          valid: false, 
+          message: `Invalid tier_pricing for tier ${tierConfig.tier}: must be a positive number` 
+        };
+      }
+    }
+
+    return { valid: true, message: "Valid" };
+  }
+
+  /**
    * Check if brand owns the campaign
    */
   async checkBrandOwnership(campaignId, brandId) {
@@ -123,11 +185,63 @@ class CampaignService {
           }
         }
 
+        // Handle bulk tier pricing for BULK campaigns
+        let budget = campaignData.budget ?? null;
+        let bulkTierPricing = null;
+
+        if (type === CampaignType.BULK) {
+          // For BULK campaigns, bulk_tier_pricing is required
+          if (campaignData.bulk_tier_pricing) {
+            // Validate bulk tier pricing structure
+            const validation = this.validateBulkTierPricing(campaignData.bulk_tier_pricing);
+            if (!validation.valid) {
+              return {
+                success: false,
+                message: validation.message,
+              };
+            }
+
+            bulkTierPricing = campaignData.bulk_tier_pricing;
+            
+            // Calculate budget from tier pricing (server-side calculation)
+            const calculatedBudget = this.calculateBulkBudget(bulkTierPricing);
+            
+            if (calculatedBudget <= 0) {
+              return {
+                success: false,
+                message: "Invalid bulk_tier_pricing: total budget must be greater than 0",
+              };
+            }
+
+            // Use calculated budget if budget not explicitly provided
+            if (budget === null) {
+              budget = calculatedBudget;
+            } else {
+              // If budget is provided, validate it matches calculated budget
+              // Allow small floating point differences (0.01)
+              if (Math.abs(budget - calculatedBudget) > 0.01) {
+                return {
+                  success: false,
+                  message: `Budget mismatch: provided budget (${budget}) does not match calculated budget from tier pricing (${calculatedBudget})`,
+                };
+              }
+            }
+          } else {
+            return {
+              success: false,
+              message: "bulk_tier_pricing is required for BULK campaigns",
+            };
+          }
+        } else if (type === CampaignType.NORMAL) {
+          // For NORMAL campaigns, bulk_tier_pricing should be null
+          bulkTierPricing = null;
+          // influencer_tier is optional for NORMAL campaigns (maintains backward compatibility)
+        }
+
         // Fetch non-expired admin settings to get commission_percentage
         let platformFeePercentage = null;
         let platformFeeAmount = null;
         let netAmount = null;
-        const budget = campaignData.budget ?? null;
 
         if (budget !== null && budget > 0) {
           const { data: adminSettings, error: adminSettingsError } = await supabaseAdmin
@@ -186,7 +300,10 @@ class CampaignService {
           content_type: Array.isArray(campaignData.content_type) 
             ? campaignData.content_type 
             : [],
-          influencer_tier: normalizeTier(campaignData.influencer_tier),
+          influencer_tier: type === CampaignType.NORMAL 
+            ? normalizeTier(campaignData.influencer_tier) 
+            : null, // Only set for NORMAL campaigns
+          bulk_tier_pricing: bulkTierPricing, // Only set for BULK campaigns
           categories: campaignData.categories ?? null,
           language: campaignData.language ?? null,
           brand_guideline: campaignData.brand_guideline ?? null,
@@ -383,7 +500,7 @@ class CampaignService {
       // Fetch the campaign - select only required fields
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, categories, language, work_deadline, script_deadline, applications_accepted_till, brand_id")
+        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, categories, language, work_deadline, script_deadline, applications_accepted_till, brand_id, influencer_tier, bulk_tier_pricing")
         .eq("id", campaignId)
         .eq("is_deleted", false)
         .maybeSingle();
@@ -536,6 +653,8 @@ class CampaignService {
         categories: campaign.categories ? (Array.isArray(campaign.categories) ? campaign.categories : [campaign.categories]) : null,
         languages: campaign.language ? (Array.isArray(campaign.language) ? campaign.language : [campaign.language]) : null,
         location: null, // Field doesn't exist in schema
+        influencer_tier: campaign.influencer_tier || null, // For NORMAL campaigns
+        bulk_tier_pricing: campaign.bulk_tier_pricing || null, // For BULK campaigns
         applications: applicationsWithInfluencers
       };
 
@@ -725,6 +844,20 @@ class CampaignService {
         if (!ownershipCheck.success) {
           return ownershipCheck;
         }
+
+        // Get current campaign to check type and existing data
+        const { data: currentCampaign, error: fetchError } = await supabaseAdmin
+          .from("v1_campaigns")
+          .select("type, bulk_tier_pricing, influencer_tier")
+          .eq("id", campaignId)
+          .maybeSingle();
+
+        if (fetchError || !currentCampaign) {
+          return {
+            success: false,
+            message: "Campaign not found",
+          };
+        }
   
         // Build update object (only include provided fields)
         const update = {};
@@ -786,8 +919,93 @@ class CampaignService {
         if (updateData.requires_script !== undefined) {
           update.requires_script = updateData.requires_script;
         }
-  
-        if (updateData.budget !== undefined) {
+
+        const currentType = updateData.type !== undefined 
+          ? normalizeCampaignType(updateData.type) 
+          : currentCampaign.type;
+
+        // Handle bulk_tier_pricing update
+        if (updateData.bulk_tier_pricing !== undefined) {
+          if (currentType === CampaignType.BULK) {
+            // Validate bulk tier pricing structure
+            const validation = this.validateBulkTierPricing(updateData.bulk_tier_pricing);
+            if (!validation.valid) {
+              return {
+                success: false,
+                message: validation.message,
+              };
+            }
+
+            // Calculate budget from tier pricing (server-side calculation)
+            const calculatedBudget = this.calculateBulkBudget(updateData.bulk_tier_pricing);
+            
+            if (calculatedBudget <= 0) {
+              return {
+                success: false,
+                message: "Invalid bulk_tier_pricing: total budget must be greater than 0",
+              };
+            }
+
+            update.bulk_tier_pricing = updateData.bulk_tier_pricing;
+            
+            // Auto-update budget if not explicitly provided
+            if (updateData.budget === undefined) {
+              update.budget = calculatedBudget;
+            } else {
+              // If budget is provided, validate it matches calculated budget
+              if (Math.abs(updateData.budget - calculatedBudget) > 0.01) {
+                return {
+                  success: false,
+                  message: `Budget mismatch: provided budget (${updateData.budget}) does not match calculated budget from tier pricing (${calculatedBudget})`,
+                };
+              }
+            }
+          } else {
+            // For NORMAL campaigns, set to null
+            update.bulk_tier_pricing = null;
+          }
+        }
+
+        // Handle type change
+        if (updateData.type !== undefined) {
+          const newType = normalizeCampaignType(updateData.type);
+          
+          if (newType === CampaignType.NORMAL && currentCampaign.type === CampaignType.BULK) {
+            // Switching from BULK to NORMAL: clear bulk_tier_pricing
+            update.bulk_tier_pricing = null;
+            // influencer_tier should be provided
+            if (updateData.influencer_tier === undefined) {
+              return {
+                success: false,
+                message: "influencer_tier is required when switching to NORMAL campaign type",
+              };
+            }
+          } else if (newType === CampaignType.BULK && currentCampaign.type === CampaignType.NORMAL) {
+            // Switching from NORMAL to BULK: bulk_tier_pricing should be provided
+            if (updateData.bulk_tier_pricing === undefined) {
+              return {
+                success: false,
+                message: "bulk_tier_pricing is required when switching to BULK campaign type",
+              };
+            }
+            // Clear influencer_tier for BULK campaigns
+            update.influencer_tier = null;
+          }
+        }
+
+        // Handle budget update (only if not auto-calculated from bulk_tier_pricing)
+        if (updateData.budget !== undefined && updateData.bulk_tier_pricing === undefined) {
+          // If updating budget for BULK campaign without updating bulk_tier_pricing,
+          // validate it matches the current calculated budget
+          if (currentType === CampaignType.BULK && currentCampaign.bulk_tier_pricing) {
+            const currentCalculatedBudget = this.calculateBulkBudget(currentCampaign.bulk_tier_pricing);
+            if (Math.abs(updateData.budget - currentCalculatedBudget) > 0.01) {
+              return {
+                success: false,
+                message: `Budget mismatch: provided budget (${updateData.budget}) does not match calculated budget from tier pricing (${currentCalculatedBudget}). Update bulk_tier_pricing instead.`,
+              };
+            }
+          }
           update.budget = updateData.budget ?? null;
         }
   
@@ -813,6 +1031,13 @@ class CampaignService {
         }
   
         if (updateData.influencer_tier !== undefined) {
+          // Only allow influencer_tier for NORMAL campaigns
+          if (currentType === CampaignType.BULK) {
+            return {
+              success: false,
+              message: "influencer_tier cannot be set for BULK campaigns. Use bulk_tier_pricing instead.",
+            };
+          }
           update.influencer_tier = normalizeTier(updateData.influencer_tier);
         }
   
