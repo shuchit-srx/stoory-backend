@@ -545,7 +545,7 @@ class NotificationService {
     
     if (sendResult.success) {
       this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
-      console.log(`[v1/Notification] Retry successful for notification ${notificationId}`);
+      console.log(`[v1/Notification] Retry successful for notificationID ${notificationId}`);
     } else {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
       
