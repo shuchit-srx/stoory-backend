@@ -93,14 +93,6 @@ class FCMService {
         return { success: false, error: `Invalid FCM token: ${validationError.message}` };
       }
 
-      // Check if token already exists for this user (token refresh scenario)
-      const { data: existingToken } = await supabaseAdmin
-        .from('v1_fcm_tokens')
-        .select('token, user_id')
-        .eq('user_id', userId)
-        .eq('token', token)
-        .maybeSingle();
-
       const { data, error } = await supabaseAdmin
         .from('v1_fcm_tokens')
         .upsert(
@@ -122,25 +114,10 @@ class FCMService {
         return { success: false, error: error.message };
       }
 
-      // Deactivate other tokens (single active device policy)
-      const { error: deactivateError } = await supabaseAdmin
-        .from('v1_fcm_tokens')
-        .update({ is_active: false })
-        .eq('user_id', userId)
-        .neq('token', token);
-
-      if (deactivateError) {
-        console.warn('⚠️ [v1/FCM] Deactivate old tokens failed:', deactivateError);
-      }
-
       // 🔧 CRITICAL: Invalidate cache after registration
       this.tokenCache.delete(userId);
 
-      if (existingToken) {
-        console.log(`✅ [v1/FCM] Token updated for user ${userId}`);
-      } else {
-        console.log(`✅ [v1/FCM] New token registered for user ${userId}`);
-      }
+      console.log(`✅ [v1/FCM] Token registered for user ${userId}`);
 
       return { success: true, data };
     } catch (error) {
@@ -153,12 +130,12 @@ class FCMService {
     try {
       const { error } = await supabaseAdmin
         .from('v1_fcm_tokens')
-        .delete()
+        .update({ is_active: false })
         .eq('user_id', userId)
         .eq('token', token);
 
       if (error) {
-        console.error('❌ [v1/FCM] Unregister failed:', error);
+        console.error('❌ [v1/FCM] Deactivate token failed:', error);
         return { success: false, error: error.message };
       }
 

@@ -64,16 +64,19 @@ class FCMService {
       // Upsert FCM token
       const { data, error } = await supabaseAdmin
         .from('fcm_tokens')
-        .upsert({
-          user_id: userId,
-          token: token,
-          device_type: deviceType,
-          device_id: deviceId,
-          is_active: true,
-          last_used_at: new Date().toISOString()
-        }, {
-          onConflict: 'user_id,token'
-        })
+        .upsert(
+          {
+            user_id: userId,
+            token: token,
+            device_type: deviceType,
+            device_id: deviceId,
+            is_active: true,
+            last_used_at: new Date().toISOString()
+          },
+          {
+            onConflict: 'user_id,token'
+          }
+        )
         .select()
         .single();
 
@@ -82,19 +85,7 @@ class FCMService {
         return { success: false, error: error.message };
       }
 
-      // Deactivate other tokens for this user to ensure only the last logged-in device is active
-      // This implements the "single active device" policy requested
-      const { error: deactivateError } = await supabaseAdmin
-        .from('fcm_tokens')
-        .update({ is_active: false })
-        .eq('user_id', userId)
-        .neq('token', token);
-
-      if (deactivateError) {
-        console.warn('⚠️ Failed to deactivate old FCM tokens:', deactivateError);
-      }
-
-      console.log(`✅ FCM token registered for user ${userId} (others deactivated)`);
+      console.log(`✅ FCM token registered for user ${userId}`);
       return { success: true, data };
     } catch (error) {
       console.error('❌ Error registering FCM token:', error);
@@ -107,22 +98,22 @@ class FCMService {
    */
   async unregisterToken(userId, token) {
     try {
-      // Delete token instead of marking inactive
+      // Mark token as inactive instead of deleting it
       const { error } = await supabaseAdmin
         .from('fcm_tokens')
-        .delete()
+        .update({ is_active: false })
         .eq('user_id', userId)
         .eq('token', token);
 
       if (error) {
-        console.error('❌ Failed to unregister FCM token:', error);
+        console.error('❌ Failed to deactivate FCM token:', error);
         return { success: false, error: error.message };
       }
 
-      console.log(`✅ FCM token unregistered for user ${userId}`);
+      console.log(`✅ FCM token deactivated for user ${userId}`);
       return { success: true };
     } catch (error) {
-      console.error('❌ Error unregistering FCM token:', error);
+      console.error('❌ Error deactivating FCM token:', error);
       return { success: false, error: error.message };
     }
   }
