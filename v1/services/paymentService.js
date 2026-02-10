@@ -40,6 +40,46 @@ class PaymentService {
   }
 
   /**
+   * Calculate expires_at timestamp for payment orders
+   * Expiry window (in minutes) can be configured via PAYMENT_ORDER_EXPIRY_MINUTES env (default: 30)
+   * @returns {Date} Expiry timestamp
+   */
+  calculatePaymentOrderExpiry() {
+    const expiryMinutes = parseInt(
+      process.env.PAYMENT_ORDER_EXPIRY_MINUTES || "30",
+      10
+    );
+    const expiryMs = (expiryMinutes || 30) * 60 * 1000;
+    return new Date(Date.now() + expiryMs);
+  }
+
+  /**
+   * Check if a payment order is expired based on expires_at column
+   * @param {Object} paymentOrder
+   * @returns {boolean}
+   */
+  isPaymentOrderExpired(paymentOrder) {
+    try {
+      if (!paymentOrder) return false;
+
+      // If expires_at is not set, treat as not expired (for backward compatibility)
+      if (!paymentOrder.expires_at) return false;
+
+      const expiresAt = new Date(paymentOrder.expires_at);
+      const now = new Date();
+
+      return now > expiresAt;
+    } catch (err) {
+      console.error(
+        "[v1/PaymentService/isPaymentOrderExpired] Exception:",
+        err
+      );
+      // Fail open – if we can't compute expiry, treat as not expired
+      return false;
+    }
+  }
+
+  /**
    * Convert paise to rupees (only from Razorpay API responses)
    * @param {number} paise - Amount in paise
    * @returns {number} Amount in rupees
@@ -210,28 +250,92 @@ class PaymentService {
         };
       }
 
-      // Check if payment already exists for this application
-      const { data: existingPayment } = await supabaseAdmin
+      // Check if a previous payment order exists for this application
+      const { data: existingPayments } = await supabaseAdmin
         .from("v1_payment_orders")
-        .select("id, status")
+        .select("id, status, razorpay_order_id, amount, metadata, created_at, expires_at")
         .eq("payable_type", "APPLICATION")
         .eq("payable_id", applicationId)
-        .maybeSingle();
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const existingPayment =
+        Array.isArray(existingPayments) && existingPayments.length > 0
+          ? existingPayments[0]
+          : null;
 
       if (existingPayment) {
         // Normalize status to UPPERCASE
-        const normalizedStatus = normalizePaymentStatus(existingPayment.status) || existingPayment.status;
+        const normalizedStatus =
+          normalizePaymentStatus(existingPayment.status) ||
+          existingPayment.status;
+
+        // If already paid, do not allow new order
         if (normalizedStatus === "VERIFIED") {
           return {
             success: false,
             message: "Payment already completed for this application",
           };
         }
-        // If payment exists but not verified, can create new one or return existing
-        return {
-          success: false,
-          message: "Payment order already exists for this application",
-        };
+
+        const isExpired = this.isPaymentOrderExpired(existingPayment);
+
+        // If there's a non-expired pending order, reuse the same Razorpay order
+        if (
+          !isExpired &&
+          (normalizedStatus === "CREATED" || normalizedStatus === "PROCESSING")
+        ) {
+          try {
+            const razorpayOrder = await razorpay.orders.fetch(
+              existingPayment.razorpay_order_id
+            );
+            const orderInRupees =
+              this.convertRazorpayOrderToRupees(razorpayOrder);
+
+            const breakdown = {
+              total_amount: existingPayment.amount,
+              commission_amount:
+                existingPayment.metadata?.commission_amount ?? null,
+              net_amount: existingPayment.metadata?.net_amount ?? null,
+              commission_percentage:
+                existingPayment.metadata?.commission_percentage ?? null,
+            };
+
+            return {
+              success: true,
+              order: orderInRupees,
+              payment_order: existingPayment,
+              breakdown,
+              message:
+                "Existing payment order found and reused for this application",
+            };
+          } catch (err) {
+            console.error(
+              "[v1/PaymentService/createPaymentOrder] Failed to fetch existing Razorpay order, creating a new one:",
+              err
+            );
+            // Fall through to create a new Razorpay order
+          }
+        }
+
+        // If expired or in a terminal state (FAILED / REFUNDED), we allow creating a new order.
+        // Optionally mark old pending order as FAILED for bookkeeping.
+        if (
+          normalizedStatus === "CREATED" ||
+          normalizedStatus === "PROCESSING"
+        ) {
+          try {
+            await supabaseAdmin
+              .from("v1_payment_orders")
+              .update({ status: "FAILED" })
+              .eq("id", existingPayment.id);
+          } catch (updateErr) {
+            console.error(
+              "[v1/PaymentService/createPaymentOrder] Failed to mark previous payment order as FAILED:",
+              updateErr
+            );
+          }
+        }
       }
 
       // Calculate commission breakdown using payment amount and platform fee (amount or percentage)
@@ -272,6 +376,7 @@ class PaymentService {
           currency: "INR",
           status: "CREATED",
           razorpay_order_id: razorpayOrder.id,
+          expires_at: this.calculatePaymentOrderExpiry().toISOString(),
           metadata: {
             campaign_id: application.campaign_id,
             brand_id: application.v1_campaigns.brand_id,
@@ -574,6 +679,7 @@ class PaymentService {
           currency: "INR",
           status: "CREATED",
           razorpay_order_id: razorpayOrder.id,
+          expires_at: this.calculatePaymentOrderExpiry().toISOString(),
           metadata: {
             campaign_id: campaignId,
             brand_id: campaign.brand_id,
@@ -1213,14 +1319,16 @@ class PaymentService {
         };
       }
 
-      // Check for existing pending payment order for this subscription
-      // Query payment orders with subscription payment type
+      // Check for existing payment order for this subscription (for this user)
       const { data: existingPayments, error: existingPaymentError } =
         await supabaseAdmin
           .from("v1_payment_orders")
-          .select("id, status, metadata")
+          .select(
+            "id, status, metadata, razorpay_order_id, amount, created_at, expires_at"
+          )
           .eq("payable_type", "SUBSCRIPTION")
-          .eq("payable_id", planId);
+          .eq("payable_id", planId)
+          .order("created_at", { ascending: false });
 
       let existingPayment = null;
       if (existingPayments && !existingPaymentError) {
@@ -1235,16 +1343,67 @@ class PaymentService {
         const normalizedStatus =
           normalizePaymentStatus(existingPayment.status) ||
           existingPayment.status;
+
+        // If already paid, do not allow new order
         if (normalizedStatus === "VERIFIED") {
           return {
             success: false,
             message: "Payment already completed for this subscription",
           };
         }
-        return {
-          success: false,
-          message: "Payment order already exists for this subscription",
-        };
+
+        const isExpired = this.isPaymentOrderExpired(existingPayment);
+
+        // If there's a non-expired pending order, reuse the same Razorpay order
+        if (
+          !isExpired &&
+          (normalizedStatus === "CREATED" || normalizedStatus === "PROCESSING")
+        ) {
+          try {
+            const razorpayOrder = await razorpay.orders.fetch(
+              existingPayment.razorpay_order_id
+            );
+
+            // Convert Razorpay response from paise to rupees for our response
+            const orderInRupees = this.convertRazorpayOrderToRupees(
+              razorpayOrder
+            );
+
+            return {
+              success: true,
+              order: orderInRupees,
+              payment_order: existingPayment,
+              plan,
+              coupon: couponData,
+              message:
+                "Existing payment order found and reused for this subscription",
+            };
+          } catch (err) {
+            console.error(
+              "[v1/PaymentService/createSubscriptionPaymentOrder] Failed to fetch existing Razorpay order, creating a new one:",
+              err
+            );
+            // Fall through to create a new Razorpay order
+          }
+        }
+
+        // If expired or in a terminal state, allow creating a new order and optionally mark as FAILED
+        if (
+          normalizedStatus === "CREATED" ||
+          normalizedStatus === "PROCESSING"
+        ) {
+          try {
+            await supabaseAdmin
+              .from("v1_payment_orders")
+              .update({ status: "FAILED" })
+              .eq("id", existingPayment.id);
+          } catch (updateErr) {
+            console.error(
+              "[v1/PaymentService/createSubscriptionPaymentOrder] Failed to mark previous subscription payment order as FAILED:",
+              updateErr
+            );
+          }
+        }
       }
 
       // Handle free subscriptions (amount = 0 rupees)
@@ -1334,6 +1493,7 @@ class PaymentService {
           currency: "INR",
           status: "CREATED",
           razorpay_order_id: razorpayOrder.id,
+          expires_at: this.calculatePaymentOrderExpiry().toISOString(),
           metadata: {
             user_id: userId,
             plan_id: planId,

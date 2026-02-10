@@ -7,6 +7,9 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "nodemon": "nodemon index.js",
+    "commit": "git add . && git commit -m",
+    "deploy:test": "git checkout test && git merge working && git push test test:main && git checkout working",
+    "deploy:prod": "git checkout main && git pull origin main && git merge test && git push origin main && git checkout working",
     "test:whatsapp": "node test_whatsapp_railway.js",
     "fix:railway": "node fix_railway_issues.js",
     "deploy:railway": "./deploy-railway.sh"

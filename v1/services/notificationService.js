@@ -187,8 +187,16 @@ class NotificationService {
         console.log(`[v1/Notification] Duplicate detected in cache for user ${notificationData.userId}, type ${notificationData.type}`);
         return { success: true, notification: { id: 'cached' }, duplicate: true };
       }
-      
-      const timeWindow = 30; // 30 seconds window for duplicate detection
+
+      // Default duplicate detection window is 30 seconds
+      // For certain one-time domain events (like MOU fully accepted),
+      // we extend the window to effectively "once per lifecycle".
+      let timeWindow = 30; // seconds
+      if (notificationData.type === 'MOU_FULLY_ACCEPTED') {
+        // MOU can only be "fully accepted" once per application per user
+        // Use a large window (24 hours) to strongly guard against duplicates
+        timeWindow = 24 * 60 * 60; // 24 hours in seconds
+      }
       const timeWindowAgo = new Date(Date.now() - timeWindow * 1000).toISOString();
       
       let existingQuery = supabaseAdmin
@@ -545,7 +553,7 @@ class NotificationService {
     
     if (sendResult.success) {
       this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
-      console.log(`[v1/Notification] Retry successful for notification ${notificationId}`);
+      console.log(`[v1/Notification] Retry successful for notificationID ${notificationId}`);
     } else {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
       

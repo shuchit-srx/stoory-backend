@@ -146,6 +146,14 @@ class PayoutService {
 
       const razorpayOrder = await razorpay.orders.create(orderOptions);
 
+      // Calculate expires_at timestamp (30 minutes from now by default)
+      const expiryMinutes = parseInt(
+        process.env.PAYMENT_ORDER_EXPIRY_MINUTES || '30',
+        10
+      );
+      const expiryMs = (expiryMinutes || 30) * 60 * 1000;
+      const expiresAt = new Date(Date.now() + expiryMs);
+
       // Store payment order in database (amount in RUPEES - not paise)
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
         .from('v1_payment_orders')
@@ -156,6 +164,7 @@ class PayoutService {
           currency: 'INR',
           status: 'CREATED',
           razorpay_order_id: razorpayOrder.id,
+          expires_at: expiresAt.toISOString(),
           metadata: {
             payout_id: payoutId,
             application_id: payout.application_id,
