@@ -308,6 +308,12 @@ class FCMService {
           priority: 'high',
           visibility: 'public',
           icon: 'ic_notification',
+          defaultVibrateTimings: true,
+          defaultLightSettings: true,
+          // Ensure it shows as heads-up notification
+          notificationPriority: 'PRIORITY_HIGH',
+          // Add click action
+          clickAction: notification.clickAction || '',
         },
       },
       apns: {
