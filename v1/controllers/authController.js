@@ -44,8 +44,8 @@ class AuthController {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { phone } = req.body;
-      const result = await AuthService.sendRegistrationOTP(phone);
+      const { phone, email } = req.body;
+      const result = await AuthService.sendRegistrationOTP(phone, email);
 
       if (result.success) {
         return res.json({
