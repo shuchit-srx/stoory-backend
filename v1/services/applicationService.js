@@ -141,9 +141,9 @@ class ApplicationService {
 
     // Allow LIVE status for all campaigns
     // Allow IN_PROGRESS status only for BULK campaigns (can accept more applications)
-    // Block COMPLETED and EXPIRED campaigns
+    // Block COMPLETED campaigns
     if (campaign.status === CampaignStatus.LIVE) {
-      // LIVE campaigns can always accept applications
+      // LIVE campaigns can accept applications
     } else if (campaign.status === CampaignStatus.IN_PROGRESS && campaign.type === CampaignType.BULK) {
       // BULK campaigns in IN_PROGRESS can still accept applications
     } else {
@@ -151,6 +151,21 @@ class ApplicationService {
          success: false, 
          message: `Campaign is not accepting applications (Status: ${campaign.status})` 
       };
+    }
+
+    // Check dynamic expiration: if applications_accepted_till has passed and no applications accepted
+    const now = new Date();
+    if (campaign.applications_accepted_till) {
+      const acceptedTill = new Date(campaign.applications_accepted_till);
+      const acceptedCount = campaign.accepted_count || 0;
+      
+      // Campaign is expired if: deadline passed AND no accepted applications
+      if (now >= acceptedTill && acceptedCount === 0) {
+        return {
+          success: false,
+          message: 'Campaign has expired (application deadline has passed)'
+        };
+      }
     }
 
     // Check for duplicate application

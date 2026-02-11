@@ -119,12 +119,11 @@ function normalizePaymentStatus(status) {
 
 /**
  * Normalize campaign status to match database constraint (uppercase)
- * Valid values: DRAFT, LIVE, IN_PROGRESS, COMPLETED, EXPIRED, CANCELLED
+ * Valid values: DRAFT, LIVE, IN_PROGRESS, COMPLETED, CANCELLED
  * DRAFT – editable, not visible
  * LIVE – influencers can apply
  * IN_PROGRESS – execution in progress
  * COMPLETED – all applications resolved
- * EXPIRED – deadline passed, never started
  * CANCELLED - manually cancelled
  * @param {string} status - Campaign status to normalize
  * @returns {string|null} - Normalized uppercase status or null if invalid
@@ -133,7 +132,7 @@ function normalizeCampaignStatus(status) {
   if (!status) return null;
 
   const normalized = String(status).toUpperCase().trim();
-  const validStatuses = ["DRAFT", "LIVE", "IN_PROGRESS", "COMPLETED", "EXPIRED", "CANCELLED"];
+  const validStatuses = ["DRAFT", "LIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
 
   if (validStatuses.includes(normalized)) {
     return normalized;
