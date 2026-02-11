@@ -207,9 +207,98 @@ function getMimeType(fileName) {
         '.gif': 'image/gif',
         '.webp': 'image/webp',
         '.bmp': 'image/bmp',
-        '.svg': 'image/svg+xml'
+        '.svg': 'image/svg+xml',
+        '.pdf': 'application/pdf',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.txt': 'text/plain',
+        '.mp4': 'video/mp4',
+        '.mov': 'video/quicktime',
+        '.avi': 'video/x-msvideo',
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav'
     };
-    return mimeTypes[ext] || 'image/jpeg';
+    return mimeTypes[ext] || 'application/octet-stream';
+}
+
+/**
+ * Upload any file type to Supabase Storage (for campaign assets)
+ * @param {Buffer} fileBuffer - The file buffer
+ * @param {string} fileName - The file name
+ * @param {string} mimeType - The MIME type of the file
+ * @param {string} folder - The folder to upload to (e.g., 'campaigns/assets')
+ * @returns {Promise<{url: string, error: string}>}
+ */
+async function uploadFileToStorage(fileBuffer, fileName, mimeType, folder = 'campaigns/assets') {
+    try {
+        console.log('Starting file upload process...');
+        console.log('File name:', fileName);
+        console.log('MIME type:', mimeType);
+        console.log('File buffer size:', (fileBuffer.length / 1024).toFixed(2), 'KB');
+
+        // Determine file type and storage subfolder
+        const isImage = mimeType.startsWith('image/');
+        const isVideo = mimeType.startsWith('video/');
+        const isDocument = !isImage && !isVideo; // PDFs, docs, etc.
+        
+        // Map folder parameter and determine subfolder
+        let storageFolder;
+        if (folder === 'campaigns/assets' || folder.startsWith('campaigns/assets')) {
+            // Campaign assets can be images, videos, or documents
+            if (isImage) {
+                storageFolder = 'campaigns/assets/images';
+            } else if (isVideo) {
+                storageFolder = 'campaigns/assets/videos';
+            } else {
+                storageFolder = 'campaigns/assets/documents';
+            }
+        } else {
+            // Default fallback
+            storageFolder = isImage ? `${folder}/images` : isVideo ? `${folder}/videos` : `${folder}/documents`;
+        }
+        
+        // Generate unique filename
+        const timestamp = Date.now();
+        const fileExtension = path.extname(fileName);
+        const uniqueFileName = `${storageFolder}/${timestamp}_${Math.random().toString(36).substring(2)}${fileExtension}`;
+        
+        console.log('Generated filename:', uniqueFileName);
+        console.log('Storage folder:', storageFolder);
+
+        // Upload to Supabase Storage
+        console.log('Uploading to Supabase Storage...');
+        const { data, error } = await supabaseAdmin.storage
+            .from('v1')
+            .upload(uniqueFileName, fileBuffer, {
+                contentType: mimeType,
+                cacheControl: '3600',
+                upsert: false
+            });
+
+        if (error) {
+            console.error('Supabase storage upload error:', error);
+            console.error('Error details:', {
+                message: error.message,
+                statusCode: error.statusCode,
+                error: error.error
+            });
+            return { url: null, error: error.message };
+        }
+
+        console.log('Upload successful, data:', data);
+
+        // Get public URL
+        const { data: urlData } = supabaseAdmin.storage
+            .from('v1')
+            .getPublicUrl(uniqueFileName);
+
+        console.log('Public URL generated:', urlData.publicUrl);
+        return { url: urlData.publicUrl, error: null };
+    } catch (error) {
+        console.error('File upload error:', error);
+        console.error('Error stack:', error.stack);
+        return { url: null, error: error.message };
+    }
 }
 
 /**
@@ -463,5 +552,6 @@ module.exports = {
     uploadImageToStorage,
     deleteImageFromStorage,
     uploadPortfolioMediaToStorage,
-    deletePortfolioMediaFromStorage
+    deletePortfolioMediaFromStorage,
+    uploadFileToStorage
 };

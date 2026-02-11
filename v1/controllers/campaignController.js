@@ -93,10 +93,44 @@ class CampaignController {
         coverImageUrl = url;
       }
 
-      // Merge cover image URL into body
+      // Handle campaign assets uploads (multiple files) - only for BULK campaigns
+      let campaignAssets = [];
+      const campaignType = req.body.type?.toUpperCase() || "NORMAL";
+      
+      if (campaignType === "BULK" && req.files && req.files.length > 0) {
+        const { uploadFileToStorage } = require("../utils/imageUpload");
+        
+        // Upload each file to Supabase storage
+        for (const file of req.files) {
+          if (file.fieldname === "campaignAssets" || file.fieldname === "campaign_assets") {
+            const { url, error: uploadError } = await uploadFileToStorage(
+              file.buffer,
+              file.originalname,
+              file.mimetype,
+              "campaigns/assets"
+            );
+            if (!uploadError && url) {
+              campaignAssets.push(url);
+            } else {
+              console.error(`Failed to upload campaign asset ${file.originalname}:`, uploadError);
+            }
+          }
+        }
+      }
+
+      // Merge any provided links from body with uploaded file URLs
+      if (campaignType === "BULK" && req.body.campaign_assets) {
+        const providedLinks = Array.isArray(req.body.campaign_assets)
+          ? req.body.campaign_assets.filter(link => link && typeof link === 'string')
+          : [];
+        campaignAssets = [...campaignAssets, ...providedLinks];
+      }
+
+      // Merge cover image URL and campaign assets into body
       const campaignData = {
         ...req.body,
         cover_image_url: coverImageUrl || req.body.cover_image_url || null,
+        campaign_assets: campaignType === "BULK" && campaignAssets.length > 0 ? campaignAssets : undefined,
       };
 
       const result = await CampaignService.createCampaign(brandId, campaignData);
@@ -439,12 +473,61 @@ class CampaignController {
         }
       }
 
-      // Merge cover image URL into body if uploaded
+      // Handle campaign assets uploads (multiple files) - only for BULK campaigns
+      let campaignAssets = undefined;
+      
+      // Get current campaign to check type
+      const currentCampaignResult = await CampaignService.getCampaignById(campaignId, req.user.id);
+      const currentCampaignType = currentCampaignResult.success && currentCampaignResult.campaign?.type
+        ? currentCampaignResult.campaign.type
+        : req.body.type?.toUpperCase() || "NORMAL";
+      
+      if (currentCampaignType === "BULK" && req.files && req.files.length > 0) {
+        const { uploadFileToStorage } = require("../utils/imageUpload");
+        const uploadedUrls = [];
+        
+        // Upload each file to Supabase storage
+        for (const file of req.files) {
+          if (file.fieldname === "campaignAssets" || file.fieldname === "campaign_assets") {
+            const { url, error: uploadError } = await uploadFileToStorage(
+              file.buffer,
+              file.originalname,
+              file.mimetype,
+              "campaigns/assets"
+            );
+            if (!uploadError && url) {
+              uploadedUrls.push(url);
+            } else {
+              console.error(`Failed to upload campaign asset ${file.originalname}:`, uploadError);
+            }
+          }
+        }
+        
+        // Merge any provided links from body with uploaded file URLs
+        if (req.body.campaign_assets) {
+          const providedLinks = Array.isArray(req.body.campaign_assets)
+            ? req.body.campaign_assets.filter(link => link && typeof link === 'string')
+            : [];
+          campaignAssets = [...uploadedUrls, ...providedLinks];
+        } else if (uploadedUrls.length > 0) {
+          campaignAssets = uploadedUrls;
+        }
+      } else if (currentCampaignType === "BULK" && req.body.campaign_assets) {
+        // Only links provided, no file uploads
+        campaignAssets = Array.isArray(req.body.campaign_assets)
+          ? req.body.campaign_assets.filter(link => link && typeof link === 'string')
+          : [];
+      }
+
+      // Merge cover image URL and campaign assets into body
       const campaignData = {
         ...req.body,
       };
       if (coverImageUrl !== undefined) {
         campaignData.cover_image_url = coverImageUrl;
+      }
+      if (campaignAssets !== undefined) {
+        campaignData.campaign_assets = campaignAssets;
       }
 
       const result = await CampaignService.updateCampaign(

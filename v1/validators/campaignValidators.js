@@ -36,14 +36,6 @@ const validateCreateCampaign = [
       }
       return true;
     }),
-  body("min_influencers")
-    .optional()
-    .isInt({ min: 0 })
-    .withMessage("min_influencers must be a non-negative integer"),
-  body("max_influencers")
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage("max_influencers must be a positive integer"),
   body("requires_script")
     .optional()
     .isBoolean()
@@ -124,18 +116,24 @@ const validateCreateCampaign = [
     .optional()
     .isInt({ min: 0 })
     .withMessage("buffer_days must be a non-negative integer"),
-  // Custom validation: min_influencers <= max_influencers
+  // BULK campaign specific fields
+  body("campaign_assets")
+    .optional()
+    .isArray()
+    .withMessage("campaign_assets must be an array"),
+  body("campaign_assets.*")
+    .optional()
+    .isString()
+    .isURL()
+    .withMessage("Each campaign_assets item must be a valid URL"),
+  body("additional_requirements")
+    .optional()
+    .isString()
+    .isLength({ max: 10000 })
+    .withMessage("additional_requirements must be up to 10000 characters")
+    .trim(),
+  // Custom validation
   body().custom((value) => {
-    if (
-      value.min_influencers !== undefined &&
-      value.max_influencers !== undefined
-    ) {
-      if (value.min_influencers > value.max_influencers) {
-        throw new Error(
-          "min_influencers cannot be greater than max_influencers"
-        );
-      }
-    }
     // Validate that applications_accepted_till <= work_deadline if both are provided
     if (
       value.applications_accepted_till !== undefined &&
@@ -185,14 +183,6 @@ const validateUpdateCampaign = [
       }
       return true;
     }),
-  body("min_influencers")
-    .optional()
-    .isInt({ min: 0 })
-    .withMessage("min_influencers must be a non-negative integer"),
-  body("max_influencers")
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage("max_influencers must be a positive integer"),
   body("requires_script")
     .optional()
     .isBoolean()
@@ -273,18 +263,24 @@ const validateUpdateCampaign = [
     .optional()
     .isInt({ min: 0 })
     .withMessage("buffer_days must be a non-negative integer"),
-  // Custom validation: min_influencers <= max_influencers
+  // BULK campaign specific fields
+  body("campaign_assets")
+    .optional()
+    .isArray()
+    .withMessage("campaign_assets must be an array"),
+  body("campaign_assets.*")
+    .optional()
+    .isString()
+    .isURL()
+    .withMessage("Each campaign_assets item must be a valid URL"),
+  body("additional_requirements")
+    .optional()
+    .isString()
+    .isLength({ max: 10000 })
+    .withMessage("additional_requirements must be up to 10000 characters")
+    .trim(),
+  // Custom validation
   body().custom((value) => {
-    if (
-      value.min_influencers !== undefined &&
-      value.max_influencers !== undefined
-    ) {
-      if (value.min_influencers > value.max_influencers) {
-        throw new Error(
-          "min_influencers cannot be greater than max_influencers"
-        );
-      }
-    }
     // Validate that applications_accepted_till <= work_deadline if both are provided
     if (
       value.applications_accepted_till !== undefined &&
