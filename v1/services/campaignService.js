@@ -900,27 +900,6 @@ class CampaignService {
           update.status = status;
         }
   
-        if (updateData.min_influencers !== undefined) {
-          update.min_influencers = updateData.min_influencers;
-        }
-  
-        if (updateData.max_influencers !== undefined) {
-          update.max_influencers = updateData.max_influencers;
-        }
-  
-        // Validate min/max if both are being updated
-        if (
-          update.min_influencers !== undefined &&
-          update.max_influencers !== undefined
-        ) {
-          if (update.min_influencers > update.max_influencers) {
-            return {
-              success: false,
-              message: "min_influencers cannot be greater than max_influencers",
-            };
-          }
-        }
-  
         if (updateData.requires_script !== undefined) {
           update.requires_script = updateData.requires_script;
         }
