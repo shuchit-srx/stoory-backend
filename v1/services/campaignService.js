@@ -172,19 +172,6 @@ class CampaignService {
           };
         }
   
-        // Validate min/max influencers
-        if (
-          campaignData.min_influencers !== undefined &&
-          campaignData.max_influencers !== undefined
-        ) {
-          if (campaignData.min_influencers > campaignData.max_influencers) {
-            return {
-              success: false,
-              message: "min_influencers cannot be greater than max_influencers",
-            };
-          }
-        }
-
         // Handle bulk tier pricing for BULK campaigns
         let budget = campaignData.budget ?? null;
         let bulkTierPricing = null;
@@ -283,8 +270,6 @@ class CampaignService {
           title: campaignData.title,
           type: type,
           status: status,
-          min_influencers: campaignData.min_influencers ?? null,
-          max_influencers: campaignData.max_influencers ?? null,
           accepted_count: 0, // Always start at 0
           requires_script: campaignData.requires_script || false,
           budget: budget,
