@@ -8,7 +8,6 @@ const CampaignStatus = {
   LIVE: "LIVE",
   IN_PROGRESS: "IN_PROGRESS",
   COMPLETED: "COMPLETED",
-  EXPIRED: "EXPIRED",
   CANCELLED: "CANCELLED",
 };
 
