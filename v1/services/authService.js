@@ -461,6 +461,15 @@ class AuthService {
           }
         }
 
+        // Handle gender - normalize if provided
+        let genderValue = null;
+        if (userData?.gender !== undefined && userData?.gender !== null && userData?.gender !== "") {
+          const normalizedGender = normalizeGender(userData.gender);
+          if (normalizedGender !== null) {
+            genderValue = normalizedGender;
+          }
+        }
+
         const insertUser = {
           id,
           name: userData?.name || null,
@@ -468,6 +477,7 @@ class AuthService {
           phone_number: phone,
           role,
           dob: dobValue,
+          gender: genderValue,
           is_deleted: false,
         };
 
