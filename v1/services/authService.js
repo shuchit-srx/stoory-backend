@@ -217,7 +217,7 @@ class AuthService {
 
   // ---------- Send OTP for registration (new v1 user) ----------
 
-  async sendRegistrationOTP(phone) {
+  async sendRegistrationOTP(phone, email = null) {
     try {
       // Validate phone format
       if (!phone.startsWith("+")) {
@@ -234,6 +234,44 @@ class AuthService {
           message:
             "Invalid phone number format. Use international format: +[country code][number]",
         };
+      }
+
+      // Validate email format if provided
+      if (email) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+          return {
+            success: false,
+            message: "Invalid email format",
+            code: "INVALID_EMAIL_FORMAT",
+          };
+        }
+
+        // Check if email already exists
+        const { data: existingEmailUser, error: emailCheckError } =
+          await supabaseAdmin
+            .from("v1_users")
+            .select("id")
+            .eq("email", email)
+            .eq("is_deleted", false)
+            .maybeSingle();
+
+        if (emailCheckError) {
+          console.error("[v1/sendRegistrationOTP] Email check error:", emailCheckError);
+          return {
+            success: false,
+            message: "Database error checking email",
+            code: "DATABASE_ERROR",
+          };
+        }
+
+        if (existingEmailUser) {
+          return {
+            success: false,
+            message: "This email is already registered. Please use a different email or login.",
+            code: "EMAIL_ALREADY_EXISTS",
+          };
+        }
       }
 
       // Bypass for mock users (only if enabled)

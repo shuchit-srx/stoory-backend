@@ -28,6 +28,10 @@ const validateSendOTP = [
     .optional()
     .isIn(["BRAND_OWNER", "INFLUENCER", "ADMIN"])
     .withMessage("Role must be one of: BRAND_OWNER, INFLUENCER, ADMIN"),
+  body("email")
+    .optional()
+    .isEmail()
+    .withMessage("Please provide a valid email address"),
 ];
 
 const validateVerifyOTP = [
