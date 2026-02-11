@@ -298,11 +298,8 @@ class CampaignService {
           applications_accepted_till: campaignData.applications_accepted_till ?? null,
           buffer_days: campaignData.buffer_days ?? 0,
           // BULK campaign specific fields
-          campaign_assets: type === CampaignType.BULK && Array.isArray(campaignData.campaign_assets)
-            ? campaignData.campaign_assets.filter(asset => asset && typeof asset === 'string')
-            : null, // Only set for BULK campaigns
-          additional_requirements: type === CampaignType.BULK
-            ? campaignData.additional_requirements ?? null
+          assets: type === CampaignType.BULK && Array.isArray(campaignData.assets)
+            ? campaignData.assets.filter(asset => asset && typeof asset === 'string')
             : null, // Only set for BULK campaigns
         };
   
@@ -512,7 +509,7 @@ class CampaignService {
       // Fetch the campaign - select only required fields
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, categories, language, work_deadline, script_deadline, applications_accepted_till, brand_id, influencer_tier, bulk_tier_pricing, campaign_assets, additional_requirements")
+        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, categories, language, work_deadline, script_deadline, applications_accepted_till, brand_id, influencer_tier, bulk_tier_pricing, assets")
         .eq("id", campaignId)
         .eq("is_deleted", false)
         .maybeSingle();
@@ -667,8 +664,7 @@ class CampaignService {
         location: null, // Field doesn't exist in schema
         influencer_tier: campaign.influencer_tier || null, // For NORMAL campaigns
         bulk_tier_pricing: campaign.bulk_tier_pricing || null, // For BULK campaigns
-        campaign_assets: campaign.campaign_assets || null, // For BULK campaigns
-        additional_requirements: campaign.additional_requirements || null, // For BULK campaigns
+        assets: campaign.assets || null, // For BULK campaigns
         applications: applicationsWithInfluencers
       };
 
@@ -966,8 +962,7 @@ class CampaignService {
           if (newType === CampaignType.NORMAL && currentCampaign.type === CampaignType.BULK) {
             // Switching from BULK to NORMAL: clear bulk_tier_pricing and BULK-specific fields
             update.bulk_tier_pricing = null;
-            update.campaign_assets = null;
-            update.additional_requirements = null;
+            update.assets = null;
             // influencer_tier should be provided
             if (updateData.influencer_tier === undefined) {
               return {
@@ -1066,28 +1061,16 @@ class CampaignService {
         }
 
         // BULK campaign specific fields
-        if (updateData.campaign_assets !== undefined) {
-          // Only allow campaign_assets for BULK campaigns
+        if (updateData.assets !== undefined) {
+          // Only allow assets for BULK campaigns
           if (currentType === CampaignType.BULK) {
-            update.campaign_assets = Array.isArray(updateData.campaign_assets)
-              ? updateData.campaign_assets.filter(asset => asset && typeof asset === 'string')
+            update.assets = Array.isArray(updateData.assets)
+              ? updateData.assets.filter(asset => asset && typeof asset === 'string')
               : [];
           } else {
             return {
               success: false,
-              message: "campaign_assets can only be set for BULK campaigns",
-            };
-          }
-        }
-
-        if (updateData.additional_requirements !== undefined) {
-          // Only allow additional_requirements for BULK campaigns
-          if (currentType === CampaignType.BULK) {
-            update.additional_requirements = updateData.additional_requirements ?? null;
-          } else {
-            return {
-              success: false,
-              message: "additional_requirements can only be set for BULK campaigns",
+              message: "assets can only be set for BULK campaigns",
             };
           }
         }

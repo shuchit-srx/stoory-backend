@@ -94,7 +94,7 @@ class CampaignController {
       }
 
       // Handle campaign assets uploads (multiple files) - only for BULK campaigns
-      let campaignAssets = [];
+      let assets = [];
       const campaignType = req.body.type?.toUpperCase() || "NORMAL";
       
       if (campaignType === "BULK" && req.files && req.files.length > 0) {
@@ -102,7 +102,7 @@ class CampaignController {
         
         // Upload each file to Supabase storage
         for (const file of req.files) {
-          if (file.fieldname === "campaignAssets" || file.fieldname === "campaign_assets") {
+          if (file.fieldname === "assets") {
             const { url, error: uploadError } = await uploadFileToStorage(
               file.buffer,
               file.originalname,
@@ -110,7 +110,7 @@ class CampaignController {
               "campaigns/assets"
             );
             if (!uploadError && url) {
-              campaignAssets.push(url);
+              assets.push(url);
             } else {
               console.error(`Failed to upload campaign asset ${file.originalname}:`, uploadError);
             }
@@ -119,18 +119,18 @@ class CampaignController {
       }
 
       // Merge any provided links from body with uploaded file URLs
-      if (campaignType === "BULK" && req.body.campaign_assets) {
-        const providedLinks = Array.isArray(req.body.campaign_assets)
-          ? req.body.campaign_assets.filter(link => link && typeof link === 'string')
+      if (campaignType === "BULK" && req.body.assets) {
+        const providedLinks = Array.isArray(req.body.assets)
+          ? req.body.assets.filter(link => link && typeof link === 'string')
           : [];
-        campaignAssets = [...campaignAssets, ...providedLinks];
+        assets = [...assets, ...providedLinks];
       }
 
-      // Merge cover image URL and campaign assets into body
+      // Merge cover image URL and assets into body
       const campaignData = {
         ...req.body,
         cover_image_url: coverImageUrl || req.body.cover_image_url || null,
-        campaign_assets: campaignType === "BULK" && campaignAssets.length > 0 ? campaignAssets : undefined,
+        assets: campaignType === "BULK" && assets.length > 0 ? assets : undefined,
       };
 
       const result = await CampaignService.createCampaign(brandId, campaignData);
@@ -474,7 +474,7 @@ class CampaignController {
       }
 
       // Handle campaign assets uploads (multiple files) - only for BULK campaigns
-      let campaignAssets = undefined;
+      let assets = undefined;
       
       // Get current campaign to check type
       const currentCampaignResult = await CampaignService.getCampaignById(campaignId, req.user.id);
@@ -488,7 +488,7 @@ class CampaignController {
         
         // Upload each file to Supabase storage
         for (const file of req.files) {
-          if (file.fieldname === "campaignAssets" || file.fieldname === "campaign_assets") {
+          if (file.fieldname === "assets") {
             const { url, error: uploadError } = await uploadFileToStorage(
               file.buffer,
               file.originalname,
@@ -504,30 +504,30 @@ class CampaignController {
         }
         
         // Merge any provided links from body with uploaded file URLs
-        if (req.body.campaign_assets) {
-          const providedLinks = Array.isArray(req.body.campaign_assets)
-            ? req.body.campaign_assets.filter(link => link && typeof link === 'string')
+        if (req.body.assets) {
+          const providedLinks = Array.isArray(req.body.assets)
+            ? req.body.assets.filter(link => link && typeof link === 'string')
             : [];
-          campaignAssets = [...uploadedUrls, ...providedLinks];
+          assets = [...uploadedUrls, ...providedLinks];
         } else if (uploadedUrls.length > 0) {
-          campaignAssets = uploadedUrls;
+          assets = uploadedUrls;
         }
-      } else if (currentCampaignType === "BULK" && req.body.campaign_assets) {
+      } else if (currentCampaignType === "BULK" && req.body.assets) {
         // Only links provided, no file uploads
-        campaignAssets = Array.isArray(req.body.campaign_assets)
-          ? req.body.campaign_assets.filter(link => link && typeof link === 'string')
+        assets = Array.isArray(req.body.assets)
+          ? req.body.assets.filter(link => link && typeof link === 'string')
           : [];
       }
 
-      // Merge cover image URL and campaign assets into body
+      // Merge cover image URL and assets into body
       const campaignData = {
         ...req.body,
       };
       if (coverImageUrl !== undefined) {
         campaignData.cover_image_url = coverImageUrl;
       }
-      if (campaignAssets !== undefined) {
-        campaignData.campaign_assets = campaignAssets;
+      if (assets !== undefined) {
+        campaignData.assets = assets;
       }
 
       const result = await CampaignService.updateCampaign(
