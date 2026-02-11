@@ -8,8 +8,7 @@ const { normalizeGender } = require("../utils/enumNormalizer");
 
 class AuthService {
   constructor() {
-    this.jwtSecret =
-      process.env.JWT_SECRET || "your-secret-key-change-in-production";
+    this.jwtSecret = process.env.JWT_SECRET || "your-secret-key-change-in-production";
     this.jwtExpiry = "1d";
     this.refreshJwtExpiry = "180d";
   }
@@ -35,7 +34,28 @@ class AuthService {
     try {
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-      const { error } = await supabaseAdmin.from("otp_codes").upsert({
+      // Delete any existing OTPs for this phone number first
+      // This ensures only the latest OTP is valid for each phone number
+      const { error: deleteError, data: deletedRows } = await supabaseAdmin
+        .from("otp_codes")
+        .delete()
+        .eq("phone", phone)
+        .select();
+
+      if (deleteError) {
+        console.error("[v1/storeOTP] delete old OTPs error:", deleteError);
+        // Log but continue - we'll still insert the new OTP
+        // The verification function will get the latest OTP anyway
+      } else {
+        // Log successful deletion for debugging
+        const deletedCount = deletedRows ? deletedRows.length : 0;
+        if (deletedCount > 0) {
+          console.log(`[v1/storeOTP] Deleted ${deletedCount} old OTP(s) for phone: ${phone}`);
+        }
+      }
+
+      // Insert the new OTP
+      const { error } = await supabaseAdmin.from("otp_codes").insert({
         phone,
         otp,
         expires_at: expiresAt,
