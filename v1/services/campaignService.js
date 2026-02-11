@@ -366,9 +366,10 @@ class CampaignService {
 
       // Build query - select only required fields including status and type for filtering
       // Filter: LIVE campaigns (all types) OR IN_PROGRESS campaigns (BULK only)
+      // Include applications_accepted_till and accepted_count for dynamic expiration check
       let query = supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type", { count: "exact" })
+        .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type, applications_accepted_till, accepted_count", { count: "exact" })
         .eq("is_deleted", false)
         .in("status", [CampaignStatus.LIVE, CampaignStatus.IN_PROGRESS])
         .order("created_at", { ascending: false });
@@ -435,14 +436,33 @@ class CampaignService {
       // Filter campaigns based on business rules:
       // - LIVE campaigns: all types allowed
       // - IN_PROGRESS campaigns: only BULK type allowed
+      // - Exclude dynamically expired campaigns (applications_accepted_till <= now() AND accepted_count = 0)
+      const now = new Date();
       const filteredCampaigns = (data || []).filter(campaign => {
+        // Check status-based filtering
         if (campaign.status === CampaignStatus.LIVE) {
-          return true; // All LIVE campaigns are allowed
+          // All LIVE campaigns are allowed, but check for dynamic expiration
+        } else if (campaign.status === CampaignStatus.IN_PROGRESS) {
+          // Only BULK campaigns in IN_PROGRESS are allowed
+          if (campaign.type !== CampaignType.BULK) {
+            return false;
+          }
+        } else {
+          return false; // Other statuses are not allowed
         }
-        if (campaign.status === CampaignStatus.IN_PROGRESS) {
-          return campaign.type === CampaignType.BULK; // Only BULK campaigns in IN_PROGRESS
+
+        // Check dynamic expiration: exclude if applications_accepted_till has passed and no accepted applications
+        if (campaign.applications_accepted_till) {
+          const acceptedTill = new Date(campaign.applications_accepted_till);
+          const acceptedCount = campaign.accepted_count || 0;
+          
+          // Campaign is expired if: deadline passed AND no accepted applications
+          if (now >= acceptedTill && acceptedCount === 0) {
+            return false; // Exclude expired campaigns
+          }
         }
-        return false; // Other statuses are not allowed
+
+        return true; // Campaign is valid
       });
 
       // Attach brand details to each campaign - simplified structure
@@ -1634,91 +1654,18 @@ class CampaignService {
   }
 
   /**
-   * Check and expire campaigns that have passed their applications_accepted_till timestamp without any accepted applications
-   * This should be called periodically (e.g., via cron job or scheduled task)
+   * @deprecated This function is no longer used. Campaign expiration is now handled dynamically.
+   * Campaigns are treated as expired when now() >= applications_accepted_till AND accepted_count = 0,
+   * without changing the database status. The EXPIRED status has been removed from the system.
    * 
-   * A campaign expires if:
-   * 1. It's in LIVE status
-   * 2. applications_accepted_till has passed
-   * 3. No applications have been accepted (accepted_count = 0)
-   * 
-   * Performance Note: For large numbers of campaigns, consider adding pagination or batch processing.
-   * Recommended indexes:
-   *   - v1_campaigns(status, applications_accepted_till, accepted_count, is_deleted)
-   *   - Composite index for the expiry check query
-   * 
-   * @returns {Promise<Object>} Result object with success status, expiredCount, and expiredCampaignIds
+   * @returns {Promise<Object>} Result object with success status and error message
    */
   async checkAndExpireCampaigns() {
-    try {
-      const now = new Date().toISOString();
-
-      // Find campaigns that:
-      // 1. Are in LIVE status
-      // 2. Have applications_accepted_till set
-      // 3. applications_accepted_till has passed
-      // 4. Have no accepted applications (accepted_count = 0)
-      // 5. Are not deleted
-      // 
-      // Note: Index on (status, applications_accepted_till, accepted_count, is_deleted) recommended
-      // for optimal query performance
-      const { data: expiredCampaigns, error: fetchError } = await supabaseAdmin
-        .from("v1_campaigns")
-        .select("id, title, applications_accepted_till, accepted_count")
-        .eq("status", CampaignStatus.LIVE)
-        .not("applications_accepted_till", "is", null)
-        .lt("applications_accepted_till", now)
-        .eq("accepted_count", 0)
-        .eq("is_deleted", false);
-
-      if (fetchError) {
-        console.error(`[v1/checkAndExpireCampaigns] Fetch error:`, fetchError);
-        return { 
-          success: false, 
-          error: fetchError.message,
-          details: process.env.NODE_ENV === 'development' ? fetchError : undefined
-        };
-      }
-
-      if (!expiredCampaigns || expiredCampaigns.length === 0) {
-        return { success: true, message: "No campaigns to expire", expiredCount: 0, expiredCampaignIds: [] };
-      }
-
-      // Performance consideration: For very large batches (>1000 campaigns), consider processing in chunks
-      // For now, we process all at once as typical expiry batches should be manageable
-      // Update all expired campaigns to EXPIRED status
-      const campaignIds = expiredCampaigns.map(c => c.id);
-      const { error: updateError } = await supabaseAdmin
-        .from("v1_campaigns")
-        .update({ status: CampaignStatus.EXPIRED })
-        .in("id", campaignIds);
-
-      if (updateError) {
-        console.error(`[v1/checkAndExpireCampaigns] Update error for ${campaignIds.length} campaigns:`, updateError);
-        return { 
-          success: false, 
-          error: updateError.message,
-          details: process.env.NODE_ENV === 'development' ? updateError : undefined
-        };
-      }
-
-      console.log(`[v1/checkAndExpireCampaigns] Expired ${expiredCampaigns.length} campaigns: ${campaignIds.join(", ")}`);
-
-      return { 
-        success: true, 
-        message: `Expired ${expiredCampaigns.length} campaigns successfully`,
-        expiredCount: expiredCampaigns.length,
-        expiredCampaignIds: campaignIds
-      };
-    } catch (err) {
-      console.error(`[v1/checkAndExpireCampaigns] Exception:`, err);
-      console.error(`[v1/checkAndExpireCampaigns] Stack trace:`, err.stack);
-      return { 
-        success: false, 
-        error: err.message,
-        details: process.env.NODE_ENV === 'development' ? { stack: err.stack, ...err } : undefined
-      };
-    }
+    return {
+      success: false,
+      error: "This function is deprecated. EXPIRED status has been removed from the system.",
+      message: "Campaign expiration is now handled dynamically. Campaigns are treated as expired when now() >= applications_accepted_till AND accepted_count = 0, without changing the database status."
+    };
   }
 
 }
