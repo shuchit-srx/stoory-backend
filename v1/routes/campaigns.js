@@ -8,7 +8,7 @@ const {
   validateUpdateCampaign,
   validateCampaignFilters,
 } = require("../validators/campaignValidators");
-const { upload } = require("../utils/imageUpload");
+const { upload, uploadBulkCampaignFiles } = require("../utils/imageUpload");
 
 // ============================================
 // PROTECTED ROUTES - Campaign Management
@@ -20,19 +20,26 @@ router.use(authMiddleware.authenticateToken);
 /**
  * Create a new campaign (Brand Owner only)
  * POST /api/v1/campaigns/create
- * Accepts multipart/form-data with optional 'coverImage' file field
+ * Accepts multipart/form-data with:
+ * - Optional 'coverImage' file field (single file)
+ * - Optional 'campaignAssets' or 'campaign_assets' file field (multiple files, only for BULK campaigns)
  */
 router.post(
   "/create",
   authMiddleware.requireRole(["BRAND_OWNER"]),
   normalizeEnums,
   (req, res, next) => {
-    upload.single("coverImage")(req, res, (err) => {
+    // Use fields to handle both single coverImage and multiple campaignAssets
+    uploadBulkCampaignFiles.fields([
+      { name: 'coverImage', maxCount: 1 },
+      { name: 'campaignAssets', maxCount: 20 },
+      { name: 'campaign_assets', maxCount: 20 }
+    ])(req, res, (err) => {
       if (err) {
         if (err.code === "LIMIT_FILE_SIZE") {
           return res.status(400).json({
             success: false,
-            message: "File too large. Maximum size is 5MB",
+            message: "File too large. Maximum size is 50MB",
           });
         }
         return res.status(400).json({
@@ -40,6 +47,21 @@ router.post(
           message: err.message || "File upload error",
         });
       }
+      
+      // Convert fields to single file for coverImage (for backward compatibility)
+      if (req.files && req.files.coverImage && req.files.coverImage.length > 0) {
+        req.file = req.files.coverImage[0];
+      }
+      
+      // Flatten campaignAssets files array
+      if (req.files) {
+        const campaignAssetsFiles = [
+          ...(req.files.campaignAssets || []),
+          ...(req.files.campaign_assets || [])
+        ];
+        req.files = campaignAssetsFiles;
+      }
+      
       next();
     });
   },
@@ -83,19 +105,26 @@ router.get("/:id", CampaignController.getCampaign);
 /**
  * Update campaign (Brand Owner only)
  * PUT /api/v1/campaigns/:id
- * Accepts multipart/form-data with optional 'coverImage' file field
+ * Accepts multipart/form-data with:
+ * - Optional 'coverImage' file field (single file)
+ * - Optional 'campaignAssets' or 'campaign_assets' file field (multiple files, only for BULK campaigns)
  */
 router.put(
   "/:id",
   authMiddleware.requireRole(["BRAND_OWNER"]),
   normalizeEnums,
   (req, res, next) => {
-    upload.single("coverImage")(req, res, (err) => {
+    // Use fields to handle both single coverImage and multiple campaignAssets
+    uploadBulkCampaignFiles.fields([
+      { name: 'coverImage', maxCount: 1 },
+      { name: 'campaignAssets', maxCount: 20 },
+      { name: 'campaign_assets', maxCount: 20 }
+    ])(req, res, (err) => {
       if (err) {
         if (err.code === "LIMIT_FILE_SIZE") {
           return res.status(400).json({
             success: false,
-            message: "File too large. Maximum size is 5MB",
+            message: "File too large. Maximum size is 50MB",
           });
         }
         return res.status(400).json({
@@ -103,6 +132,21 @@ router.put(
           message: err.message || "File upload error",
         });
       }
+      
+      // Convert fields to single file for coverImage (for backward compatibility)
+      if (req.files && req.files.coverImage && req.files.coverImage.length > 0) {
+        req.file = req.files.coverImage[0];
+      }
+      
+      // Flatten campaignAssets files array
+      if (req.files) {
+        const campaignAssetsFiles = [
+          ...(req.files.campaignAssets || []),
+          ...(req.files.campaign_assets || [])
+        ];
+        req.files = campaignAssetsFiles;
+      }
+      
       next();
     });
   },
