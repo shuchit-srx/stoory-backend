@@ -13,6 +13,7 @@ const mouValidators = require("./mouValidators");
 const fcmValidators = require("./fcmValidators");
 const portfolioValidators = require("./portfolioValidators");
 const panValidators = require("./panValidators");
+const reportValidators = require("./reportValidators");
 
 module.exports = {
   // OTP Authentication validators
@@ -35,4 +36,6 @@ module.exports = {
   ...portfolioValidators,
   // PAN Verification validators
   ...panValidators,
+  // Report Management validators
+  ...reportValidators,
 };
