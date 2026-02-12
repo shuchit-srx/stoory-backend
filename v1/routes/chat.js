@@ -61,6 +61,63 @@ router.get(
 );
 
 /**
+ * GET /api/v1/chat/unread/count
+ * Get unread count for all user chats
+ * Response: { success: true, data: { totalUnreadCount, chats: [...] } }
+ */
+router.get(
+  '/unread/count',
+  authMiddleware.authenticateToken,
+  chatController.getAllUnreadCount
+);
+
+/**
+ * GET /api/v1/chat/messages/:messageId/read-receipts
+ * Get read receipts for a message
+ * Response: { success: true, data: [...] }
+ */
+router.get(
+  '/messages/:messageId/read-receipts',
+  authMiddleware.authenticateToken,
+  chatController.getReadReceipts
+);
+
+/**
+ * POST /api/v1/chat/messages/:messageId/read
+ * Mark a message as read
+ * Response: { success: true, data: {...}, message: 'Message marked as read' }
+ */
+router.post(
+  '/messages/:messageId/read',
+  authMiddleware.authenticateToken,
+  chatController.markMessageAsRead
+);
+
+/**
+ * GET /api/v1/chat/:chatId/unread-count
+ * Get unread message count for a specific chat
+ * Response: { success: true, data: { chatId, unreadCount } }
+ * NOTE: Must be defined before /:chatId route to avoid conflicts
+ */
+router.get(
+  '/:chatId/unread-count',
+  authMiddleware.authenticateToken,
+  chatController.getUnreadCount
+);
+
+/**
+ * POST /api/v1/chat/:chatId/mark-all-read
+ * Mark all messages in a chat as read
+ * Response: { success: true, data: { markedCount, readReceipts: [...] } }
+ * NOTE: Must be defined before /:chatId route to avoid conflicts
+ */
+router.post(
+  '/:chatId/mark-all-read',
+  authMiddleware.authenticateToken,
+  chatController.markAllAsRead
+);
+
+/**
  * POST /api/v1/chat/:chatId/upload
  * Upload attachment for a chat
  * Request Body: { fileName, mimeType, fileData (base64) }

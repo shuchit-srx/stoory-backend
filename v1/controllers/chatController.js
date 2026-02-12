@@ -705,6 +705,307 @@ const getAttachmentInfo = async (req, res) => {
   }
 };
 
+/**
+ * Get all unread count for all user chats
+ * GET /api/v1/chat/unread/count
+ */
+const getAllUnreadCount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get all user chats with unread counts
+    const chats = await ChatService.getUserChats(userId);
+    
+    // Calculate total unread count
+    const totalUnreadCount = chats.reduce((total, chat) => {
+      return total + (chat.total_unread_messages || 0);
+    }, 0);
+    
+    res.json({
+      success: true,
+      data: {
+        totalUnreadCount,
+        chats: chats.map(chat => ({
+          chatId: chat.id,
+          unreadCount: chat.total_unread_messages || 0
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Get all unread count error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Get read receipts for a message
+ * GET /api/v1/chat/messages/:messageId/read-receipts
+ */
+const getReadReceipts = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user.id;
+    
+    if (!messageId) {
+      return res.status(400).json({
+        success: false,
+        message: 'messageId is required'
+      });
+    }
+    
+    // Get read receipts
+    const readReceipts = await ChatService.getReadReceipts(messageId);
+    
+    res.json({
+      success: true,
+      data: readReceipts
+    });
+  } catch (error) {
+    console.error('Get read receipts error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Mark a message as read
+ * POST /api/v1/chat/messages/:messageId/read
+ */
+const markMessageAsRead = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user.id;
+    
+    if (!messageId) {
+      return res.status(400).json({
+        success: false,
+        message: 'messageId is required'
+      });
+    }
+    
+    // Mark message as read
+    const readReceipt = await ChatService.markMessageAsRead(messageId, userId);
+    
+    res.json({
+      success: true,
+      data: readReceipt,
+      message: 'Message marked as read'
+    });
+  } catch (error) {
+    console.error('Mark message as read error:', error);
+    const statusCode = error.message.includes('not found') || error.message.includes('access') ? 404 : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Get unread count for a specific chat
+ * GET /api/v1/chat/:chatId/unread-count
+ */
+const getUnreadCount = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+    
+    if (!chatId) {
+      return res.status(400).json({
+        success: false,
+        message: 'chatId is required'
+      });
+    }
+    
+    // Get chat to validate access
+    const chat = await ChatService.getChatById(chatId, userId);
+    if (!chat) {
+      return res.status(404).json({
+        success: false,
+        message: 'Chat not found or access denied'
+      });
+    }
+    
+    // Get all messages in this chat that are not sent by the user
+    const { data: messages, error: messagesError } = await supabaseAdmin
+      .from('v1_chat_messages')
+      .select('id')
+      .eq('chat_id', chatId)
+      .neq('sender_id', userId);
+    
+    if (messagesError) {
+      throw new Error(`Failed to get messages: ${messagesError.message}`);
+    }
+    
+    if (!messages || messages.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          chatId,
+          unreadCount: 0
+        }
+      });
+    }
+    
+    // Get all read receipts for this user
+    const messageIds = messages.map(msg => msg.id);
+    const { data: readReceipts } = await supabaseAdmin
+      .from('v1_chat_message_reads')
+      .select('message_id')
+      .in('message_id', messageIds)
+      .eq('user_id', userId);
+    
+    const readMessageIds = new Set(
+      (readReceipts || []).map(receipt => receipt.message_id)
+    );
+    
+    // Count unread messages
+    const unreadCount = messages.filter(msg => !readMessageIds.has(msg.id)).length;
+    
+    res.json({
+      success: true,
+      data: {
+        chatId,
+        unreadCount
+      }
+    });
+  } catch (error) {
+    console.error('Get unread count error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Mark all messages in a chat as read
+ * POST /api/v1/chat/:chatId/mark-all-read
+ */
+const markAllAsRead = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+    
+    if (!chatId) {
+      return res.status(400).json({
+        success: false,
+        message: 'chatId is required'
+      });
+    }
+    
+    // Get chat to validate access
+    const chat = await ChatService.getChatById(chatId, userId);
+    if (!chat) {
+      return res.status(404).json({
+        success: false,
+        message: 'Chat not found or access denied'
+      });
+    }
+    
+    // Get all unread messages in this chat (messages not sent by the user)
+    const { data: messages, error: messagesError } = await supabaseAdmin
+      .from('v1_chat_messages')
+      .select('id')
+      .eq('chat_id', chatId)
+      .neq('sender_id', userId);
+    
+    if (messagesError) {
+      throw new Error(`Failed to get messages: ${messagesError.message}`);
+    }
+    
+    if (!messages || messages.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          markedCount: 0,
+          readReceipts: []
+        },
+        message: 'No messages to mark as read'
+      });
+    }
+    
+    // Get existing read receipts
+    const messageIds = messages.map(msg => msg.id);
+    const { data: existingReceipts } = await supabaseAdmin
+      .from('v1_chat_message_reads')
+      .select('message_id')
+      .in('message_id', messageIds)
+      .eq('user_id', userId);
+    
+    const existingReadMessageIds = new Set(
+      (existingReceipts || []).map(receipt => receipt.message_id)
+    );
+    
+    // Filter out messages that are already read
+    const unreadMessages = messages.filter(msg => !existingReadMessageIds.has(msg.id));
+    
+    if (unreadMessages.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          markedCount: 0,
+          readReceipts: existingReceipts || []
+        },
+        message: 'All messages already read'
+      });
+    }
+    
+    // Create read receipts for all unread messages
+    const readReceiptsData = unreadMessages.map(msg => ({
+      message_id: msg.id,
+      user_id: userId,
+      read_at: new Date().toISOString()
+    }));
+    
+    const { data: readReceipts, error: readError } = await supabaseAdmin
+      .from('v1_chat_message_reads')
+      .upsert(readReceiptsData, {
+        onConflict: 'message_id,user_id'
+      })
+      .select();
+    
+    if (readError) {
+      throw new Error(`Failed to mark messages as read: ${readError.message}`);
+    }
+    
+    // Update message statuses to READ
+    for (const messageId of unreadMessages.map(msg => msg.id)) {
+      try {
+        await ChatService.updateMessageStatus(messageId, 'READ');
+      } catch (statusError) {
+        console.error(`Failed to update status for message ${messageId}:`, statusError);
+        // Continue with other messages even if one fails
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        markedCount: unreadMessages.length,
+        readReceipts: readReceipts || []
+      },
+      message: `Marked ${unreadMessages.length} message(s) as read`
+    });
+  } catch (error) {
+    console.error('Mark all as read error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   getHistory,
   createChat,
@@ -714,5 +1015,10 @@ module.exports = {
   sendMessageWithAttachment,
   uploadWithFormData,
   deleteAttachment,
-  getAttachmentInfo
+  getAttachmentInfo,
+  getAllUnreadCount,
+  getReadReceipts,
+  markMessageAsRead,
+  getUnreadCount,
+  markAllAsRead
 };
