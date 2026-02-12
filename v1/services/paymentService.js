@@ -22,6 +22,54 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
  */
 class PaymentService {
   /**
+   * Helper method to format error responses based on environment
+   * @param {string} userMessage - User-friendly error message for production
+   * @param {Error|Object} error - Error object or error details
+   * @param {string} context - Context where error occurred (for logging)
+   * @param {Object} additionalDetails - Additional error details
+   * @returns {Object} Formatted error response
+   */
+  formatErrorResponse(userMessage, error, context = "", additionalDetails = {}) {
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    
+    // Log detailed error information
+    if (error) {
+      console.error(`[v1/PaymentService${context ? `/${context}` : ''}] Error:`, {
+        message: error.message || error,
+        stack: error.stack,
+        ...additionalDetails,
+        ...(error.error && { razorpayError: error.error }),
+        ...(error.description && { razorpayDescription: error.description }),
+        ...(error.code && { razorpayCode: error.code }),
+      });
+    }
+
+    // Build error response
+    const errorResponse = {
+      success: false,
+      message: userMessage,
+    };
+
+    // Add detailed error information only in development
+    if (isDevelopment) {
+      if (error) {
+        errorResponse.error = error.message || error;
+        errorResponse.details = {
+          ...additionalDetails,
+          ...(error.stack && { stack: error.stack }),
+          ...(error.error && { razorpayError: error.error }),
+          ...(error.description && { razorpayDescription: error.description }),
+          ...(error.code && { razorpayCode: error.code }),
+        };
+      } else if (Object.keys(additionalDetails).length > 0) {
+        errorResponse.details = additionalDetails;
+      }
+    }
+
+    return errorResponse;
+  }
+
+  /**
    * Normalize payment status to UPPERCASE
    * Valid statuses: CREATED, PROCESSING, VERIFIED, FAILED, REFUNDED
    */
@@ -163,10 +211,19 @@ class PaymentService {
   async createPaymentOrder(applicationId, userId) {
     try {
       if (!razorpay) {
-        return {
-          success: false,
-          message: "Payment service is not configured",
-        };
+        return this.formatErrorResponse(
+          "Payment service is not configured. Please contact support.",
+          new Error("Razorpay is not initialized. Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET"),
+          "createPaymentOrder",
+          {
+            applicationId,
+            userId,
+            missingEnvVars: {
+              RAZORPAY_KEY_ID: !process.env.RAZORPAY_KEY_ID,
+              RAZORPAY_KEY_SECRET: !process.env.RAZORPAY_KEY_SECRET,
+            }
+          }
+        );
       }
 
       // Get application with campaign details including budget, platform_fee_percentage, and platform_fee_amount
@@ -188,10 +245,12 @@ class PaymentService {
         .single();
 
       if (applicationError || !application) {
-        return {
-          success: false,
-          message: "Application not found",
-        };
+        return this.formatErrorResponse(
+          "Application not found",
+          applicationError,
+          "createPaymentOrder",
+          { applicationId, userId }
+        );
       }
 
       // Check if application phase is ACCEPTED (payment can be made after acceptance)
@@ -210,18 +269,27 @@ class PaymentService {
         .single();
 
       if (userError || !user) {
-        return {
-          success: false,
-          message: "User not found",
-        };
+        return this.formatErrorResponse(
+          "User not found",
+          userError,
+          "createPaymentOrder",
+          { applicationId, userId }
+        );
       }
 
       // Permission check: Only brand owner can pay for their applications
       if (user.role !== "ADMIN" && application.v1_campaigns.brand_id !== userId) {
-        return {
-          success: false,
-          message: "You don't have permission to pay for this application",
-        };
+        return this.formatErrorResponse(
+          "You don't have permission to pay for this application",
+          null,
+          "createPaymentOrder",
+          {
+            applicationId,
+            userId,
+            userRole: user.role,
+            campaignBrandId: application.v1_campaigns.brand_id
+          }
+        );
       }
 
       // Get payment amount: use budget_amount from application first, fallback to campaign budget
@@ -232,10 +300,17 @@ class PaymentService {
       const paymentAmount = applicationBudgetAmount ?? campaignBudget;
 
       if (paymentAmount === null || paymentAmount === undefined || paymentAmount <= 0) {
-        return {
-          success: false,
-          message: "Application does not have a valid budget amount and campaign budget is also missing",
-        };
+        return this.formatErrorResponse(
+          "Application does not have a valid budget amount and campaign budget is also missing",
+          null,
+          "createPaymentOrder",
+          {
+            applicationId,
+            applicationBudgetAmount,
+            campaignBudget,
+            campaignId: application.campaign_id
+          }
+        );
       }
 
       // Get platform fee from application first, fallback to campaign
@@ -244,10 +319,18 @@ class PaymentService {
       const platformFeePercentage = application.platform_fee_percentage ?? application.v1_campaigns.platform_fee_percentage ?? null;
 
       if (platformFeeAmount === null && platformFeePercentage === null) {
-        return {
-          success: false,
-          message: "Application and campaign do not have a valid platform fee (percentage or amount)",
-        };
+        return this.formatErrorResponse(
+          "Application and campaign do not have a valid platform fee (percentage or amount)",
+          null,
+          "createPaymentOrder",
+          {
+            applicationId,
+            applicationPlatformFeeAmount: application.platform_fee_amount,
+            applicationPlatformFeePercentage: application.platform_fee_percentage,
+            campaignPlatformFeeAmount: application.v1_campaigns.platform_fee_amount,
+            campaignPlatformFeePercentage: application.v1_campaigns.platform_fee_percentage,
+          }
+        );
       }
 
       // Check if a previous payment order exists for this application
@@ -364,7 +447,27 @@ class PaymentService {
         },
       };
 
-      const razorpayOrder = await razorpay.orders.create(orderOptions);
+      let razorpayOrder;
+      try {
+        razorpayOrder = await razorpay.orders.create(orderOptions);
+      } catch (razorpayError) {
+        return this.formatErrorResponse(
+          "Failed to create payment order. Please try again or contact support if the issue persists.",
+          razorpayError,
+          "createPaymentOrder",
+          {
+            applicationId,
+            userId,
+            orderOptions: {
+              amount: orderOptions.amount,
+              currency: orderOptions.currency,
+              receipt: orderOptions.receipt,
+              // Don't log full notes in production
+              notes: process.env.NODE_ENV === 'development' ? orderOptions.notes : { payment_type: orderOptions.notes.payment_type }
+            }
+          }
+        );
+      }
 
       // Store payment order in database (amount in rupees)
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
@@ -396,15 +499,22 @@ class PaymentService {
         .single();
 
       if (orderError) {
-        console.error(
-          "[v1/PaymentService/createPaymentOrder] Database error:",
-          orderError
+        return this.formatErrorResponse(
+          "Failed to save payment order. Please try again or contact support if the issue persists.",
+          orderError,
+          "createPaymentOrder",
+          {
+            applicationId,
+            userId,
+            razorpayOrderId: razorpayOrder?.id,
+            // Don't log full metadata in production
+            metadata: process.env.NODE_ENV === 'development' ? {
+              campaign_id: application.campaign_id,
+              brand_id: application.v1_campaigns.brand_id,
+              payment_type: "application_payment",
+            } : { payment_type: "application_payment" }
+          }
         );
-        return {
-          success: false,
-          message: "Failed to create payment order",
-          error: orderError.message,
-        };
       }
 
       // Convert Razorpay order amounts from paise to rupees for response
@@ -418,12 +528,12 @@ class PaymentService {
         message: "Payment order created successfully",
       };
     } catch (err) {
-      console.error("[v1/PaymentService/createPaymentOrder] Exception:", err);
-      return {
-        success: false,
-        message: "Failed to create payment order",
-        error: err.message,
-      };
+      return this.formatErrorResponse(
+        "An unexpected error occurred while creating the payment order. Please try again or contact support.",
+        err,
+        "createPaymentOrder",
+        { applicationId, userId }
+      );
     }
   }
 
@@ -438,18 +548,30 @@ class PaymentService {
   async createBulkPaymentOrderForCampaign(campaignId, userId, applicationIds = []) {
     try {
       if (!razorpay) {
-        return {
-          success: false,
-          message: "Payment service is not configured",
-        };
+        return this.formatErrorResponse(
+          "Payment service is not configured. Please contact support.",
+          new Error("Razorpay is not initialized. Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET"),
+          "createBulkPaymentOrderForCampaign",
+          {
+            campaignId,
+            userId,
+            applicationIds,
+            missingEnvVars: {
+              RAZORPAY_KEY_ID: !process.env.RAZORPAY_KEY_ID,
+              RAZORPAY_KEY_SECRET: !process.env.RAZORPAY_KEY_SECRET,
+            }
+          }
+        );
       }
 
       // Validate application_ids
       if (!Array.isArray(applicationIds) || applicationIds.length === 0) {
-        return {
-          success: false,
-          message: "application_ids array is required and must not be empty",
-        };
+        return this.formatErrorResponse(
+          "application_ids array is required and must not be empty",
+          null,
+          "createBulkPaymentOrderForCampaign",
+          { campaignId, userId, applicationIds }
+        );
       }
 
       // Get campaign with platform_fee_percentage, platform_fee_amount, and net_amount
@@ -460,10 +582,12 @@ class PaymentService {
         .single();
 
       if (campaignError || !campaign) {
-        return {
-          success: false,
-          message: "Campaign not found",
-        };
+        return this.formatErrorResponse(
+          "Campaign not found",
+          campaignError,
+          "createBulkPaymentOrderForCampaign",
+          { campaignId, userId, applicationIds }
+        );
       }
 
       // Check if user is the brand owner or admin
@@ -474,18 +598,27 @@ class PaymentService {
         .single();
 
       if (userError || !user) {
-        return {
-          success: false,
-          message: "User not found",
-        };
+        return this.formatErrorResponse(
+          "User not found",
+          userError,
+          "createBulkPaymentOrderForCampaign",
+          { campaignId, userId, applicationIds }
+        );
       }
 
       // Permission check: Only brand owner can pay for their campaigns
       if (user.role !== "ADMIN" && campaign.brand_id !== userId) {
-        return {
-          success: false,
-          message: "You don't have permission to pay for this campaign",
-        };
+        return this.formatErrorResponse(
+          "You don't have permission to pay for this campaign",
+          null,
+          "createBulkPaymentOrderForCampaign",
+          {
+            campaignId,
+            userId,
+            userRole: user.role,
+            campaignBrandId: campaign.brand_id
+          }
+        );
       }
 
       // Get selected applications and validate they belong to this campaign and are ACCEPTED
@@ -497,28 +630,33 @@ class PaymentService {
         .eq("phase", "ACCEPTED");
 
       if (applicationsError) {
-        return {
-          success: false,
-          message: "Failed to load applications",
-          error: applicationsError.message,
-        };
+        return this.formatErrorResponse(
+          "Failed to load applications. Please try again or contact support.",
+          applicationsError,
+          "createBulkPaymentOrderForCampaign",
+          { campaignId, userId, applicationIds }
+        );
       }
 
       if (!applications || applications.length === 0) {
-        return {
-          success: false,
-          message: "No accepted applications found for the selected IDs in this campaign",
-        };
+        return this.formatErrorResponse(
+          "No accepted applications found for the selected IDs in this campaign",
+          null,
+          "createBulkPaymentOrderForCampaign",
+          { campaignId, userId, applicationIds }
+        );
       }
 
       // Check if all requested applications were found
       if (applications.length !== applicationIds.length) {
         const foundIds = new Set(applications.map(a => a.id));
         const missingIds = applicationIds.filter(id => !foundIds.has(id));
-        return {
-          success: false,
-          message: `Some applications not found or not in ACCEPTED phase: ${missingIds.join(", ")}`,
-        };
+        return this.formatErrorResponse(
+          `Some applications not found or not in ACCEPTED phase: ${missingIds.join(", ")}`,
+          null,
+          "createBulkPaymentOrderForCampaign",
+          { campaignId, userId, applicationIds, missingIds, foundIds: Array.from(foundIds) }
+        );
       }
 
       // Check which applications already have verified payments (APPLICATION type)
@@ -636,10 +774,17 @@ class PaymentService {
       }
 
       if (platformFeeAmount === null && platformFeePercentage === null) {
-        return {
-          success: false,
-          message: "Applications and campaign do not have a valid platform fee (percentage or amount)",
-        };
+        return this.formatErrorResponse(
+          "Applications and campaign do not have a valid platform fee (percentage or amount)",
+          null,
+          "createBulkPaymentOrderForCampaign",
+          {
+            campaignId,
+            campaignPlatformFeeAmount: campaign.platform_fee_amount,
+            campaignPlatformFeePercentage: campaign.platform_fee_percentage,
+            applicationCount: payableApplications.length
+          }
+        );
       }
 
       // Calculate commission breakdown using total amount and platform fee (amount or percentage)
@@ -667,7 +812,28 @@ class PaymentService {
         },
       };
 
-      const razorpayOrder = await razorpay.orders.create(orderOptions);
+      let razorpayOrder;
+      try {
+        razorpayOrder = await razorpay.orders.create(orderOptions);
+      } catch (razorpayError) {
+        return this.formatErrorResponse(
+          "Failed to create payment order. Please try again or contact support if the issue persists.",
+          razorpayError,
+          "createBulkPaymentOrderForCampaign",
+          {
+            campaignId,
+            userId,
+            applicationCount: payableApplications.length,
+            orderOptions: {
+              amount: orderOptions.amount,
+              currency: orderOptions.currency,
+              receipt: orderOptions.receipt,
+              // Don't log full notes in production
+              notes: process.env.NODE_ENV === 'development' ? orderOptions.notes : { payment_type: orderOptions.notes.payment_type }
+            }
+          }
+        );
+      }
 
       // Store payment order in database (amount in rupees)
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
@@ -699,15 +865,23 @@ class PaymentService {
         .single();
 
       if (orderError) {
-        console.error(
-          "[v1/PaymentService/createBulkPaymentOrderForCampaign] Database error:",
-          orderError
+        return this.formatErrorResponse(
+          "Failed to save payment order. Please try again or contact support if the issue persists.",
+          orderError,
+          "createBulkPaymentOrderForCampaign",
+          {
+            campaignId,
+            userId,
+            razorpayOrderId: razorpayOrder?.id,
+            applicationCount: payableApplications.length,
+            // Don't log full metadata in production
+            metadata: process.env.NODE_ENV === 'development' ? {
+              campaign_id: campaignId,
+              brand_id: campaign.brand_id,
+              payment_type: "campaign_bulk_payment",
+            } : { payment_type: "campaign_bulk_payment" }
+          }
         );
-        return {
-          success: false,
-          message: "Failed to create payment order",
-          error: orderError.message,
-        };
       }
 
       // Create entries in v1_application_payments table
@@ -721,20 +895,30 @@ class PaymentService {
         .insert(applicationPaymentEntries);
 
       if (applicationPaymentsError) {
-        console.error(
-          "[v1/PaymentService/createBulkPaymentOrderForCampaign] Error creating application payments:",
-          applicationPaymentsError
-        );
         // Rollback payment order creation
-        await supabaseAdmin
-          .from("v1_payment_orders")
-          .delete()
-          .eq("id", paymentOrder.id);
-        return {
-          success: false,
-          message: "Failed to create application payment records",
-          error: applicationPaymentsError.message,
-        };
+        try {
+          await supabaseAdmin
+            .from("v1_payment_orders")
+            .delete()
+            .eq("id", paymentOrder.id);
+        } catch (rollbackError) {
+          console.error(
+            "[v1/PaymentService/createBulkPaymentOrderForCampaign] Failed to rollback payment order:",
+            rollbackError
+          );
+        }
+        return this.formatErrorResponse(
+          "Failed to create application payment records. Payment order has been rolled back. Please try again.",
+          applicationPaymentsError,
+          "createBulkPaymentOrderForCampaign",
+          {
+            campaignId,
+            userId,
+            paymentOrderId: paymentOrder.id,
+            applicationCount: payableApplications.length,
+            applicationIds: payableApplications.map(a => a.id)
+          }
+        );
       }
 
       // Convert Razorpay order amounts from paise to rupees for response
@@ -750,12 +934,12 @@ class PaymentService {
         message: "Bulk payment order created successfully",
       };
     } catch (err) {
-      console.error("[v1/PaymentService/createBulkPaymentOrderForCampaign] Exception:", err);
-      return {
-        success: false,
-        message: "Failed to create bulk payment order",
-        error: err.message,
-      };
+      return this.formatErrorResponse(
+        "An unexpected error occurred while creating the bulk payment order. Please try again or contact support.",
+        err,
+        "createBulkPaymentOrderForCampaign",
+        { campaignId, userId, applicationIds }
+      );
     }
   }
 
@@ -772,13 +956,29 @@ class PaymentService {
       } = paymentData;
 
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-        return {
-          success: false,
-          message: "Missing required payment information",
-        };
+        return this.formatErrorResponse(
+          "Missing required payment information",
+          null,
+          "verifyPayment",
+          {
+            hasOrderId: !!razorpay_order_id,
+            hasPaymentId: !!razorpay_payment_id,
+            hasSignature: !!razorpay_signature,
+            application_id
+          }
+        );
       }
 
       // Verify payment signature
+      if (!process.env.RAZORPAY_KEY_SECRET) {
+        return this.formatErrorResponse(
+          "Payment verification service is not configured. Please contact support.",
+          new Error("RAZORPAY_KEY_SECRET is not set"),
+          "verifyPayment",
+          { razorpay_order_id, application_id }
+        );
+      }
+
       const text = `${razorpay_order_id}|${razorpay_payment_id}`;
       const expectedSignature = crypto
         .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -786,10 +986,20 @@ class PaymentService {
         .digest("hex");
 
       if (razorpay_signature !== expectedSignature) {
-        return {
-          success: false,
-          message: "Invalid payment signature",
-        };
+        return this.formatErrorResponse(
+          "Invalid payment signature. Payment verification failed.",
+          null,
+          "verifyPayment",
+          {
+            razorpay_order_id,
+            application_id,
+            // Only log signature details in development
+            ...(process.env.NODE_ENV === 'development' && {
+              signatureLength: razorpay_signature?.length,
+              expectedLength: expectedSignature?.length
+            })
+          }
+        );
       }
 
       // Get payment order
@@ -800,10 +1010,12 @@ class PaymentService {
         .single();
 
       if (orderError || !paymentOrder) {
-        return {
-          success: false,
-          message: "Payment order not found",
-        };
+        return this.formatErrorResponse(
+          "Payment order not found",
+          orderError,
+          "verifyPayment",
+          { razorpay_order_id, application_id }
+        );
       }
 
       // Normalize status to UPPERCASE (in case of legacy lowercase values)
@@ -974,15 +1186,17 @@ class PaymentService {
         .single();
 
       if (updateError) {
-        console.error(
-          "[v1/PaymentService/verifyPayment] Update error:",
-          updateError
+        return this.formatErrorResponse(
+          "Failed to verify payment. Please contact support if the issue persists.",
+          updateError,
+          "verifyPayment",
+          {
+            razorpay_order_id,
+            razorpay_payment_id,
+            paymentOrderId: paymentOrder.id,
+            application_id
+          }
         );
-        return {
-          success: false,
-          message: "Failed to verify payment",
-          error: updateError.message,
-        };
       }
 
       // Insert transaction records into v1_transactions after payment verification
@@ -1123,12 +1337,16 @@ class PaymentService {
         }),
       };
     } catch (err) {
-      console.error("[v1/PaymentService/verifyPayment] Exception:", err);
-      return {
-        success: false,
-        message: "Failed to verify payment",
-        error: err.message,
-      };
+      return this.formatErrorResponse(
+        "An unexpected error occurred while verifying the payment. Please contact support.",
+        err,
+        "verifyPayment",
+        {
+          razorpay_order_id: paymentData?.razorpay_order_id,
+          razorpay_payment_id: paymentData?.razorpay_payment_id,
+          application_id: paymentData?.application_id
+        }
+      );
     }
   }
 
