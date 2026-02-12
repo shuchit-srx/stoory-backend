@@ -7,6 +7,12 @@ const { validateRegisterToken, validateUnregisterToken, validateTestNotification
 // Get notifications
 router.get('/', authMiddleware.authenticateToken, notificationController.getNotifications.bind(notificationController));
 
+// Get unread count
+router.get('/unread/count', authMiddleware.authenticateToken, notificationController.getUnreadCount.bind(notificationController));
+
+// Mark all as read
+router.patch('/read/all', authMiddleware.authenticateToken, notificationController.markAllAsRead.bind(notificationController));
+
 // Mark as read
 router.patch('/:id/read', authMiddleware.authenticateToken, notificationController.markAsRead.bind(notificationController));
 

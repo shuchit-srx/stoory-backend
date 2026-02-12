@@ -334,28 +334,14 @@ class CampaignService {
       }
     }
 
-  /**
-   * Get all campaigns with filtering and pagination
-   * Returns only:
-   * - LIVE campaigns (all types)
-   * - IN_PROGRESS campaigns (BULK type only)
-   * 
-   * Influencers can see all campaigns, Brand owners see their own + all
-   */
-  async getCampaigns(filters = {}, pagination = {}) {
+  async getCampaigns(filters = {}, pagination = {}, influencerId = null) {
     try {
       const { type, brand_id, min_budget, max_budget, search } = filters;
-
-      // Accept offset + limit for infinite scroll support
       const { limit = 20, offset = 0 } = pagination;
       
-      // Validate pagination parameters
-      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items
+      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20));
       const validatedOffset = Math.max(0, parseInt(offset) || 0);
 
-      // Build query - select only required fields including status and type for filtering
-      // Filter: LIVE campaigns (all types) OR IN_PROGRESS campaigns (BULK only)
-      // Include applications_accepted_till and accepted_count for dynamic expiration check
       let query = supabaseAdmin
         .from("v1_campaigns")
         .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type, applications_accepted_till, accepted_count", { count: "exact" })
@@ -363,7 +349,6 @@ class CampaignService {
         .in("status", [CampaignStatus.LIVE, CampaignStatus.IN_PROGRESS])
         .order("created_at", { ascending: false });
 
-      // Apply type filter if provided
       if (type) {
         const normalizedType = normalizeCampaignType(type) || "NORMAL";
         if (this.validateType(normalizedType)) {
@@ -387,7 +372,6 @@ class CampaignService {
         query = query.ilike("title", `%${search}%`);
       }
 
-      // Apply pagination
       query = query.range(validatedOffset, validatedOffset + validatedLimit - 1);
 
       const { data, error, count } = await query;
@@ -401,12 +385,24 @@ class CampaignService {
         };
       }
 
-      // Fetch brand details for all unique brand_ids - only get id and name
+      let appliedCampaignIds = new Set();
+      if (influencerId) {
+        const { data: applications, error: applicationsError } = await supabaseAdmin
+          .from("v1_applications")
+          .select("campaign_id")
+          .eq("influencer_id", influencerId);
+
+        if (applicationsError) {
+          console.error("[v1/getCampaigns] Applications fetch error:", applicationsError);
+        } else if (applications) {
+          appliedCampaignIds = new Set(applications.map(app => app.campaign_id).filter(Boolean));
+        }
+      }
+
       const brandIds = [...new Set((data || []).map(c => c.brand_id).filter(Boolean))];
       let brandMap = {};
 
       if (brandIds.length > 0) {
-        // Fetch brand users - only get id and name
         const { data: brandUsers, error: brandUsersError } = await supabaseAdmin
           .from("v1_users")
           .select("id, name")
@@ -422,50 +418,45 @@ class CampaignService {
         }
       }
 
-      // Filter campaigns based on business rules:
-      // - LIVE campaigns: all types allowed
-      // - IN_PROGRESS campaigns: only BULK type allowed
-      // - Exclude dynamically expired campaigns (applications_accepted_till <= now() AND accepted_count = 0)
       const now = new Date();
       const filteredCampaigns = (data || []).filter(campaign => {
-        // Check status-based filtering
-        if (campaign.status === CampaignStatus.LIVE) {
-          // All LIVE campaigns are allowed, but check for dynamic expiration
-        } else if (campaign.status === CampaignStatus.IN_PROGRESS) {
-          // Only BULK campaigns in IN_PROGRESS are allowed
-          if (campaign.type !== CampaignType.BULK) {
+        if (influencerId && appliedCampaignIds.has(campaign.id)) {
+          return false;
+        }
+
+        if (campaign.type === CampaignType.NORMAL) {
+          if (campaign.status !== CampaignStatus.LIVE) {
+            return false;
+          }
+        } else if (campaign.type === CampaignType.BULK) {
+          if (campaign.status !== CampaignStatus.LIVE && campaign.status !== CampaignStatus.IN_PROGRESS) {
             return false;
           }
         } else {
-          return false; // Other statuses are not allowed
+          return false;
         }
 
-        // Check dynamic expiration: exclude if applications_accepted_till has passed and no accepted applications
         if (campaign.applications_accepted_till) {
           const acceptedTill = new Date(campaign.applications_accepted_till);
           const acceptedCount = campaign.accepted_count || 0;
-          
-          // Campaign is expired if: deadline passed AND no accepted applications
           if (now >= acceptedTill && acceptedCount === 0) {
-            return false; // Exclude expired campaigns
+            return false;
           }
         }
 
-        return true; // Campaign is valid
+        return true;
       });
 
-      // Attach brand details to each campaign - simplified structure
-      // Filter out campaigns where brand owner is deleted
       const campaignsWithBrand = filteredCampaigns
-        .filter(campaign => brandMap[campaign.brand_id]) // Only include campaigns with non-deleted brand owners
+        .filter(campaign => {
+          if (!brandMap[campaign.brand_id]) {
+            console.warn(`[v1/getCampaigns] Campaign ${campaign.id} has brand_id ${campaign.brand_id} but brand owner not found or deleted`);
+            return false;
+          }
+          return true;
+        })
         .map(campaign => {
           const brandUser = brandMap[campaign.brand_id];
-
-          const brand = {
-            id: brandUser.id,
-            brand_name: brandUser.name
-          };
-
           return {
             id: campaign.id,
             title: campaign.title,
@@ -473,11 +464,16 @@ class CampaignService {
             budget: campaign.budget,
             platform: campaign.platform,
             content_type: campaign.content_type,
-            brand: brand
+            brand: {
+              id: brandUser.id,
+              brand_name: brandUser.name
+            }
           };
         });
 
-      const hasMore = (validatedOffset + validatedLimit) < (count || 0);
+      const actualFilteredCount = campaignsWithBrand.length;
+      const hasMore = campaignsWithBrand.length === validatedLimit && 
+                      (validatedOffset + validatedLimit) < (count || 0);
 
       return {
         success: true,
@@ -485,8 +481,9 @@ class CampaignService {
         pagination: {
           limit: validatedLimit,
           offset: validatedOffset,
-          count: campaignsWithBrand.length,
+          count: actualFilteredCount,
           total: count || 0,
+          filtered_total: actualFilteredCount,
           hasMore,
         },
       };

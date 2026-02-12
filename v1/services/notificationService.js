@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require('../db/config');
 const fcmService = require('./fcmService');
+const { getNotificationTemplate, getScriptReviewTemplate, getWorkReviewTemplate } = require('../utils/notificationTemplates');
 
 class NotificationService {
   constructor() {
@@ -447,16 +448,17 @@ class NotificationService {
 
     const firstNotification = notifications[0];
     const type = firstNotification.type;
+    const count = notifications.length;
 
     if (type === 'CHAT_MESSAGE') {
-      const count = notifications.length;
+      const template = getNotificationTemplate('CHAT_MESSAGE_BATCHED', {
+        count,
+        firstNotification,
+        applicationId: firstNotification.data?.applicationId,
+      });
       return {
         type: 'CHAT_MESSAGE',
-        title: count === 1 ? 'New Message' : `${count} New Messages`,
-        body: count === 1 
-          ? firstNotification.body 
-          : `You have ${count} new messages`,
-        clickAction: firstNotification.clickAction,
+        ...template,
         data: {
           ...firstNotification.data,
           batchCount: count,
@@ -464,14 +466,13 @@ class NotificationService {
         }
       };
     } else if (type === 'APPLICATION_CREATED') {
-      const count = notifications.length;
+      const template = getNotificationTemplate('APPLICATION_CREATED_BATCHED', {
+        count,
+        firstNotification,
+      });
       return {
         type: 'APPLICATION_CREATED',
-        title: count === 1 ? 'New Application' : `${count} New Applications`,
-        body: count === 1 
-          ? firstNotification.body 
-          : `You have ${count} new applications`,
-        clickAction: '/applications',
+        ...template,
         data: {
           batchCount: count,
           batched: true,
@@ -617,12 +618,15 @@ class NotificationService {
         .eq('id', influencerId)
         .single();
 
-      const campaignTitle = campaign?.title || 'Campaign';
+      const template = getNotificationTemplate('APPLICATION_CREATED', {
+        campaignTitle: campaign?.title,
+        influencerName: influencer?.name,
+        applicationId,
+      });
+
       const notificationData = {
         type: 'APPLICATION_CREATED',
-        title: `${campaignTitle} Update`,
-        body: `"${influencer?.name || 'An influencer'}" applied for "${campaignTitle}"`,
-        clickAction: `/applications/${applicationId}`,
+        ...template,
         data: { applicationId, campaignId, influencerId, brandId },
       };
 
@@ -648,12 +652,15 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
+      const template = getNotificationTemplate('APPLICATION_ACCEPTED', {
+        campaignTitle: application?.v1_campaigns?.title,
+        brandName: brand?.brand_name,
+        applicationId,
+      });
+
       const notificationData = {
         type: 'APPLICATION_ACCEPTED',
-        title: `${campaignTitle} Update`,
-        body: `"${brand?.brand_name || 'The brand'}" accepted your application for "${campaignTitle}"`,
-        clickAction: `/applications/${applicationId}`,
+        ...template,
         data: { applicationId, brandId, influencerId },
       };
 
@@ -677,16 +684,19 @@ class NotificationService {
         return { success: false, error: 'Application not found' };
       }
 
-      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
       const cancelledByName = cancelledByRole === 'INFLUENCER' 
         ? 'The influencer' 
         : 'The brand';
 
+      const template = getNotificationTemplate('APPLICATION_CANCELLED', {
+        campaignTitle: application?.v1_campaigns?.title,
+        cancelledByName,
+        applicationId,
+      });
+
       const notificationData = {
         type: 'APPLICATION_CANCELLED',
-        title: `${campaignTitle} Update`,
-        body: `${cancelledByName} cancelled the application for "${campaignTitle}"`,
-        clickAction: `/applications/${applicationId}`,
+        ...template,
         data: { applicationId, cancelledByRole },
       };
 
@@ -712,13 +722,15 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
+      const template = getNotificationTemplate('MOU_ACCEPTED_BY_BRAND', {
+        campaignTitle: application?.v1_campaigns?.title,
+        brandName: brand?.brand_name,
+        applicationId,
+      });
 
       const notificationData = {
         type: 'MOU_ACCEPTED_BY_BRAND',
-        title: `${campaignTitle} Update`,
-        body: `"${brand?.brand_name || 'The brand'}" accepted the MOU for "${campaignTitle}"`,
-        clickAction: `/applications/${applicationId}/mou`,
+        ...template,
         data: { mouId, applicationId, brandId, influencerId },
       };
 
@@ -744,13 +756,15 @@ class NotificationService {
         .eq('id', influencerId)
         .maybeSingle();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
+      const template = getNotificationTemplate('MOU_ACCEPTED_BY_INFLUENCER', {
+        campaignTitle: application?.v1_campaigns?.title,
+        influencerName: influencer?.name,
+        applicationId,
+      });
 
       const notificationData = {
         type: 'MOU_ACCEPTED_BY_INFLUENCER',
-        title: `${campaignTitle} Update`,
-        body: `"${influencer?.name || 'The influencer'}" accepted the MOU for "${campaignTitle}"`,
-        clickAction: `/applications/${applicationId}/mou`,
+        ...template,
         data: { mouId, applicationId, brandId, influencerId },
       };
 
@@ -773,12 +787,14 @@ class NotificationService {
 
       const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
 
-      // Notify brand_owner
+      const brandTemplate = getNotificationTemplate('MOU_FULLY_ACCEPTED_BRAND', {
+        campaignTitle,
+        applicationId,
+      });
+
       const brandNotificationData = {
         type: 'MOU_FULLY_ACCEPTED',
-        title: `${campaignTitle} Update`,
-        body: `Both parties accepted the MOU for "${campaignTitle}". Proceed with payment`,
-        clickAction: `/applications/${applicationId}/payment`,
+        ...brandTemplate,
         data: { 
           mouId, 
           applicationId, 
@@ -789,12 +805,14 @@ class NotificationService {
       };
       await this.sendAndStoreNotification(brandId, brandNotificationData);
 
-      // Notify influencer
+      const influencerTemplate = getNotificationTemplate('MOU_FULLY_ACCEPTED_INFLUENCER', {
+        campaignTitle,
+        applicationId,
+      });
+
       const influencerNotificationData = {
         type: 'MOU_FULLY_ACCEPTED',
-        title: `${campaignTitle} Update`,
-        body: `Both parties accepted the MOU for "${campaignTitle}". Waiting for payment`,
-        clickAction: `/applications/${applicationId}`,
+        ...influencerTemplate,
         data: { 
           mouId, 
           applicationId, 
@@ -824,7 +842,6 @@ class NotificationService {
       const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
       const requiresScript = application?.v1_campaigns?.requires_script || false;
       
-      // Check if script was already accepted (if script is required)
       let scriptAccepted = false;
       if (requiresScript) {
         const { data: script } = await supabaseAdmin
@@ -836,18 +853,16 @@ class NotificationService {
         scriptAccepted = !!script;
       }
 
-      let body;
-      if (requiresScript && !scriptAccepted) {
-        body = `Payment completed for "${campaignTitle}". Submit your script`;
-      } else {
-        body = `Payment completed for "${campaignTitle}". Submit your work`;
-      }
+      const template = getNotificationTemplate('PAYMENT_COMPLETED', {
+        campaignTitle,
+        applicationId,
+        requiresScript,
+        scriptAccepted,
+      });
 
       const notificationData = {
         type: 'PAYMENT_COMPLETED',
-        title: `${campaignTitle} Update`,
-        body,
-        clickAction: `/applications/${applicationId}`,
+        ...template,
         data: { applicationId, brandId, influencerId },
       };
 
@@ -873,12 +888,15 @@ class NotificationService {
         .eq('id', influencerId)
         .maybeSingle();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
+      const template = getNotificationTemplate('SCRIPT_SUBMITTED', {
+        campaignTitle: application?.v1_campaigns?.title,
+        influencerName: influencer?.name,
+        applicationId,
+      });
+
       const notificationData = {
         type: 'SCRIPT_SUBMITTED',
-        title: `${campaignTitle} Update`,
-        body: `"${influencer?.name || 'The influencer'}" submitted a script for "${campaignTitle}"`,
-        clickAction: `/applications/${applicationId}/scripts`,
+        ...template,
         data: { scriptId, applicationId, brandId, influencerId },
       };
 
@@ -904,23 +922,16 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = script?.v1_applications?.v1_campaigns?.title || 'Campaign';
-      const brandName = brand?.brand_name || 'The brand';
-
-      let body;
-      if (status === 'ACCEPTED') {
-        body = `"${brandName}" accepted your script for "${campaignTitle}". Submit your work`;
-      } else if (status === 'REVISION') {
-        body = `"${brandName}" requested revision on your script for "${campaignTitle}"`;
-      } else {
-        body = `"${brandName}" rejected your script for "${campaignTitle}"`;
-      }
+      const template = getScriptReviewTemplate(
+        status,
+        script?.v1_applications?.v1_campaigns?.title || 'Campaign',
+        brand?.brand_name || 'The brand',
+        applicationId
+      );
 
       const notificationData = {
         type: 'SCRIPT_REVIEW',
-        title: `${campaignTitle} Update`,
-        body,
-        clickAction: `/applications/${applicationId}/scripts`,
+        ...template,
         data: { scriptId, applicationId, brandId, influencerId, status, remarks },
       };
 
@@ -946,12 +957,15 @@ class NotificationService {
         .eq('id', influencerId)
         .maybeSingle();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
+      const template = getNotificationTemplate('WORK_SUBMITTED', {
+        campaignTitle: application?.v1_campaigns?.title,
+        influencerName: influencer?.name,
+        applicationId,
+      });
+
       const notificationData = {
         type: 'WORK_SUBMITTED',
-        title: `${campaignTitle} Update`,
-        body: `"${influencer?.name || 'The influencer'}" submitted work for "${campaignTitle}"`,
-        clickAction: `/applications/${applicationId}/work`,
+        ...template,
         data: { workSubmissionId, applicationId, brandId, influencerId },
       };
 
@@ -977,23 +991,16 @@ class NotificationService {
         .eq('user_id', brandId)
         .single();
 
-      const campaignTitle = work?.v1_applications?.v1_campaigns?.title || 'Campaign';
-      const brandName = brand?.brand_name || 'The brand';
-
-      let body;
-      if (status === 'ACCEPTED') {
-        body = `"${brandName}" accepted your work for "${campaignTitle}". Payout will be released soon`;
-      } else if (status === 'REVISION') {
-        body = `"${brandName}" requested revision on your work for "${campaignTitle}"`;
-      } else {
-        body = `"${brandName}" rejected your work for "${campaignTitle}"`;
-      }
+      const template = getWorkReviewTemplate(
+        status,
+        work?.v1_applications?.v1_campaigns?.title || 'Campaign',
+        brand?.brand_name || 'The brand',
+        applicationId
+      );
 
       const notificationData = {
         type: 'WORK_REVIEW',
-        title: `${campaignTitle} Update`,
-        body,
-        clickAction: `/applications/${applicationId}/work`,
+        ...template,
         data: { workSubmissionId, applicationId, brandId, influencerId, status, remarks },
       };
 
@@ -1013,13 +1020,14 @@ class NotificationService {
         .eq('id', campaignId)
         .single();
 
-      const campaignTitle = campaign?.title || 'Campaign';
+      const template = getNotificationTemplate('CAMPAIGN_COMPLETED', {
+        campaignTitle: campaign?.title,
+        campaignId,
+      });
 
       const notificationData = {
         type: 'CAMPAIGN_COMPLETED',
-        title: `${campaignTitle} Update`,
-        body: `Congratulations! "${campaignTitle}" is now complete`,
-        clickAction: `/campaigns/${campaignId}`,
+        ...template,
         data: { 
           campaignId, 
           brandId
@@ -1042,13 +1050,14 @@ class NotificationService {
         .eq('id', applicationId)
         .single();
 
-      const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
+      const template = getNotificationTemplate('PAYOUT_RELEASED', {
+        campaignTitle: application?.v1_campaigns?.title,
+        applicationId,
+      });
 
       const notificationData = {
         type: 'PAYOUT_RELEASED',
-        title: `${campaignTitle} Update`,
-        body: `Your payout for "${campaignTitle}" has been released`,
-        clickAction: `/applications/${applicationId}`,
+        ...template,
         data: { payoutId, applicationId, influencerId, amount },
       };
 
@@ -1068,11 +1077,15 @@ class NotificationService {
         .eq('id', senderId)
         .maybeSingle();
 
+      const template = getNotificationTemplate('CHAT_MESSAGE', {
+        senderName: sender?.name,
+        messagePreview,
+        applicationId,
+      });
+
       const notificationData = {
         type: 'CHAT_MESSAGE',
-        title: sender?.name || 'Sender name',
-        body: messagePreview || 'message sent',
-        clickAction: `/applications/${applicationId}/chat`,
+        ...template,
         data: { applicationId, senderId, recipientId },
       };
 

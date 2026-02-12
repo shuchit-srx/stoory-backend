@@ -224,7 +224,10 @@ class CampaignController {
         offset,
       };
 
-      const result = await CampaignService.getCampaigns(filters, pagination);
+      // If user is an influencer, pass their ID to filter out campaigns they've applied to
+      const influencerId = req.user?.role === "INFLUENCER" ? req.user.id : null;
+
+      const result = await CampaignService.getCampaigns(filters, pagination, influencerId);
 
       if (result.success) {
         return res.json({
