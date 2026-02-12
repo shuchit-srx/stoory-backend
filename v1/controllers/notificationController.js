@@ -46,9 +46,12 @@ class NotificationController {
         return res.status(500).json({ success: false, message: 'Failed to fetch notifications', error: error.message });
       }
 
-      if (error) {
-        return res.status(500).json({ success: false, message: 'Failed to fetch notifications', error: error.message });
-      }
+      // Get unread count separately
+      const { count: unreadCount } = await supabaseAdmin
+        .from('v1_notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('read', false);
 
       const hasMore = (offset + limit) < (count || 0);
 
@@ -62,6 +65,7 @@ class NotificationController {
           total: count || 0,
           hasMore,
         },
+        unreadCount: unreadCount || 0,
       });
     } catch (error) {
       console.error('[v1/NotificationController] getNotifications error:', error);
@@ -74,17 +78,39 @@ class NotificationController {
       const userId = req.user.id;
       const { id } = req.params;
 
-      const { error } = await supabaseAdmin
+      // Check if notification exists and belongs to user first
+      const { data: notification, error: fetchError } = await supabaseAdmin
+        .from('v1_notifications')
+        .select('id')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+
+      if (fetchError || !notification) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Notification not found' 
+        });
+      }
+
+      const { data, error } = await supabaseAdmin
         .from('v1_notifications')
         .update({ read: true, updated_at: new Date().toISOString() })
         .eq('id', id)
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .select()
+        .single();
 
       if (error) {
         return res.status(500).json({ success: false, message: 'Failed to mark as read', error: error.message });
       }
 
-      res.json({ success: true, message: 'Notification marked as read' });
+      // Verify update was successful
+      if (!data) {
+        return res.status(404).json({ success: false, message: 'Notification not found' });
+      }
+
+      res.json({ success: true, message: 'Notification marked as read', data });
     } catch (error) {
       console.error('[v1/NotificationController] markAsRead error:', error);
       res.status(500).json({ success: false, message: 'Internal server error' });
@@ -128,7 +154,7 @@ class NotificationController {
 
       const { data: notification, error: notifError } = await supabaseAdmin
         .from('v1_notifications')
-        .select('id')
+        .select('id, user_id, type, title, body, data')
         .eq('id', id)
         .eq('user_id', userId)
         .single();
@@ -137,14 +163,21 @@ class NotificationController {
         return res.status(404).json({ success: false, message: 'Notification not found' });
       }
 
-      const retryResult = await NotificationService.retryNotification(id);
-      if (!retryResult.success) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Failed to retry notification', error: retryResult.error });
-      }
+      // Prepare retryData properly
+      const retryData = {
+        userId: notification.user_id,
+        notificationData: {
+          type: notification.type,
+          title: notification.title,
+          body: notification.body,
+          data: notification.data || {},
+        },
+        attempts: 0
+      };
 
-      res.json({ success: true, message: 'Notification retry initiated', data: retryResult });
+      await NotificationService.retryNotification(id, retryData);
+
+      res.json({ success: true, message: 'Notification retry initiated' });
     } catch (error) {
       console.error('[v1/NotificationController] retryNotification error:', error);
       res.status(500).json({ success: false, message: 'Internal server error' });
@@ -431,6 +464,64 @@ class NotificationController {
       });
     } catch (error) {
       console.error('[v1/NotificationController] deleteAllNotifications error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async getUnreadCount(req, res) {
+    try {
+      const userId = req.user.id;
+
+      const { count, error } = await supabaseAdmin
+        .from('v1_notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('read', false);
+
+      if (error) {
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Failed to get unread count', 
+          error: error.message 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        unreadCount: count || 0 
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] getUnreadCount error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async markAllAsRead(req, res) {
+    try {
+      const userId = req.user.id;
+
+      const { data, error } = await supabaseAdmin
+        .from('v1_notifications')
+        .update({ read: true, updated_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .eq('read', false)
+        .select();
+
+      if (error) {
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Failed to mark all as read', 
+          error: error.message 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'All notifications marked as read',
+        count: data?.length || 0
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] markAllAsRead error:', error);
       res.status(500).json({ success: false, message: 'Internal server error' });
     }
   }
