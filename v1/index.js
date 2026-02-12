@@ -4,10 +4,8 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 
-// Root router for all /api/v1 APIs
 const router = express.Router();
 
-// Mount all v1 routes
 const v1Routes = require("./routes");
 router.use("/", v1Routes); // → /api/v1/*
 
@@ -86,17 +84,10 @@ app.use("/api/v1", router);
 // Initialize Socket.io
 const io = initSocket(server);
 
-
 // Global Error Handler
 app.use((err, req, res, next) => {
   console.error(`[v1/ErrorHandler] ${err.stack}`);
   res.status(500).send('Something broke!');
 });
 
-// Export app, server, io, and router for use by root index.js
-module.exports = {
-  app,
-  server,
-  io,
-  router
-};
+module.exports = { app, server, io, router};

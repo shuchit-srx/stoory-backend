@@ -22,18 +22,17 @@ router.use(authMiddleware.authenticateToken);
  * POST /api/v1/campaigns/create
  * Accepts multipart/form-data with:
  * - Optional 'coverImage' file field (single file)
- * - Optional 'campaignAssets' or 'campaign_assets' file field (multiple files, only for BULK campaigns)
+ * - Optional 'assets' file field (multiple files, only for BULK campaigns)
  */
 router.post(
   "/create",
   authMiddleware.requireRole(["BRAND_OWNER"]),
   normalizeEnums,
   (req, res, next) => {
-    // Use fields to handle both single coverImage and multiple campaignAssets
+    // Use fields to handle both single coverImage and multiple assets
     uploadBulkCampaignFiles.fields([
       { name: 'coverImage', maxCount: 1 },
-      { name: 'campaignAssets', maxCount: 20 },
-      { name: 'campaign_assets', maxCount: 20 }
+      { name: 'assets', maxCount: 20 },
     ])(req, res, (err) => {
       if (err) {
         if (err.code === "LIMIT_FILE_SIZE") {
@@ -53,13 +52,12 @@ router.post(
         req.file = req.files.coverImage[0];
       }
       
-      // Flatten campaignAssets files array
+      // Flatten assets files array
       if (req.files) {
-        const campaignAssetsFiles = [
-          ...(req.files.campaignAssets || []),
-          ...(req.files.campaign_assets || [])
+        const assetsFiles = [
+          ...(req.files.assets || []),
         ];
-        req.files = campaignAssetsFiles;
+        req.files = assetsFiles;
       }
       
       next();
@@ -107,18 +105,17 @@ router.get("/:id", CampaignController.getCampaign);
  * PUT /api/v1/campaigns/:id
  * Accepts multipart/form-data with:
  * - Optional 'coverImage' file field (single file)
- * - Optional 'campaignAssets' or 'campaign_assets' file field (multiple files, only for BULK campaigns)
+ * - Optional 'assets' file field (multiple files, only for BULK campaigns)
  */
 router.put(
   "/:id",
   authMiddleware.requireRole(["BRAND_OWNER"]),
   normalizeEnums,
   (req, res, next) => {
-    // Use fields to handle both single coverImage and multiple campaignAssets
+    // Use fields to handle both single coverImage and multiple assets
     uploadBulkCampaignFiles.fields([
       { name: 'coverImage', maxCount: 1 },
-      { name: 'campaignAssets', maxCount: 20 },
-      { name: 'campaign_assets', maxCount: 20 }
+      { name: 'assets', maxCount: 20 },
     ])(req, res, (err) => {
       if (err) {
         if (err.code === "LIMIT_FILE_SIZE") {
@@ -138,13 +135,12 @@ router.put(
         req.file = req.files.coverImage[0];
       }
       
-      // Flatten campaignAssets files array
+      // Flatten assets files array
       if (req.files) {
-        const campaignAssetsFiles = [
-          ...(req.files.campaignAssets || []),
-          ...(req.files.campaign_assets || [])
+        const assetsFiles = [
+          ...(req.files.assets || []),
         ];
-        req.files = campaignAssetsFiles;
+        req.files = assetsFiles;
       }
       
       next();
