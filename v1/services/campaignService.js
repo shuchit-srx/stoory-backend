@@ -336,13 +336,15 @@ class CampaignService {
 
   /**
    * Get all campaigns with filtering and pagination
-   * Returns only:
+   * For influencers: Returns campaigns they haven't applied to
+   * - NORMAL campaigns: only LIVE status
+   * - BULK campaigns: LIVE or IN_PROGRESS status
+   * 
+   * For brand owners: Returns all campaigns (existing behavior)
    * - LIVE campaigns (all types)
    * - IN_PROGRESS campaigns (BULK type only)
-   * 
-   * Influencers can see all campaigns, Brand owners see their own + all
    */
-  async getCampaigns(filters = {}, pagination = {}) {
+  async getCampaigns(filters = {}, pagination = {}, influencerId = null) {
     try {
       const { type, brand_id, min_budget, max_budget, search } = filters;
 
@@ -354,14 +356,24 @@ class CampaignService {
       const validatedOffset = Math.max(0, parseInt(offset) || 0);
 
       // Build query - select only required fields including status and type for filtering
-      // Filter: LIVE campaigns (all types) OR IN_PROGRESS campaigns (BULK only)
+      // For influencers: Filter by status based on campaign type
+      // For brand owners: Filter LIVE (all types) OR IN_PROGRESS (BULK only)
       // Include applications_accepted_till and accepted_count for dynamic expiration check
       let query = supabaseAdmin
         .from("v1_campaigns")
         .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type, applications_accepted_till, accepted_count", { count: "exact" })
         .eq("is_deleted", false)
-        .in("status", [CampaignStatus.LIVE, CampaignStatus.IN_PROGRESS])
         .order("created_at", { ascending: false });
+
+      // Apply status filter based on whether it's for an influencer or not
+      if (influencerId) {
+        // For influencers: NORMAL campaigns only LIVE, BULK campaigns LIVE or IN_PROGRESS
+        // We'll filter this in JavaScript after fetching to handle the type-based logic
+        query = query.in("status", [CampaignStatus.LIVE, CampaignStatus.IN_PROGRESS]);
+      } else {
+        // For brand owners: Existing behavior - LIVE (all types) OR IN_PROGRESS (BULK only)
+        query = query.in("status", [CampaignStatus.LIVE, CampaignStatus.IN_PROGRESS]);
+      }
 
       // Apply type filter if provided
       if (type) {
@@ -401,6 +413,21 @@ class CampaignService {
         };
       }
 
+      // If influencerId is provided, fetch campaigns they have applied to (in any phase)
+      let appliedCampaignIds = new Set();
+      if (influencerId) {
+        const { data: applications, error: applicationsError } = await supabaseAdmin
+          .from("v1_applications")
+          .select("campaign_id")
+          .eq("influencer_id", influencerId);
+
+        if (applicationsError) {
+          console.error("[v1/getCampaigns] Applications fetch error:", applicationsError);
+        } else if (applications) {
+          appliedCampaignIds = new Set(applications.map(app => app.campaign_id).filter(Boolean));
+        }
+      }
+
       // Fetch brand details for all unique brand_ids - only get id and name
       const brandIds = [...new Set((data || []).map(c => c.brand_id).filter(Boolean))];
       let brandMap = {};
@@ -422,22 +449,44 @@ class CampaignService {
         }
       }
 
-      // Filter campaigns based on business rules:
-      // - LIVE campaigns: all types allowed
-      // - IN_PROGRESS campaigns: only BULK type allowed
-      // - Exclude dynamically expired campaigns (applications_accepted_till <= now() AND accepted_count = 0)
+      // Filter campaigns based on business rules
       const now = new Date();
       const filteredCampaigns = (data || []).filter(campaign => {
-        // Check status-based filtering
-        if (campaign.status === CampaignStatus.LIVE) {
-          // All LIVE campaigns are allowed, but check for dynamic expiration
-        } else if (campaign.status === CampaignStatus.IN_PROGRESS) {
-          // Only BULK campaigns in IN_PROGRESS are allowed
-          if (campaign.type !== CampaignType.BULK) {
-            return false;
+        // If influencerId is provided, exclude campaigns they have applied to (in any phase)
+        if (influencerId && appliedCampaignIds.has(campaign.id)) {
+          return false;
+        }
+
+        // Status-based filtering
+        if (influencerId) {
+          // For influencers:
+          // - NORMAL campaigns: only LIVE status
+          // - BULK campaigns: LIVE or IN_PROGRESS status
+          if (campaign.type === CampaignType.NORMAL) {
+            if (campaign.status !== CampaignStatus.LIVE) {
+              return false;
+            }
+          } else if (campaign.type === CampaignType.BULK) {
+            if (campaign.status !== CampaignStatus.LIVE && campaign.status !== CampaignStatus.IN_PROGRESS) {
+              return false;
+            }
+          } else {
+            return false; // Unknown campaign type
           }
         } else {
-          return false; // Other statuses are not allowed
+          // For brand owners (existing behavior):
+          // - LIVE campaigns: all types allowed
+          // - IN_PROGRESS campaigns: only BULK type allowed
+          if (campaign.status === CampaignStatus.LIVE) {
+            // All LIVE campaigns are allowed, but check for dynamic expiration
+          } else if (campaign.status === CampaignStatus.IN_PROGRESS) {
+            // Only BULK campaigns in IN_PROGRESS are allowed
+            if (campaign.type !== CampaignType.BULK) {
+              return false;
+            }
+          } else {
+            return false; // Other statuses are not allowed
+          }
         }
 
         // Check dynamic expiration: exclude if applications_accepted_till has passed and no accepted applications
@@ -457,7 +506,15 @@ class CampaignService {
       // Attach brand details to each campaign - simplified structure
       // Filter out campaigns where brand owner is deleted
       const campaignsWithBrand = filteredCampaigns
-        .filter(campaign => brandMap[campaign.brand_id]) // Only include campaigns with non-deleted brand owners
+        .filter(campaign => {
+          // Include campaigns even if brand owner is not found (might be a data issue)
+          // But log a warning for debugging
+          if (!brandMap[campaign.brand_id]) {
+            console.warn(`[v1/getCampaigns] Campaign ${campaign.id} has brand_id ${campaign.brand_id} but brand owner not found or deleted`);
+            return false; // Exclude campaigns with missing/deleted brand owners
+          }
+          return true;
+        })
         .map(campaign => {
           const brandUser = brandMap[campaign.brand_id];
 
@@ -477,7 +534,20 @@ class CampaignService {
           };
         });
 
-      const hasMore = (validatedOffset + validatedLimit) < (count || 0);
+      // Calculate actual filtered count (after all JavaScript filters)
+      const actualFilteredCount = campaignsWithBrand.length;
+      
+      // For hasMore calculation, we need to check if there might be more campaigns
+      // Since we filter in JS, we can't know the exact total without fetching all
+      // Use a heuristic: if we got fewer campaigns than requested, likely no more
+      // Otherwise, check if we got the full limit (might have more)
+      const hasMore = campaignsWithBrand.length === validatedLimit && 
+                      (validatedOffset + validatedLimit) < (count || 0);
+
+      // Log filtering stats for debugging
+      const logContext = influencerId ? `for influencer ${influencerId}` : 'for brand owner';
+      const appliedCount = influencerId ? appliedCampaignIds.size : 0;
+      console.log(`[v1/getCampaigns] ${logContext}: Query returned ${data?.length || 0} campaigns, filtered to ${filteredCampaigns.length}${influencerId ? ` (excluded ${appliedCount} applied campaigns)` : ''}, final count: ${actualFilteredCount}`);
 
       return {
         success: true,
@@ -485,8 +555,9 @@ class CampaignService {
         pagination: {
           limit: validatedLimit,
           offset: validatedOffset,
-          count: campaignsWithBrand.length,
-          total: count || 0,
+          count: actualFilteredCount,
+          total: count || 0, // Database count (before JS filtering)
+          filtered_total: actualFilteredCount, // Actual count after all filters
           hasMore,
         },
       };
