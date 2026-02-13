@@ -1092,7 +1092,7 @@ class NotificationService {
       const notificationData = {
         type: 'CHAT_MESSAGE',
         ...template,
-        data: { applicationId, senderId, recipientId },
+        data: { applicationId, senderId, recipientId, chatId },
       };
 
       return await this.sendAndStoreNotification(recipientId, notificationData);

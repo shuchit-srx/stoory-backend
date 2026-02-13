@@ -1,3 +1,12 @@
+/**
+ * Get notification template for a given type
+ * 
+ * clickAction format for React Native deep linking:
+ * - Nested routes: stoory://StackName/ScreenName?param=value
+ * - Top-level screens: stoory://ScreenName?param=value&param2=value2
+ * 
+ * Note: Screen names must match the route names configured in React Navigation
+ */
 const getNotificationTemplate = (type, data = {}) => {
   const {
     campaignTitle = 'Campaign',
@@ -122,11 +131,15 @@ const getNotificationTemplate = (type, data = {}) => {
       clickAction: `stoory://ChattingScreen?applicationId=${applicationId}&chatId=${chatId}`,
     },
     CHAT_MESSAGE_BATCHED: {
-      title: count === 1 ? 'New Message' : `${count} New Messages`,
+      title: count === 1 
+        ? (firstNotification?.title || 'New Message')
+        : `${count} New Messages`,
       body: count === 1
         ? firstNotification?.body || 'message sent'
         : `You have ${count} new messages`,
-      clickAction: `stoory://Main/MyWork`,
+      clickAction: count === 1 && firstNotification?.data?.applicationId && firstNotification?.data?.chatId
+        ? `stoory://ChattingScreen?applicationId=${firstNotification.data.applicationId}&chatId=${firstNotification.data.chatId}`
+        : `stoory://Main/MyWork`,
     },
     APPLICATION_CREATED_BATCHED: {
       title: count === 1 ? 'New Application' : `${count} New Applications`,
