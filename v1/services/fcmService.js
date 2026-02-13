@@ -283,12 +283,18 @@ class FCMService {
     const notificationType = notification.data?.type || 'SYSTEM';
     const channelId = this.getChannelIdForType(notificationType);
 
+    // CRITICAL: Structure message to work in all app states:
+    // - App closed: notification payload ensures system displays it
+    // - App in background: notification payload ensures system displays it
+    // - App in foreground: notification payload ensures system displays it (app should handle foreground messages)
     const message = {
+      // Include notification payload for system to display when app is closed/background
       notification: {
         title: notification.title,
         body: notification.body,
         imageUrl: notification.imageUrl,
       },
+      // Include data payload for app to process when opened
       data: Object.fromEntries(
         Object.entries({
           ...notification.data,
@@ -300,26 +306,35 @@ class FCMService {
         }).map(([k, v]) => [k, v == null ? '' : String(v)])
       ),
       android: {
+        // High priority ensures delivery even when device is in doze mode
         priority: 'high',
+        // TTL: 0 means no expiration (deliver even if device is offline)
+        ttl: 0,
         notification: {
           sound: 'default',
           defaultSound: true,
           channelId,
           priority: 'high',
-          visibility: 'public',
+          visibility: 'public', // Show on lock screen
           icon: 'ic_notification',
           defaultVibrateTimings: true,
           defaultLightSettings: true,
-          // Ensure it shows as heads-up notification
+          // Ensure it shows as heads-up notification (even when app is open)
           notificationPriority: 'PRIORITY_HIGH',
           // Add click action
           clickAction: notification.clickAction || '',
+          // Ensure notification is always shown, even in foreground
+          // Note: App should still handle foreground messages for best UX
+          sticky: false,
         },
       },
       apns: {
         headers: {
+          // Priority 10 = immediate delivery (even when app is closed)
           'apns-priority': '10',
+          // Alert type ensures notification is displayed
           'apns-push-type': 'alert',
+          // Expiration 0 = no expiration
           'apns-expiration': '0',
         },
         payload: {
@@ -330,13 +345,29 @@ class FCMService {
             },
             sound: 'default',
             badge: notification.badge || 1,
+            // Content available ensures delivery when app is closed
+            'content-available': 1,
             'mutable-content': 1,
+            // Active interruption level ensures notification is shown
             'interruption-level': 'active',
             'thread-id': channelId,
             category: notificationType,
           },
+          // Include data in APNS payload for app processing
           ...notification.data,
           notificationType,
+        },
+      },
+      // Web push configuration (if applicable)
+      webpush: {
+        notification: {
+          title: notification.title,
+          body: notification.body,
+          icon: '/icon.png',
+          badge: '/badge.png',
+        },
+        fcmOptions: {
+          link: notification.clickAction || '/',
         },
       },
     };
