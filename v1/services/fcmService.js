@@ -282,11 +282,35 @@ class FCMService {
 
     const notificationType = notification.data?.type || 'SYSTEM';
     const channelId = this.getChannelIdForType(notificationType);
+    
+    // Log click action for debugging
+    if (notification.clickAction) {
+      console.log(`[v1/FCM] Sending notification with clickAction: ${notification.clickAction}`);
+    }
 
     // CRITICAL: Structure message to work in all app states:
     // - App closed: notification payload ensures system displays it
     // - App in background: notification payload ensures system displays it
     // - App in foreground: notification payload ensures system displays it (app should handle foreground messages)
+    
+    // Extract click action - supports both deep links (stoory://) and regular URLs
+    const clickAction = notification.clickAction || '';
+    
+    // Prepare data payload with click action for Flutter/React Native deep linking
+    // Flutter reads click_action from data payload when notification is tapped
+    const dataPayload = {
+      ...notification.data,
+      // CRITICAL: click_action must be in data payload for Flutter to handle deep links
+      click_action: clickAction,
+      // Also include as clickAction for compatibility
+      clickAction: clickAction,
+      // Include notification content in data for app processing
+      title: notification.title,
+      body: notification.body,
+      channelId,
+      notificationType,
+    };
+    
     const message = {
       // Include notification payload for system to display when app is closed/background
       notification: {
@@ -295,15 +319,9 @@ class FCMService {
         imageUrl: notification.imageUrl,
       },
       // Include data payload for app to process when opened
+      // All values must be strings for FCM
       data: Object.fromEntries(
-        Object.entries({
-          ...notification.data,
-          click_action: notification.clickAction || 'FLUTTER_NOTIFICATION_CLICK',
-          title: notification.title,
-          body: notification.body,
-          channelId,
-          notificationType,
-        }).map(([k, v]) => [k, v == null ? '' : String(v)])
+        Object.entries(dataPayload).map(([k, v]) => [k, v == null ? '' : String(v)])
       ),
       android: {
         // High priority ensures delivery even when device is in doze mode
@@ -321,8 +339,9 @@ class FCMService {
           defaultLightSettings: true,
           // Ensure it shows as heads-up notification (even when app is open)
           notificationPriority: 'PRIORITY_HIGH',
-          // Add click action
-          clickAction: notification.clickAction || '',
+          // CRITICAL: clickAction in Android notification config for system-level handling
+          // This is used by Android system, but Flutter also reads from data.click_action
+          clickAction: clickAction || '',
           // Ensure notification is always shown, even in foreground
           // Note: App should still handle foreground messages for best UX
           sticky: false,
@@ -353,8 +372,13 @@ class FCMService {
             'thread-id': channelId,
             category: notificationType,
           },
-          // Include data in APNS payload for app processing
-          ...notification.data,
+          // CRITICAL: Include click action and all data in APNS payload
+          // iOS apps read from payload data when notification is tapped
+          click_action: clickAction,
+          clickAction: clickAction,
+          ...Object.fromEntries(
+            Object.entries(notification.data || {}).map(([k, v]) => [k, v == null ? '' : String(v)])
+          ),
           notificationType,
         },
       },
@@ -367,7 +391,7 @@ class FCMService {
           badge: '/badge.png',
         },
         fcmOptions: {
-          link: notification.clickAction || '/',
+          link: clickAction || '/',
         },
       },
     };
