@@ -1,3 +1,12 @@
+/**
+ * Get notification template for a given type
+ * 
+ * clickAction format for React Native deep linking:
+ * - Nested routes: stoory://StackName/ScreenName?param=value
+ * - Top-level screens: stoory://ScreenName?param=value&param2=value2
+ * 
+ * Note: Screen names must match the route names configured in React Navigation
+ */
 const getNotificationTemplate = (type, data = {}) => {
   const {
     campaignTitle = 'Campaign',
@@ -7,6 +16,7 @@ const getNotificationTemplate = (type, data = {}) => {
     messagePreview = 'message sent',
     applicationId,
     campaignId,
+    chatId,
     scriptId,
     workSubmissionId,
     payoutId,
@@ -26,113 +36,117 @@ const getNotificationTemplate = (type, data = {}) => {
     APPLICATION_CREATED: {
       title: `${campaignTitle} Update`,
       body: `${influencerName} applied for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}`,
+      clickAction: `stoory://Main/MyWork?campaignId=${campaignId}`,
     },
     APPLICATION_ACCEPTED: {
       title: `${campaignTitle} Update`,
       body: `${brandName} accepted your application for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}`,
     },
     APPLICATION_CANCELLED: {
       title: `${campaignTitle} Update`,
       body: `${data.cancelledByName || 'The user'} cancelled the application for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}`,
     },
     MOU_ACCEPTED_BY_BRAND: {
       title: `${campaignTitle} Update`,
       body: `${brandName} accepted the MOU for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}/mou`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}&highlightSection=mou`,
     },
     MOU_ACCEPTED_BY_INFLUENCER: {
       title: `${campaignTitle} Update`,
       body: `${influencerName} accepted the MOU for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}/mou`,
+      clickAction: `stoory://BrandOwnerOverviewScreen?applicationId=${applicationId}&highlightSection=mou`,
     },
     MOU_FULLY_ACCEPTED_BRAND: {
       title: `${campaignTitle} Update`,
       body: `Both parties accepted the MOU for ${campaignTitle}. Proceed with payment`,
-      clickAction: `/applications/${applicationId}/payment`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}&highlightSection=payment`,
     },
     MOU_FULLY_ACCEPTED_INFLUENCER: {
       title: `${campaignTitle} Update`,
       body: `Both parties accepted the MOU for ${campaignTitle}. Waiting for payment`,
-      clickAction: `/applications/${applicationId}`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}`,
     },
     PAYMENT_COMPLETED: {
       title: `${campaignTitle} Update`,
       body: requiresScript && !scriptAccepted
         ? `Payment completed for ${campaignTitle}. Submit your script`
         : `Payment completed for ${campaignTitle}. Submit your work`,
-      clickAction: `/applications/${applicationId}`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}&highlightSection=work`,
     },
     SCRIPT_SUBMITTED: {
       title: `${campaignTitle} Update`,
       body: `${influencerName} submitted a script for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}/scripts`,
+      clickAction: `stoory://BrandOwnerOverviewScreen?applicationId=${applicationId}&highlightSection=script`,
     },
     SCRIPT_REVIEW_ACCEPTED: {
       title: `${campaignTitle} Update`,
       body: `${brandName} accepted your script for ${campaignTitle}. Submit your work`,
-      clickAction: `/applications/${applicationId}/scripts`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}&highlightSection=work`,
     },
     SCRIPT_REVIEW_REVISION: {
       title: `${campaignTitle} Update`,
       body: `${brandName} requested revision on your script for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}/scripts`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}&highlightSection=script`,
     },
     SCRIPT_REVIEW_REJECTED: {
       title: `${campaignTitle} Update`,
       body: `${brandName} rejected your script for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}/scripts`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}&highlightSection=script`,
     },
     WORK_SUBMITTED: {
       title: `${campaignTitle} Update`,
       body: `${influencerName} submitted work for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}/work`,
+      clickAction: `stoory://BrandOwnerOverviewScreen?applicationId=${applicationId}&highlightSection=work`,
     },
     WORK_REVIEW_ACCEPTED: {
       title: `${campaignTitle} Update`,
       body: `${brandName} accepted your work for ${campaignTitle}. Payout will be released soon`,
-      clickAction: `/applications/${applicationId}/work`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}`,
     },
     WORK_REVIEW_REVISION: {
       title: `${campaignTitle} Update`,
       body: `${brandName} requested revision on your work for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}/work`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}&highlightSection=work`,
     },
     WORK_REVIEW_REJECTED: {
       title: `${campaignTitle} Update`,
       body: `${brandName} rejected your work for ${campaignTitle}`,
-      clickAction: `/applications/${applicationId}/work`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}&highlightSection=work`,
     },
     CAMPAIGN_COMPLETED: {
       title: `${campaignTitle} Update`,
       body: `Congratulations! ${campaignTitle} is now complete`,
-      clickAction: `/campaigns/${campaignId}`,
+      clickAction: `stoory://Main/MyWork?campaignId=${campaignId}`,
     },
     PAYOUT_RELEASED: {
       title: `${campaignTitle} Update`,
       body: `Your payout for ${campaignTitle} has been released`,
-      clickAction: `/applications/${applicationId}`,
+      clickAction: `stoory://InfluencerOverviewScreen?applicationId=${applicationId}`
     },
     CHAT_MESSAGE: {
       title: senderName,
       body: messagePreview,
-      clickAction: `/applications/${applicationId}/chat`,
+      clickAction: `stoory://ChattingScreen?applicationId=${applicationId}&chatId=${chatId}`,
     },
     CHAT_MESSAGE_BATCHED: {
-      title: count === 1 ? 'New Message' : `${count} New Messages`,
+      title: count === 1 
+        ? (firstNotification?.title || 'New Message')
+        : `${count} New Messages`,
       body: count === 1
         ? firstNotification?.body || 'message sent'
         : `You have ${count} new messages`,
-      clickAction: firstNotification?.clickAction || (applicationId ? `/applications/${applicationId}/chat` : '/chat'),
+      clickAction: count === 1 && firstNotification?.data?.applicationId && firstNotification?.data?.chatId
+        ? `stoory://ChattingScreen?applicationId=${firstNotification.data.applicationId}&chatId=${firstNotification.data.chatId}`
+        : `stoory://Main/MyWork`,
     },
     APPLICATION_CREATED_BATCHED: {
       title: count === 1 ? 'New Application' : `${count} New Applications`,
       body: count === 1
         ? firstNotification?.body || 'New application received'
         : `You have ${count} new applications`,
-      clickAction: '/applications',
+      clickAction: `stoory://Main/MyWork`,
     },
   };
 

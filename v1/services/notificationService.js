@@ -104,9 +104,21 @@ class NotificationService {
     }
   }
 
+  /**
+   * Send notification via FCM
+   * IMPORTANT: FCM is ALWAYS attempted if FCM service is initialized,
+   * regardless of user online/offline/away status. This ensures users
+   * receive push notifications consistently.
+   * 
+   * @param {string} userId - User ID to send notification to
+   * @param {Object} notificationData - Notification data
+   * @param {string|null} notificationId - Optional notification ID for logging
+   * @returns {Promise<Object>} Result with success, method, and fcmResult
+   */
   async sendNotification(userId, notificationData, notificationId = null) {
     let fcmResult = null;
     
+    // Always attempt FCM if initialized, regardless of user status (online/offline/away)
     if (!fcmService.initialized) {
       console.warn(`[v1/Notification] FCM not initialized, cannot send push notification to user ${userId}`);
       if (notificationId) {
@@ -116,6 +128,8 @@ class NotificationService {
         });
       }
     } else {
+      // FCM is always attempted - no online/offline checks
+      console.log(`[v1/Notification] Attempting FCM delivery to user ${userId}`);
       fcmResult = await this.sendFCMNotification(userId, notificationData);
       
       if (notificationId) {
@@ -139,12 +153,14 @@ class NotificationService {
             failed: fcmResult.failed
           });
         } else if (fcmHasTokens) {
-          console.log(`[v1/Notification] FCM skipped for user ${userId} - no active tokens`);
+          console.log(`[v1/Notification] FCM attempted for user ${userId} but no active tokens found`);
+        } else if (fcmSuccess) {
+          console.log(`[v1/Notification] FCM successfully sent to user ${userId}: ${fcmResult.sent} token(s)`);
         }
       }
     }
     
-    // Fix: Set method based on whether FCM was attempted, not just success
+    // Set method based on whether FCM was attempted, not just success
     // This ensures delivery_method is 'fcm' when FCM is initialized and attempted,
     // even if no tokens were sent or delivery failed
     const success = (fcmResult?.success && fcmResult.sent > 0);
@@ -299,7 +315,9 @@ class NotificationService {
     }
 
     if (storeResult.duplicate) {
-      console.log(`[v1/Notification] Duplicate notification detected for user ${userId}, type: ${notificationData.type}, skipping delivery`);
+      console.log(`[v1/Notification] Duplicate notification detected for user ${userId}, type: ${notificationData.type}, skipping FCM (already stored)`);
+      // Note: For duplicates, we skip FCM to avoid spam, but notification is still stored
+      // If you need FCM for duplicates, remove this early return and let it proceed to sendNotification
       return {
         stored: true,
         sent: false,
@@ -1077,16 +1095,22 @@ class NotificationService {
         .eq('id', senderId)
         .maybeSingle();
 
+      // Get chatId from applicationId
+      const ChatService = require('./chatService');
+      const chat = await ChatService.getChatByApplication(applicationId);
+      const chatId = chat?.id;
+
       const template = getNotificationTemplate('CHAT_MESSAGE', {
         senderName: sender?.name,
         messagePreview,
         applicationId,
+        chatId,
       });
 
       const notificationData = {
         type: 'CHAT_MESSAGE',
         ...template,
-        data: { applicationId, senderId, recipientId },
+        data: { applicationId, senderId, recipientId, chatId },
       };
 
       return await this.sendAndStoreNotification(recipientId, notificationData);
