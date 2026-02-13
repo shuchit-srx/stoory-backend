@@ -1077,10 +1077,16 @@ class NotificationService {
         .eq('id', senderId)
         .maybeSingle();
 
+      // Get chatId from applicationId
+      const ChatService = require('./chatService');
+      const chat = await ChatService.getChatByApplication(applicationId);
+      const chatId = chat?.id;
+
       const template = getNotificationTemplate('CHAT_MESSAGE', {
         senderName: sender?.name,
         messagePreview,
         applicationId,
+        chatId,
       });
 
       const notificationData = {

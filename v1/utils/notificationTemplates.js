@@ -7,6 +7,7 @@ const getNotificationTemplate = (type, data = {}) => {
     messagePreview = 'message sent',
     applicationId,
     campaignId,
+    chatId,
     scriptId,
     workSubmissionId,
     payoutId,
