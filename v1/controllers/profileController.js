@@ -116,6 +116,45 @@ class ProfileController {
       });
     }
   }
+
+  async deleteSocialAccount(req, res) {
+    try {
+      const userId = req.user.id;
+      const { socialAccountId } = req.params;
+
+      if (!socialAccountId) {
+        return res.status(400).json({
+          success: false,
+          message: "Social account ID is required",
+        });
+      }
+
+      // Verify user is an influencer
+      if (req.user.role !== "INFLUENCER") {
+        return res.status(403).json({
+          success: false,
+          message: "Only influencers can delete social accounts",
+        });
+      }
+
+      const result = await ProfileService.deleteSocialAccount(userId, socialAccountId);
+
+      if (result.success) {
+        return res.json(result);
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+      });
+    } catch (err) {
+      console.error("[v1/deleteSocialAccount] error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
 }
 
 module.exports = {

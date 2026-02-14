@@ -54,4 +54,14 @@ router.get(
   ProfileController.getProfileCompletionSteps
 );
 
+/**
+ * Delete (soft delete) a social account
+ * DELETE /api/v1/profile/social-accounts/:socialAccountId
+ */
+router.delete(
+  "/social-accounts/:socialAccountId",
+  authMiddleware.authenticateToken,
+  ProfileController.deleteSocialAccount
+);
+
 module.exports = router;
