@@ -1347,6 +1347,45 @@ class ProfileService {
    */
   async deleteSocialAccount(userId, socialAccountId) {
     try {
+      // First, verify the user exists and is not deleted
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, role, is_deleted")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (userError) {
+        console.error(
+          "[v1/deleteSocialAccount] User check error:",
+          userError
+        );
+        return {
+          success: false,
+          message: "Failed to verify user",
+        };
+      }
+
+      if (!user) {
+        return {
+          success: false,
+          message: "User not found",
+        };
+      }
+
+      if (user.is_deleted === true) {
+        return {
+          success: false,
+          message: "User account is deleted",
+        };
+      }
+
+      if (user.role !== "INFLUENCER") {
+        return {
+          success: false,
+          message: "Only influencers can delete social accounts",
+        };
+      }
+
       // Verify the social account exists, belongs to the user, and is not already deleted
       const { data: socialAccount, error: checkError } = await supabaseAdmin
         .from("v1_influencer_social_accounts")

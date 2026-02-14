@@ -119,24 +119,19 @@ class ProfileController {
 
   async deleteSocialAccount(req, res) {
     try {
+      // Check for validation errors
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          errors: errors.array(),
+        });
+      }
+
       const userId = req.user.id;
       const { socialAccountId } = req.params;
 
-      if (!socialAccountId) {
-        return res.status(400).json({
-          success: false,
-          message: "Social account ID is required",
-        });
-      }
-
-      // Verify user is an influencer
-      if (req.user.role !== "INFLUENCER") {
-        return res.status(403).json({
-          success: false,
-          message: "Only influencers can delete social accounts",
-        });
-      }
-
+      // Role check is handled by middleware, but service also validates user status
       const result = await ProfileService.deleteSocialAccount(userId, socialAccountId);
 
       if (result.success) {
