@@ -1340,6 +1340,123 @@ class ProfileService {
       };
     }
   }
+
+  /**
+   * Delete (soft delete) a social account for an influencer
+   * Sets is_deleted = true for the specified social account
+   */
+  async deleteSocialAccount(userId, socialAccountId) {
+    try {
+      // First, verify the user exists and is not deleted
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, role, is_deleted")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (userError) {
+        console.error(
+          "[v1/deleteSocialAccount] User check error:",
+          userError
+        );
+        return {
+          success: false,
+          message: "Failed to verify user",
+        };
+      }
+
+      if (!user) {
+        return {
+          success: false,
+          message: "User not found",
+        };
+      }
+
+      if (user.is_deleted === true) {
+        return {
+          success: false,
+          message: "User account is deleted",
+        };
+      }
+
+      if (user.role !== "INFLUENCER") {
+        return {
+          success: false,
+          message: "Only influencers can delete social accounts",
+        };
+      }
+
+      // Verify the social account exists, belongs to the user, and is not already deleted
+      const { data: socialAccount, error: checkError } = await supabaseAdmin
+        .from("v1_influencer_social_accounts")
+        .select("id, user_id, platform, username, is_deleted")
+        .eq("id", socialAccountId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (checkError) {
+        console.error(
+          "[v1/deleteSocialAccount] Check error:",
+          checkError
+        );
+        return {
+          success: false,
+          message: "Failed to verify social account",
+        };
+      }
+
+      if (!socialAccount) {
+        return {
+          success: false,
+          message: "Social account not found or does not belong to you",
+        };
+      }
+
+      if (socialAccount.is_deleted === true) {
+        return {
+          success: false,
+          message: "Social account is already deleted",
+        };
+      }
+
+      // Soft delete - set is_deleted = true
+      const { error: deleteError } = await supabaseAdmin
+        .from("v1_influencer_social_accounts")
+        .update({
+          is_deleted: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", socialAccountId)
+        .eq("user_id", userId);
+
+      if (deleteError) {
+        console.error(
+          "[v1/deleteSocialAccount] Delete error:",
+          deleteError
+        );
+        return {
+          success: false,
+          message: "Failed to delete social account",
+        };
+      }
+
+      return {
+        success: true,
+        message: "Social account deleted successfully",
+        deleted_account: {
+          id: socialAccount.id,
+          platform: socialAccount.platform,
+          username: socialAccount.username,
+        },
+      };
+    } catch (err) {
+      console.error("[v1/deleteSocialAccount] Exception:", err);
+      return {
+        success: false,
+        message: err.message || "Internal server error",
+      };
+    }
+  }
 }
 
 module.exports = new ProfileService();

@@ -116,6 +116,40 @@ class ProfileController {
       });
     }
   }
+
+  async deleteSocialAccount(req, res) {
+    try {
+      // Check for validation errors
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          errors: errors.array(),
+        });
+      }
+
+      const userId = req.user.id;
+      const { socialAccountId } = req.params;
+
+      // Role check is handled by middleware, but service also validates user status
+      const result = await ProfileService.deleteSocialAccount(userId, socialAccountId);
+
+      if (result.success) {
+        return res.json(result);
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+      });
+    } catch (err) {
+      console.error("[v1/deleteSocialAccount] error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
 }
 
 module.exports = {

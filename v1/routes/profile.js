@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { ProfileController } = require("../controllers/profileController");
-const { validateCompleteProfile } = require("../validators");
+const { validateCompleteProfile, validateDeleteSocialAccount } = require("../validators");
 const authMiddleware = require("../middleware/authMiddleware");
 const { normalizeEnums } = require("../middleware/enumNormalizer");
 const { upload } = require("../../utils/imageUpload");
@@ -52,6 +52,19 @@ router.get(
   "/completion-steps",
   authMiddleware.authenticateToken,
   ProfileController.getProfileCompletionSteps
+);
+
+/**
+ * Delete (soft delete) a social account
+ * DELETE /api/v1/profile/social-accounts/:socialAccountId
+ * Only accessible to influencers
+ */
+router.delete(
+  "/social-accounts/:socialAccountId",
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole("INFLUENCER"),
+  validateDeleteSocialAccount,
+  ProfileController.deleteSocialAccount
 );
 
 module.exports = router;
