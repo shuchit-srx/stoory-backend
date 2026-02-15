@@ -896,6 +896,78 @@ const ChatService = {
     }
 
     return updatedMessage;
+  },
+
+  /**
+   * Get unread count for a specific chat
+   * @param {string} chatId - The chat ID
+   * @param {string} userId - The user ID
+   * @returns {Promise<number>} - Unread count
+   */
+  async getUnreadCountForChat(chatId, userId) {
+    if (!chatId || !userId) {
+      throw new Error('chatId and userId are required');
+    }
+
+    // Get all messages in this chat that are not sent by the user
+    const { data: messages, error: messagesError } = await supabaseAdmin
+      .from('v1_chat_messages')
+      .select('id')
+      .eq('chat_id', chatId)
+      .neq('sender_id', userId);
+
+    if (messagesError) {
+      throw new Error(`Failed to get messages: ${messagesError.message}`);
+    }
+
+    if (!messages || messages.length === 0) {
+      return 0;
+    }
+
+    // Get all read receipts for this user
+    const messageIds = messages.map(msg => msg.id);
+    const { data: readReceipts } = await supabaseAdmin
+      .from('v1_chat_message_reads')
+      .select('message_id')
+      .in('message_id', messageIds)
+      .eq('user_id', userId);
+
+    const readMessageIds = new Set(
+      (readReceipts || []).map(receipt => receipt.message_id)
+    );
+
+    // Count unread messages
+    return messages.filter(msg => !readMessageIds.has(msg.id)).length;
+  },
+
+  /**
+   * Get total unread count for all user chats
+   * @param {string} userId - The user ID
+   * @returns {Promise<Object>} - Object with totalUnreadCount and chatCounts
+   */
+  async getTotalUnreadCount(userId) {
+    if (!userId) {
+      throw new Error('userId is required');
+    }
+
+    // Get all user chats
+    const chats = await this.getUserChats(userId);
+    
+    // Calculate total unread count
+    const totalUnreadCount = chats.reduce((total, chat) => {
+      return total + (chat.total_unread_messages || 0);
+    }, 0);
+
+    // Get per-chat unread counts
+    const chatCounts = chats.map(chat => ({
+      chatId: chat.id,
+      unreadCount: chat.total_unread_messages || 0
+    }));
+
+    return {
+      totalUnreadCount,
+      chatCounts
+    };
   }
 };
 
