@@ -987,12 +987,35 @@ const markAllAsRead = async (req, res) => {
         // Continue with other messages even if one fails
       }
     }
+
+    // Calculate and emit updated unread counts via socket
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        const chatUnreadCount = await ChatService.getUnreadCountForChat(chatId, userId);
+        const totalUnreadData = await ChatService.getTotalUnreadCount(userId);
+
+        // Emit unread count update to the user
+        io.to(`user_${userId}`).emit('unread_count_updated', {
+          chatId: chatId,
+          unreadCount: chatUnreadCount,
+          totalUnreadCount: totalUnreadData.totalUnreadCount,
+          action: 'reset',
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch (unreadError) {
+      console.error('[ChatController] Error emitting unread count update:', unreadError);
+      // Don't fail the request if socket emission fails
+    }
     
     res.json({
       success: true,
       data: {
         markedCount: unreadMessages.length,
-        readReceipts: readReceipts || []
+        readReceipts: readReceipts || [],
+        unreadCount: await ChatService.getUnreadCountForChat(chatId, userId).catch(() => 0),
+        totalUnreadCount: (await ChatService.getTotalUnreadCount(userId).catch(() => ({ totalUnreadCount: 0 }))).totalUnreadCount
       },
       message: `Marked ${unreadMessages.length} message(s) as read`
     });

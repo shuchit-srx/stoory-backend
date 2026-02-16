@@ -1,4 +1,4 @@
-const { body } = require("express-validator");
+const { body, param } = require("express-validator");
 
 const validateCompleteProfile = [
   // Common fields - v1_users table
@@ -178,6 +178,15 @@ const validateCompleteProfile = [
   // brand_logo and profile_image are handled as file uploads, no URL validation needed
 ];
 
+const validateDeleteSocialAccount = [
+  param("socialAccountId")
+    .notEmpty()
+    .withMessage("Social account ID is required")
+    .isUUID()
+    .withMessage("Social account ID must be a valid UUID"),
+];
+
 module.exports = {
   validateCompleteProfile,
+  validateDeleteSocialAccount,
 };

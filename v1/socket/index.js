@@ -281,6 +281,29 @@ const initSocket = (server) => {
           try {
             await ChatService.updateMessageStatus(savedMessage.id, 'DELIVERED');
             console.log(`[Socket] Message ${savedMessage.id} marked as DELIVERED to ${recipientSockets.length} recipients`);
+            
+            // Update unread counts for all recipients
+            // savedMessage should have chat_id from the database
+            if (savedMessage.chat_id) {
+              for (const recipientSocket of recipientSockets) {
+                try {
+                  const recipientId = recipientSocket.userId;
+                  const chatUnreadCount = await ChatService.getUnreadCountForChat(savedMessage.chat_id, recipientId);
+                  const totalUnreadData = await ChatService.getTotalUnreadCount(recipientId);
+
+                  // Emit unread count update to recipient
+                  io.to(`user_${recipientId}`).emit('unread_count_updated', {
+                    chatId: savedMessage.chat_id,
+                    unreadCount: chatUnreadCount,
+                    totalUnreadCount: totalUnreadData.totalUnreadCount,
+                    action: 'increment',
+                    timestamp: new Date().toISOString()
+                  });
+                } catch (unreadError) {
+                  console.error(`[Socket] Error updating unread count for recipient ${recipientSocket.userId}:`, unreadError);
+                }
+              }
+            }
           } catch (statusError) {
             console.error('[Socket] Failed to update message status to DELIVERED:', statusError);
           }
@@ -350,10 +373,10 @@ const initSocket = (server) => {
           });
         }
 
-        // Fetch message to get application ID
+        // Fetch message to get chat and application ID
         const { data: message, error: messageError } = await supabaseAdmin
           .from('v1_chat_messages')
-          .select('chat_id, v1_chats(application_id)')
+          .select('chat_id, v1_chats(application_id, id)')
           .eq('id', messageId)
           .single();
 
@@ -369,9 +392,12 @@ const initSocket = (server) => {
           socket.user.id
         );
 
+        const chatId = message.chat_id;
+        const chatData = message.v1_chats;
+        const applicationId = chatData?.application_id;
+
         // Broadcast read receipt to room
-        if (message.v1_chats && message.v1_chats.application_id) {
-          const applicationId = message.v1_chats.application_id;
+        if (applicationId) {
           const roomName = `app_${applicationId}`;
 
           io.to(roomName).emit('message_read', {
@@ -381,6 +407,24 @@ const initSocket = (server) => {
             status: 'READ',
             timestamp: new Date().toISOString()
           });
+        }
+
+        // Calculate and emit updated unread count for this chat
+        try {
+          const chatUnreadCount = await ChatService.getUnreadCountForChat(chatId, socket.user.id);
+          const totalUnreadData = await ChatService.getTotalUnreadCount(socket.user.id);
+
+          // Emit unread count update to the user
+          socket.emit('unread_count_updated', {
+            chatId: chatId,
+            unreadCount: chatUnreadCount,
+            totalUnreadCount: totalUnreadData.totalUnreadCount,
+            action: 'decrement',
+            timestamp: new Date().toISOString()
+          });
+        } catch (unreadError) {
+          console.error('[Socket] Error calculating unread count:', unreadError);
+          // Don't fail the request if unread count calculation fails
         }
 
         // Acknowledge to requester

@@ -35,6 +35,7 @@ class NotificationService {
   }
 
   async logDeliveryAttempt(notificationId, method, success, details = {}) {
+    // Fire-and-forget logging
     Promise.resolve().then(async () => {
       try {
         await supabaseAdmin.from('v1_notification_delivery_attempts').insert({
@@ -47,13 +48,12 @@ class NotificationService {
       } catch (err) {
         console.error('[v1/Notification] Failed to log delivery attempt:', err);
       }
-    });
+    }).catch(() => {}); // Silently ignore errors
   }
 
   async sendFCMNotification(userId, notificationData) {
     try {
       if (!fcmService.initialized) {
-        console.warn(`[v1/Notification] FCM service not initialized, cannot send notification to user ${userId}`);
         return { 
           success: false, 
           error: 'FCM service not initialized', 
@@ -76,19 +76,6 @@ class NotificationService {
 
       if (result.success && result.sent === 0 && !result.reason) {
         result.reason = 'no_tokens';
-      }
-
-      if (!result.success) {
-        console.error(`[v1/Notification] FCM send failed for user ${userId}:`, {
-          error: result.error,
-          reason: result.reason,
-          sent: result.sent,
-          failed: result.failed
-        });
-      } else if (result.sent === 0) {
-        console.log(`[v1/Notification] FCM send succeeded but no tokens for user ${userId}`);
-      } else {
-        console.log(`[v1/Notification] FCM send succeeded for user ${userId}: ${result.sent} sent, ${result.failed} failed`);
       }
 
       return result;
@@ -118,9 +105,8 @@ class NotificationService {
   async sendNotification(userId, notificationData, notificationId = null) {
     let fcmResult = null;
     
-    // Always attempt FCM if initialized, regardless of user status (online/offline/away)
+    // Always attempt FCM if initialized
     if (!fcmService.initialized) {
-      console.warn(`[v1/Notification] FCM not initialized, cannot send push notification to user ${userId}`);
       if (notificationId) {
         this.logDeliveryAttempt(notificationId, 'fcm', false, {
           error: 'FCM not initialized',
@@ -128,8 +114,6 @@ class NotificationService {
         });
       }
     } else {
-      // FCM is always attempted - no online/offline checks
-      console.log(`[v1/Notification] Attempting FCM delivery to user ${userId}`);
       fcmResult = await this.sendFCMNotification(userId, notificationData);
       
       if (notificationId) {
@@ -144,25 +128,9 @@ class NotificationService {
           details: fcmResult.details || null,
           hasTokens: fcmHasTokens,
         });
-        
-        if (!fcmSuccess && !fcmHasTokens) {
-          console.error(`[v1/Notification] FCM delivery failed for user ${userId}, notification ${notificationId}:`, {
-            error: fcmResult.error,
-            reason: fcmResult.reason,
-            sent: fcmResult.sent,
-            failed: fcmResult.failed
-          });
-        } else if (fcmHasTokens) {
-          console.log(`[v1/Notification] FCM attempted for user ${userId} but no active tokens found`);
-        } else if (fcmSuccess) {
-          console.log(`[v1/Notification] FCM successfully sent to user ${userId}: ${fcmResult.sent} token(s)`);
-        }
       }
     }
     
-    // Set method based on whether FCM was attempted, not just success
-    // This ensures delivery_method is 'fcm' when FCM is initialized and attempted,
-    // even if no tokens were sent or delivery failed
     const success = (fcmResult?.success && fcmResult.sent > 0);
     const method = fcmService.initialized ? 'fcm' : 'none';
     
@@ -201,7 +169,6 @@ class NotificationService {
       const cached = this.duplicateCache.get(cacheKey);
       
       if (cached && (Date.now() - cached) < this.DUPLICATE_CACHE_TTL) {
-        console.log(`[v1/Notification] Duplicate detected in cache for user ${notificationData.userId}, type ${notificationData.type}`);
         return { success: true, notification: { id: 'cached' }, duplicate: true };
       }
 
@@ -243,7 +210,6 @@ class NotificationService {
       const { data: existing } = await existingQuery.maybeSingle();
       
       if (existing) {
-        console.log(`[v1/Notification] Duplicate detected in database for user ${notificationData.userId}, type ${notificationData.type}, notification ${existing.id}`);
         this.duplicateCache.set(cacheKey, Date.now());
         return { success: true, notification: existing, duplicate: true };
       }
@@ -277,31 +243,27 @@ class NotificationService {
   }
 
   async updateNotificationStatus(notificationId, status, method = null) {
-    try {
-      const updateData = {
-        delivery_status: status,
-      };
-      
-      if (method) {
-        updateData.delivery_method = method;
-      }
-      
-      Promise.resolve().then(async () => {
+    // Fire-and-forget status update
+    const updateData = {
+      delivery_status: status,
+      ...(method && { delivery_method: method }),
+    };
+    
+    Promise.resolve().then(async () => {
+      try {
         await supabaseAdmin
           .from('v1_notifications')
           .update(updateData)
           .eq('id', notificationId);
-      });
-      
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
+      } catch (err) {
+        console.error('[v1/Notification] Failed to update status:', err);
+      }
+    }).catch(() => {}); // Silently ignore errors
+    
+    return { success: true };
   }
 
   async sendAndStoreNotification(userId, notificationData) {
-    console.log(`[v1/Notification] Attempting to send notification to user ${userId}, type: ${notificationData.type}`);
-    
     const shouldBatch = this.shouldBatchNotification(notificationData.type);
     
     if (shouldBatch) {
@@ -315,9 +277,6 @@ class NotificationService {
     }
 
     if (storeResult.duplicate) {
-      console.log(`[v1/Notification] Duplicate notification detected for user ${userId}, type: ${notificationData.type}, skipping FCM (already stored)`);
-      // Note: For duplicates, we skip FCM to avoid spam, but notification is still stored
-      // If you need FCM for duplicates, remove this early return and let it proceed to sendNotification
       return {
         stored: true,
         sent: false,
@@ -506,7 +465,6 @@ class NotificationService {
     const attempts = retryData.attempts || 0;
     
     if (attempts >= this.MAX_RETRIES) {
-      console.log(`[v1/Notification] Max retries reached for notification ${notificationId}`);
       return;
     }
 
@@ -515,19 +473,15 @@ class NotificationService {
       this.MAX_RETRY_DELAY
     );
 
-    const nextRetry = Date.now() + delay;
-
     this.retryQueue.set(notificationId, {
       ...retryData,
       attempts: attempts + 1,
-      nextRetry
+      nextRetry: Date.now() + delay
     });
 
     if (!this.retryTimer) {
       this.startRetryProcessor();
     }
-
-    console.log(`[v1/Notification] Scheduled retry ${attempts + 1}/${this.MAX_RETRIES} for notification ${notificationId} in ${delay}ms`);
   }
 
   startRetryProcessor() {
@@ -562,8 +516,6 @@ class NotificationService {
   }
 
   async retryNotification(notificationId, retryData) {
-    console.log(`[v1/Notification] Retrying notification ${notificationId} (attempt ${retryData.attempts})`);
-    
     const sendResult = await this.sendNotification(
       retryData.userId,
       retryData.notificationData,
@@ -572,7 +524,6 @@ class NotificationService {
     
     if (sendResult.success) {
       this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
-      console.log(`[v1/Notification] Retry successful for notificationID ${notificationId}`);
     } else {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
       
@@ -580,12 +531,9 @@ class NotificationService {
         !sendResult.fcmResult.success || 
         (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
       );
-      const shouldRetry = fcmFailed && retryData.attempts < this.MAX_RETRIES;
       
-      if (shouldRetry) {
+      if (fcmFailed && retryData.attempts < this.MAX_RETRIES) {
         await this.scheduleRetry(notificationId, retryData);
-      } else {
-        console.log(`[v1/Notification] Retry failed for notification ${notificationId}, max attempts reached or no retry needed`);
       }
     }
   }
