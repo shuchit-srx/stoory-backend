@@ -32,26 +32,26 @@ class PanVerificationService {
 
         if (existingPAN) {
           // Check if this exact PAN is already verified
-        if (
-          existingPAN.pan_verified &&
-          existingPAN.pan_number === normalizedPAN
-        ) {
-          return {
-            success: true,
-            message: "PAN already verified",
-            result: {
-              pan_number: existingPAN.pan_number,
-              pan_status: "VALID",
-              status: "VALID",
-              user_full_name: existingPAN.pan_holder_name,
+          if (
+            existingPAN.pan_verified &&
+            existingPAN.pan_number === normalizedPAN
+          ) {
+            return {
+              success: true,
+              message: "PAN already verified",
+              result: {
+                pan_number: existingPAN.pan_number,
+                pan_status: "VALID",
+                status: "VALID",
+                user_full_name: existingPAN.pan_holder_name,
+                already_verified: true,
+                verified_at: existingPAN.pan_verified_at,
+              },
+              verified: true,
               already_verified: true,
-              verified_at: existingPAN.pan_verified_at,
-            },
-            verified: true,
-            already_verified: true,
-            ...(existingPAN.pan_holder_name ? { holder_name: existingPAN.pan_holder_name } : {}),
-          };
-        }
+              ...(existingPAN.pan_holder_name ? { holder_name: existingPAN.pan_holder_name } : {}),
+            };
+          }
 
           // Check if user has a different PAN that's already verified
           if (
@@ -164,10 +164,10 @@ class PanVerificationService {
       // Response codes starting with "2" are typically success, but don't rely solely on this
       const hasValidResponseCode = data?.response_code && String(data.response_code).startsWith("2");
       const hasExplicitValidFlag = resultObj?.is_valid === true;
-      
+
       // Check for explicit invalid indicators
       const hasInvalidStatus = status === "INVALID" || status === "FAILED" || status === "ERROR";
-      
+
       // If pan_status is explicitly "VALID", it's valid regardless of response_code
       if (status === "VALID" || resultObj?.pan_status === "VALID" || data?.pan_status === "VALID") {
         isValid = true;
@@ -197,7 +197,7 @@ class PanVerificationService {
           userRole,
           holderName,
         });
-        
+
         const updateResult = await this.updatePANVerificationStatus(
           userId,
           userRole,
@@ -221,7 +221,7 @@ class PanVerificationService {
             ...(holderName ? { holder_name: holderName } : {}),
           };
         }
-        
+
         console.log("[v1/PAN] PAN verification saved successfully to database");
       } else if (!isValid && userId && userRole) {
         // Explicitly log when we're not saving an invalid PAN
@@ -297,7 +297,7 @@ class PanVerificationService {
   async getUserPANStatus(userId, userRole) {
     try {
       const tableName =
-        userRole === "INFLUENCER"
+        String(userRole).toUpperCase() === "INFLUENCER"
           ? "v1_influencer_profiles"
           : "v1_brand_profiles";
 
@@ -327,7 +327,7 @@ class PanVerificationService {
   async updatePANVerificationStatus(userId, userRole, pan, holderName) {
     try {
       const tableName =
-        userRole === "INFLUENCER"
+        String(userRole).toUpperCase() === "INFLUENCER"
           ? "v1_influencer_profiles"
           : "v1_brand_profiles";
 

@@ -20,8 +20,8 @@ const corsOptions = {
     origin: function (origin, callback) {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
-        
-        const allowedOrigins = process.env.CORS_ORIGIN 
+
+        const allowedOrigins = process.env.CORS_ORIGIN
             ? process.env.CORS_ORIGIN.split(',')
             : [
                 'http://localhost:3000',
@@ -30,25 +30,25 @@ const corsOptions = {
                 'http://localhost:8080',
                 'http://localhost:8081',
             ];
-        
+
         // Check if origin is in allowed list
         if (allowedOrigins.includes(origin)) {
             return callback(null, true);
         }
-        
+
         // Check regex patterns for local network IPs
         const localNetworkPatterns = [
             /^http:\/\/192\.168\.\d+\.\d+:\d+$/,  // 192.168.x.x
             /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/,   // 10.x.x.x
             /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+$/  // 172.16-31.x.x
         ];
-        
+
         for (const pattern of localNetworkPatterns) {
             if (pattern.test(origin)) {
                 return callback(null, true);
             }
         }
-        
+
         // Log the blocked origin for debugging
         console.log(`[v1/CORS] Blocked origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
@@ -68,13 +68,13 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 // Health check endpoint (must be before /api/v1 routes)
 app.get("/health", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Stoory Backend v1 is running",
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || "development",
-    version: "1.0.0"
-  });
+    res.status(200).json({
+        success: true,
+        message: "Stoory Backend v1 is running",
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || "development",
+        version: "1.0.0"
+    });
 });
 
 
@@ -84,10 +84,14 @@ app.use("/api/v1", router);
 // Initialize Socket.io
 const io = initSocket(server);
 
+// Attach Socket.io to NotificationService for real-time updates
+const notificationService = require('./services/notificationService');
+notificationService.setSocket(io);
+
 // Global Error Handler
 app.use((err, req, res, next) => {
-  console.error(`[v1/ErrorHandler] ${err.stack}`);
-  res.status(500).send('Something broke!');
+    console.error(`[v1/ErrorHandler] ${err.stack}`);
+    res.status(500).send('Something broke!');
 });
 
-module.exports = { app, server, io, router};
+module.exports = { app, server, io, router };
