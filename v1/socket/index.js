@@ -66,9 +66,13 @@ const initSocket = (server) => {
 
   io.on('connection', (socket) => {
     console.log(`User connected: ${socket.user.id} (socket: ${socket.id})`);
-    
+
     socket.currentRoom = null;
     socket.userId = socket.user.id;
+
+    // Automatically put the user in their own private room for direct notifications
+    socket.join(`user_${socket.user.id}`);
+    console.log(`User ${socket.user.id} joined personal room user_${socket.user.id}`);
 
     // 🔧 OPTIMIZATION: Verify socket is connected before restoring rooms
     // SIGNIFICANCE: Prevents operations on disconnected sockets
@@ -264,7 +268,7 @@ const initSocket = (server) => {
         // Broadcast message to all users in room
         const roomSockets = await io.in(roomName).fetchSockets();
         const recipientSockets = roomSockets.filter(s => s.userId !== socket.user.id);
-        
+
         console.log(`[Socket] Emitting receive_message to room ${roomName}`, {
           messageId: savedMessage.id,
           chat_id: applicationId,
@@ -281,7 +285,7 @@ const initSocket = (server) => {
           try {
             await ChatService.updateMessageStatus(savedMessage.id, 'DELIVERED');
             console.log(`[Socket] Message ${savedMessage.id} marked as DELIVERED to ${recipientSockets.length} recipients`);
-            
+
             // Update unread counts for all recipients
             // savedMessage should have chat_id from the database
             if (savedMessage.chat_id) {
@@ -452,14 +456,14 @@ const initSocket = (server) => {
     socket.on('leave_chat', (payload = {}) => {
       const { applicationId } = payload;
       const roomName = applicationId ? `app_${applicationId}` : socket.currentRoom;
-      
+
       if (roomName && socket.rooms.has(roomName)) {
         socket.to(roomName).emit('user_left', {
           userId: socket.user.id,
           timestamp: new Date().toISOString()
         });
         socket.leave(roomName);
-        
+
         // Remove from tracked rooms
         const userRooms = userActiveRooms.get(socket.user.id);
         if (userRooms) {
@@ -468,7 +472,7 @@ const initSocket = (server) => {
             userActiveRooms.delete(socket.user.id);
           }
         }
-        
+
         if (socket.currentRoom === roomName) {
           socket.currentRoom = null;
         }
@@ -479,7 +483,7 @@ const initSocket = (server) => {
     // SIGNIFICANCE: Proper cleanup prevents memory leaks and stale state
     socket.on('disconnect', (reason) => {
       console.log(`User ${socket.user.id} disconnected: ${reason} (socket: ${socket.id})`);
-      
+
       if (socket.currentRoom) {
         socket.to(socket.currentRoom).emit('user_left', {
           userId: socket.user.id,

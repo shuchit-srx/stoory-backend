@@ -9,7 +9,7 @@ class NotificationService {
     this.batchTimer = null;
     this.BATCH_WINDOW = 5000; // 5 seconds
     this.MAX_BATCH_SIZE = 10; // Max notifications per batch
-    
+
     // Retry queue with exponential backoff
     this.retryQueue = new Map(); // Map<notificationId, {attempts, nextRetry, data}>
     this.retryTimer = null;
@@ -21,6 +21,14 @@ class NotificationService {
     this.duplicateCache = new Map(); // Map<key, timestamp>
     this.DUPLICATE_CACHE_TTL = 30000; // 30 seconds
     this.startDuplicateCacheCleanup();
+
+    // Socket.io instance
+    this.io = null;
+  }
+
+  setSocket(ioInstance) {
+    this.io = ioInstance;
+    console.log('[v1/Notification] Socket.io instance attached to NotificationService');
   }
 
   startDuplicateCacheCleanup() {
@@ -48,16 +56,16 @@ class NotificationService {
       } catch (err) {
         console.error('[v1/Notification] Failed to log delivery attempt:', err);
       }
-    }).catch(() => {}); // Silently ignore errors
+    }).catch(() => { }); // Silently ignore errors
   }
 
   async sendFCMNotification(userId, notificationData) {
     try {
       if (!fcmService.initialized) {
-        return { 
-          success: false, 
-          error: 'FCM service not initialized', 
-          sent: 0, 
+        return {
+          success: false,
+          error: 'FCM service not initialized',
+          sent: 0,
           failed: 0,
           reason: 'service_not_initialized'
         };
@@ -81,10 +89,10 @@ class NotificationService {
       return result;
     } catch (error) {
       console.error(`[v1/Notification] FCM send error for user ${userId}:`, error);
-      return { 
-        success: false, 
-        error: error.message, 
-        sent: 0, 
+      return {
+        success: false,
+        error: error.message,
+        sent: 0,
         failed: 0,
         reason: 'exception'
       };
@@ -104,7 +112,7 @@ class NotificationService {
    */
   async sendNotification(userId, notificationData, notificationId = null) {
     let fcmResult = null;
-    
+
     // Always attempt FCM if initialized
     if (!fcmService.initialized) {
       if (notificationId) {
@@ -115,11 +123,11 @@ class NotificationService {
       }
     } else {
       fcmResult = await this.sendFCMNotification(userId, notificationData);
-      
+
       if (notificationId) {
         const fcmSuccess = fcmResult.success && fcmResult.sent > 0;
         const fcmHasTokens = fcmResult.success && fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error;
-        
+
         this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess || fcmHasTokens, {
           sent: fcmResult.sent || 0,
           failed: fcmResult.failed || 0,
@@ -130,20 +138,41 @@ class NotificationService {
         });
       }
     }
-    
+
     const success = (fcmResult?.success && fcmResult.sent > 0);
     const method = fcmService.initialized ? 'fcm' : 'none';
-    
-    return { 
-      success, 
-      method, 
+
+    // 🔥 If socket.io is enabled, emit a realtime event to the user
+    if (this.io) {
+      try {
+        const eventType = [
+          'APPLICATION_CREATED', 'APPLICATION_ACCEPTED', 'APPLICATION_CANCELLED',
+          'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER', 'MOU_FULLY_ACCEPTED',
+          'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'
+        ].includes(notificationData.type) ? 'campaign_updated' : 'notification_received';
+
+        this.io.to(`user_${userId}`).emit(eventType, {
+          notificationId,
+          type: notificationData.type,
+          data: notificationData.data,
+          timestamp: new Date().toISOString()
+        });
+        console.log(`[v1/Notification] Emitted realtime ${eventType} event to user_${userId}`);
+      } catch (wsError) {
+        console.error(`[v1/Notification] Failed to emit realtime event to user_${userId}:`, wsError);
+      }
+    }
+
+    return {
+      success,
+      method,
       fcmResult: fcmResult || null,
     };
   }
 
   generateDuplicateKey(notificationData) {
     const { userId, type, data } = notificationData;
-    
+
     if (type === 'CHAT_MESSAGE' && data?.applicationId && data?.senderId) {
       return `${userId}_${type}_${data.applicationId}_${data.senderId}`;
     }
@@ -152,14 +181,14 @@ class NotificationService {
     if (['SCRIPT_REVIEW', 'WORK_REVIEW'].includes(type) && data?.applicationId) {
       return `${userId}_${type}_${data.applicationId}_${data.status || 'unknown'}`;
     }
-    
+
     if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'SCRIPT_SUBMITTED',
-         'WORK_SUBMITTED', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
-         'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'].includes(type) && 
-        data?.applicationId) {
+      'WORK_SUBMITTED', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
+      'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'].includes(type) &&
+      data?.applicationId) {
       return `${userId}_${type}_${data.applicationId}`;
     }
-    
+
     return `${userId}_${type}_${JSON.stringify(data || {})}`;
   }
 
@@ -167,7 +196,7 @@ class NotificationService {
     try {
       const cacheKey = this.generateDuplicateKey(notificationData);
       const cached = this.duplicateCache.get(cacheKey);
-      
+
       if (cached && (Date.now() - cached) < this.DUPLICATE_CACHE_TTL) {
         return { success: true, notification: { id: 'cached' }, duplicate: true };
       }
@@ -182,7 +211,7 @@ class NotificationService {
         timeWindow = 24 * 60 * 60; // 24 hours in seconds
       }
       const timeWindowAgo = new Date(Date.now() - timeWindow * 1000).toISOString();
-      
+
       let existingQuery = supabaseAdmin
         .from('v1_notifications')
         .select('id')
@@ -190,32 +219,32 @@ class NotificationService {
         .eq('type', notificationData.type)
         .gte('created_at', timeWindowAgo)
         .limit(1);
-      
+
       if (notificationData.type === 'CHAT_MESSAGE' && notificationData.data?.applicationId && notificationData.data?.senderId) {
         existingQuery = existingQuery
           .eq('data->>applicationId', notificationData.data.applicationId)
           .eq('data->>senderId', notificationData.data.senderId);
-      } else if (['SCRIPT_REVIEW', 'WORK_REVIEW'].includes(notificationData.type) && 
-                 notificationData.data?.applicationId) {
+      } else if (['SCRIPT_REVIEW', 'WORK_REVIEW'].includes(notificationData.type) &&
+        notificationData.data?.applicationId) {
         existingQuery = existingQuery
           .eq('data->>applicationId', notificationData.data.applicationId)
           .eq('data->>status', notificationData.data.status || 'unknown');
       } else if (['APPLICATION_ACCEPTED', 'APPLICATION_CREATED', 'SCRIPT_SUBMITTED',
-                  'WORK_SUBMITTED', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
-                  'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'].includes(notificationData.type) && 
-                 notificationData.data?.applicationId) {
+        'WORK_SUBMITTED', 'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER',
+        'MOU_FULLY_ACCEPTED', 'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'].includes(notificationData.type) &&
+        notificationData.data?.applicationId) {
         existingQuery = existingQuery.eq('data->>applicationId', notificationData.data.applicationId);
       }
-      
+
       const { data: existing } = await existingQuery.maybeSingle();
-      
+
       if (existing) {
         this.duplicateCache.set(cacheKey, Date.now());
         return { success: true, notification: existing, duplicate: true };
       }
-      
+
       this.duplicateCache.set(cacheKey, Date.now());
-      
+
       const { data, error } = await supabaseAdmin
         .from('v1_notifications')
         .insert({
@@ -229,12 +258,12 @@ class NotificationService {
         })
         .select()
         .single();
-      
+
       if (error) {
         console.error('[v1/Notification] Store failed:', error);
         return { success: false, error: error.message };
       }
-      
+
       return { success: true, notification: data };
     } catch (error) {
       console.error('[v1/Notification] Store error:', error);
@@ -248,7 +277,7 @@ class NotificationService {
       delivery_status: status,
       ...(method && { delivery_method: method }),
     };
-    
+
     Promise.resolve().then(async () => {
       try {
         await supabaseAdmin
@@ -258,14 +287,14 @@ class NotificationService {
       } catch (err) {
         console.error('[v1/Notification] Failed to update status:', err);
       }
-    }).catch(() => {}); // Silently ignore errors
-    
+    }).catch(() => { }); // Silently ignore errors
+
     return { success: true };
   }
 
   async sendAndStoreNotification(userId, notificationData) {
     const shouldBatch = this.shouldBatchNotification(notificationData.type);
-    
+
     if (shouldBatch) {
       return await this.batchNotification(userId, notificationData);
     }
@@ -293,12 +322,12 @@ class NotificationService {
       this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
     } else {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
-      
+
       const fcmFailed = sendResult.fcmResult && (
-        !sendResult.fcmResult.success || 
+        !sendResult.fcmResult.success ||
         (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
       );
-      
+
       if (fcmFailed) {
         await this.scheduleRetry(notificationId, {
           userId,
@@ -325,7 +354,7 @@ class NotificationService {
       this.notificationQueue.set(userId, []);
     }
     this.notificationQueue.get(userId).push(notificationData);
-    
+
     Promise.resolve().then(async () => {
       try {
         if (!this.batchTimer) {
@@ -338,7 +367,7 @@ class NotificationService {
             }
           }, this.BATCH_WINDOW);
         }
-        
+
         const userQueue = this.notificationQueue.get(userId);
         if (userQueue && userQueue.length >= this.MAX_BATCH_SIZE) {
           this.flushBatchForUser(userId).catch(err => {
@@ -349,20 +378,20 @@ class NotificationService {
         console.error('[v1/Notification] Error in batchNotification:', error);
       }
     });
-    
+
     return { stored: true, sent: true, batched: true };
   }
 
   async flushBatchForUser(userId) {
     const queue = this.notificationQueue.get(userId);
     if (!queue || queue.length === 0) return;
-    
+
     this.notificationQueue.delete(userId);
-    
+
     try {
       const batchedData = this.createBatchedNotification(queue);
       if (!batchedData) return;
-      
+
       const storeResult = await this.storeNotification({ ...batchedData, userId });
       if (!storeResult.success) {
         if (!this.notificationQueue.has(userId)) {
@@ -371,20 +400,20 @@ class NotificationService {
         this.notificationQueue.get(userId).push(...queue);
         return;
       }
-      
+
       const notificationId = storeResult.notification.id;
       const sendResult = await this.sendNotification(userId, batchedData, notificationId);
-      
+
       if (sendResult.success) {
         this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
       } else {
         this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
-        
+
         const fcmFailed = sendResult.fcmResult && (
-          !sendResult.fcmResult.success || 
+          !sendResult.fcmResult.success ||
           (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
         );
-        
+
         if (fcmFailed) {
           await this.scheduleRetry(notificationId, {
             userId,
@@ -407,7 +436,7 @@ class NotificationService {
       clearTimeout(this.batchTimer);
       this.batchTimer = null;
     }
-    
+
     const userIds = Array.from(this.notificationQueue.keys());
     for (const userId of userIds) {
       try {
@@ -463,7 +492,7 @@ class NotificationService {
 
   async scheduleRetry(notificationId, retryData) {
     const attempts = retryData.attempts || 0;
-    
+
     if (attempts >= this.MAX_RETRIES) {
       return;
     }
@@ -521,17 +550,17 @@ class NotificationService {
       retryData.notificationData,
       notificationId
     );
-    
+
     if (sendResult.success) {
       this.updateNotificationStatus(notificationId, 'DELIVERED', sendResult.method);
     } else {
       this.updateNotificationStatus(notificationId, 'FAILED', sendResult.method);
-      
+
       const fcmFailed = sendResult.fcmResult && (
-        !sendResult.fcmResult.success || 
+        !sendResult.fcmResult.success ||
         (sendResult.fcmResult.error && sendResult.fcmResult.reason !== 'no_tokens')
       );
-      
+
       if (fcmFailed && retryData.attempts < this.MAX_RETRIES) {
         await this.scheduleRetry(notificationId, retryData);
       }
@@ -650,8 +679,8 @@ class NotificationService {
         return { success: false, error: 'Application not found' };
       }
 
-      const cancelledByName = cancelledByRole === 'INFLUENCER' 
-        ? 'The influencer' 
+      const cancelledByName = cancelledByRole === 'INFLUENCER'
+        ? 'The influencer'
         : 'The brand';
 
       const template = getNotificationTemplate('APPLICATION_CANCELLED', {
@@ -761,10 +790,10 @@ class NotificationService {
       const brandNotificationData = {
         type: 'MOU_FULLY_ACCEPTED',
         ...brandTemplate,
-        data: { 
-          mouId, 
-          applicationId, 
-          brandId, 
+        data: {
+          mouId,
+          applicationId,
+          brandId,
           influencerId,
           recipient: 'brand'
         },
@@ -779,10 +808,10 @@ class NotificationService {
       const influencerNotificationData = {
         type: 'MOU_FULLY_ACCEPTED',
         ...influencerTemplate,
-        data: { 
-          mouId, 
-          applicationId, 
-          brandId, 
+        data: {
+          mouId,
+          applicationId,
+          brandId,
           influencerId,
           recipient: 'influencer'
         },
@@ -807,7 +836,7 @@ class NotificationService {
 
       const campaignTitle = application?.v1_campaigns?.title || 'Campaign';
       const requiresScript = application?.v1_campaigns?.requires_script || false;
-      
+
       let scriptAccepted = false;
       if (requiresScript) {
         const { data: script } = await supabaseAdmin
@@ -994,8 +1023,8 @@ class NotificationService {
       const notificationData = {
         type: 'CAMPAIGN_COMPLETED',
         ...template,
-        data: { 
-          campaignId, 
+        data: {
+          campaignId,
           brandId
         },
       };
