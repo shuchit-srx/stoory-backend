@@ -118,19 +118,36 @@ class CampaignController {
         }
       }
 
-      // Merge any provided links from body with uploaded file URLs
-      if (campaignType === "BULK" && req.body.assets) {
-        const providedLinks = Array.isArray(req.body.assets)
-          ? req.body.assets.filter(link => link && typeof link === 'string')
+      // Parse assets from body (multipart often sends JSON string)
+      let bodyAssets = req.body.assets;
+      if (typeof bodyAssets === "string") {
+        try {
+          bodyAssets = JSON.parse(bodyAssets);
+        } catch (_) {
+          bodyAssets = null;
+        }
+      }
+      if (campaignType === "BULK" && bodyAssets) {
+        const providedLinks = Array.isArray(bodyAssets)
+          ? bodyAssets.filter(link => link && typeof link === "string")
           : [];
         assets = [...assets, ...providedLinks];
       }
 
-      // Merge cover image URL and assets into body
+      // brand_guideline: accept camelCase or snake_case from multipart
+      const brandGuideline = req.body.brand_guideline ?? req.body.brandGuideline ?? null;
+
+      // Merge cover image URL, assets, and brand_guideline into body
       const campaignData = {
         ...req.body,
+        brand_guideline: brandGuideline ?? null,
         cover_image_url: coverImageUrl || req.body.cover_image_url || null,
-        assets: campaignType === "BULK" && assets.length > 0 ? assets : undefined,
+        assets:
+          campaignType === "BULK" && assets.length > 0
+            ? assets
+            : campaignType === "BULK" && Array.isArray(bodyAssets) && bodyAssets.length > 0
+              ? bodyAssets
+              : undefined,
       };
 
       const result = await CampaignService.createCampaign(brandId, campaignData);
@@ -181,10 +198,19 @@ class CampaignController {
         });
       }
 
+      // type is optional: when omitted, returns all campaigns (NORMAL + BULK). When provided, filter by type.
+      const type = req.query.type ? String(req.query.type).toUpperCase().trim() : null;
+      if (type && !["NORMAL", "BULK"].includes(type)) {
+        return res.status(400).json({
+          success: false,
+          message: "Query param 'type' must be NORMAL or BULK when provided",
+        });
+      }
+
       // Extract filters from query params
       // Note: status filter is ignored - endpoint returns only LIVE and IN_PROGRESS (BULK) campaigns
       const filters = {
-        type: req.query.type,
+        ...(type && { type }),
         brand_id: req.query.brand_id,
         min_budget: req.query.min_budget
           ? parseFloat(req.query.min_budget)
@@ -224,10 +250,21 @@ class CampaignController {
         offset,
       };
 
-      // If user is an influencer, pass their ID to filter out campaigns they've applied to
-      const influencerId = req.user?.role === "INFLUENCER" ? req.user.id : null;
+      // If user is an influencer, pass their ID and tier for tier-based filtering and budget
+      let influencerId = null;
+      let influencerTier = null;
+      if (req.user?.role === "INFLUENCER") {
+        influencerId = req.user.id;
+        const { data: profile } = await supabaseAdmin
+          .from("v1_influencer_profiles")
+          .select("tier")
+          .eq("user_id", req.user.id)
+          .eq("is_deleted", false)
+          .maybeSingle();
+        influencerTier = profile?.tier ? String(profile.tier).toUpperCase().trim() : null;
+      }
 
-      const result = await CampaignService.getCampaigns(filters, pagination, influencerId);
+      const result = await CampaignService.getCampaigns(filters, pagination, influencerId, influencerTier);
 
       if (result.success) {
         return res.json({
@@ -506,23 +543,41 @@ class CampaignController {
           }
         }
         
-        // Merge any provided links from body with uploaded file URLs
-        if (req.body.assets) {
-          const providedLinks = Array.isArray(req.body.assets)
-            ? req.body.assets.filter(link => link && typeof link === 'string')
+        // Parse assets from body (multipart often sends JSON string)
+        let bodyAssetsUpdate = req.body.assets;
+        if (typeof bodyAssetsUpdate === "string") {
+          try {
+            bodyAssetsUpdate = JSON.parse(bodyAssetsUpdate);
+          } catch (_) {
+            bodyAssetsUpdate = null;
+          }
+        }
+        if (bodyAssetsUpdate) {
+          const providedLinks = Array.isArray(bodyAssetsUpdate)
+            ? bodyAssetsUpdate.filter(link => link && typeof link === "string")
             : [];
           assets = [...uploadedUrls, ...providedLinks];
         } else if (uploadedUrls.length > 0) {
           assets = uploadedUrls;
         }
       } else if (currentCampaignType === "BULK" && req.body.assets) {
-        // Only links provided, no file uploads
-        assets = Array.isArray(req.body.assets)
-          ? req.body.assets.filter(link => link && typeof link === 'string')
+        let bodyAssetsUpdate = req.body.assets;
+        if (typeof bodyAssetsUpdate === "string") {
+          try {
+            bodyAssetsUpdate = JSON.parse(bodyAssetsUpdate);
+          } catch (_) {
+            bodyAssetsUpdate = null;
+          }
+        }
+        assets = Array.isArray(bodyAssetsUpdate)
+          ? bodyAssetsUpdate.filter(link => link && typeof link === "string")
           : [];
       }
 
-      // Merge cover image URL and assets into body
+      // brand_guideline: accept camelCase or snake_case from multipart
+      const brandGuidelineUpdate = req.body.brand_guideline ?? req.body.brandGuideline ?? undefined;
+
+      // Merge cover image URL, assets, and brand_guideline into body
       const campaignData = {
         ...req.body,
       };
@@ -531,6 +586,9 @@ class CampaignController {
       }
       if (assets !== undefined) {
         campaignData.assets = assets;
+      }
+      if (brandGuidelineUpdate !== undefined) {
+        campaignData.brand_guideline = brandGuidelineUpdate;
       }
 
       const result = await CampaignService.updateCampaign(

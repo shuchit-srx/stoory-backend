@@ -339,6 +339,10 @@ const validateCampaignFilters = [
     .optional()
     .isInt({ min: 1, max: 100 })
     .withMessage("limit must be between 1 and 100"),
+  query("offset")
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage("offset must be a non-negative integer"),
 ];
 
 module.exports = {
