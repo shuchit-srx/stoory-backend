@@ -118,126 +118,126 @@ class ApplicationService {
     }
   }
 
- /**
-   * Apply to a campaign
-   */
- async apply({ campaignId, influencerId }) {
-  try {
-    // Check if campaign exists and is in valid state
-    const { data: campaign, error: campaignError } = await supabaseAdmin
-      .from('v1_campaigns')
-      .select('*')
-      .eq('id', campaignId)
-      .maybeSingle();
+  /**
+    * Apply to a campaign
+    */
+  async apply({ campaignId, influencerId }) {
+    try {
+      // Check if campaign exists and is in valid state
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('*')
+        .eq('id', campaignId)
+        .maybeSingle();
 
-    if (campaignError) {
-      console.error('[ApplicationService/apply] Campaign check error:', campaignError);
-      return { success: false, message: 'Database error' };
-    }
+      if (campaignError) {
+        console.error('[ApplicationService/apply] Campaign check error:', campaignError);
+        return { success: false, message: 'Database error' };
+      }
 
-    if (!campaign) {
-      return { success: false, message: 'Campaign not found' };
-    }
+      if (!campaign) {
+        return { success: false, message: 'Campaign not found' };
+      }
 
-    // Allow LIVE status for all campaigns
-    // Allow IN_PROGRESS status only for BULK campaigns (can accept more applications)
-    // Block COMPLETED campaigns
-    if (campaign.status === CampaignStatus.LIVE) {
-      // LIVE campaigns can accept applications
-    } else if (campaign.status === CampaignStatus.IN_PROGRESS && campaign.type === CampaignType.BULK) {
-      // BULK campaigns in IN_PROGRESS can still accept applications
-    } else {
-      return { 
-         success: false, 
-         message: `Campaign is not accepting applications (Status: ${campaign.status})` 
-      };
-    }
-
-    // Check dynamic expiration: if applications_accepted_till has passed and no applications accepted
-    const now = new Date();
-    if (campaign.applications_accepted_till) {
-      const acceptedTill = new Date(campaign.applications_accepted_till);
-      const acceptedCount = campaign.accepted_count || 0;
-      
-      // Campaign is expired if: deadline passed AND no accepted applications
-      if (now >= acceptedTill && acceptedCount === 0) {
+      // Allow LIVE status for all campaigns
+      // Allow IN_PROGRESS status only for BULK campaigns (can accept more applications)
+      // Block COMPLETED campaigns
+      if (campaign.status === CampaignStatus.LIVE) {
+        // LIVE campaigns can accept applications
+      } else if (campaign.status === CampaignStatus.IN_PROGRESS && campaign.type === CampaignType.BULK) {
+        // BULK campaigns in IN_PROGRESS can still accept applications
+      } else {
         return {
           success: false,
-          message: 'Campaign has expired (application deadline has passed)'
+          message: `Campaign is not accepting applications (Status: ${campaign.status})`
         };
       }
+
+      // Check dynamic expiration: if applications_accepted_till has passed and no applications accepted
+      const now = new Date();
+      if (campaign.applications_accepted_till) {
+        const acceptedTill = new Date(campaign.applications_accepted_till);
+        const acceptedCount = campaign.accepted_count || 0;
+
+        // Campaign is expired if: deadline passed AND no accepted applications
+        if (now >= acceptedTill && acceptedCount === 0) {
+          return {
+            success: false,
+            message: 'Campaign has expired (application deadline has passed)'
+          };
+        }
+      }
+
+      // Check for duplicate application
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('v1_applications')
+        .select('*')
+        .eq('campaign_id', campaignId)
+        .eq('influencer_id', influencerId)
+        .maybeSingle();
+
+      if (existingError) {
+        console.error('[ApplicationService/apply] Duplicate check error:', existingError);
+        return { success: false, message: 'Database error' };
+      }
+
+      if (existing) {
+        return { success: false, message: 'You have already applied to this campaign' };
+      }
+
+      // Fetch values from campaign and map to application fields
+      // budget -> budget_amount
+      // platform_fee_percentage -> platform_fee_percentage
+      // platform_fee_amount -> platform_fee_amount
+      // net_amount -> agreed_amount
+      // Amounts remain in rupees (not converted to paisa)
+      const { data: app, error: insertError } = await supabaseAdmin
+        .from('v1_applications')
+        .insert({
+          campaign_id: campaignId,
+          influencer_id: influencerId,
+          brand_id: campaign.brand_id,
+          phase: ApplicationPhase.APPLIED,
+          budget_amount: campaign.budget ?? null,
+          platform_fee_percentage: campaign.platform_fee_percentage ?? null,
+          platform_fee_amount: campaign.platform_fee_amount ?? null,
+          agreed_amount: campaign.net_amount ?? null,
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('[ApplicationService/apply] Insert error:', insertError);
+        return { success: false, message: insertError.message || 'Failed to apply to campaign' };
+      }
+
+      // Send notification to brand owner
+      try {
+        const NotificationService = require('./notificationService');
+        await NotificationService.notifyApplicationCreated(
+          app.id,
+          campaignId,
+          influencerId,
+          campaign.brand_id
+        );
+      } catch (notifError) {
+        console.error('[ApplicationService/apply] Failed to send notification:', notifError);
+        // Don't fail the operation if notification fails
+      }
+
+      return {
+        success: true,
+        message: 'Application submitted successfully',
+        application: app,
+      };
+    } catch (err) {
+      console.error('[ApplicationService/apply] Error:', err);
+      return {
+        success: false,
+        message: err.message || 'Failed to apply to campaign',
+      };
     }
-
-    // Check for duplicate application
-    const { data: existing, error: existingError } = await supabaseAdmin
-      .from('v1_applications')
-      .select('*')
-      .eq('campaign_id', campaignId)
-      .eq('influencer_id', influencerId)
-      .maybeSingle();
-
-    if (existingError) {
-      console.error('[ApplicationService/apply] Duplicate check error:', existingError);
-      return { success: false, message: 'Database error' };
-    }
-
-    if (existing) {
-      return { success: false, message: 'You have already applied to this campaign' };
-    }
-
-    // Fetch values from campaign and map to application fields
-    // budget -> budget_amount
-    // platform_fee_percentage -> platform_fee_percentage
-    // platform_fee_amount -> platform_fee_amount
-    // net_amount -> agreed_amount
-    // Amounts remain in rupees (not converted to paisa)
-    const { data: app, error: insertError } = await supabaseAdmin
-      .from('v1_applications')
-      .insert({
-        campaign_id: campaignId,
-        influencer_id: influencerId,
-        brand_id: campaign.brand_id,
-        phase: ApplicationPhase.APPLIED,
-        budget_amount: campaign.budget ?? null,
-        platform_fee_percentage: campaign.platform_fee_percentage ?? null,
-        platform_fee_amount: campaign.platform_fee_amount ?? null,
-        agreed_amount: campaign.net_amount ?? null,
-      })
-      .select()
-      .single();
-
-    if (insertError) {
-      console.error('[ApplicationService/apply] Insert error:', insertError);
-      return { success: false, message: insertError.message || 'Failed to apply to campaign' };
-    }
-
-    // Send notification to brand owner
-    try {
-      const NotificationService = require('./notificationService');
-      await NotificationService.notifyApplicationCreated(
-        app.id,
-        campaignId,
-        influencerId,
-        campaign.brand_id
-      );
-    } catch (notifError) {
-      console.error('[ApplicationService/apply] Failed to send notification:', notifError);
-      // Don't fail the operation if notification fails
-    }
-
-    return {
-      success: true,
-      message: 'Application submitted successfully',
-      application: app,
-    };
-  } catch (err) {
-    console.error('[ApplicationService/apply] Error:', err);
-    return {
-      success: false,
-      message: err.message || 'Failed to apply to campaign',
-    };
   }
-}
 
   /**
    * Bulk accept multiple applications for a campaign
@@ -363,7 +363,7 @@ class ApplicationService {
           // This must happen synchronously before marking as successful
           const MOUService = require('./mouService');
           const mouResult = await MOUService.generateMOUForApplication(applicationId);
-          
+
           if (!mouResult.success) {
             console.error(`❌ [ApplicationService/bulkAccept] Failed to generate MOU for application ${applicationId}: ${mouResult.message}`, mouResult.error || '');
             // MOU generation is critical - mark this application as failed
@@ -378,7 +378,7 @@ class ApplicationService {
             results.push(individualResult);
             continue;
           }
-          
+
           console.log(`✅ [ApplicationService/bulkAccept] MOU generated successfully for application ${applicationId}`);
 
           // Notify the influencer that their application was accepted
@@ -536,7 +536,7 @@ class ApplicationService {
       // This must happen synchronously before returning success
       const MOUService = require('./mouService');
       const mouResult = await MOUService.generateMOUForApplication(applicationId);
-      
+
       if (!mouResult.success) {
         console.error(`❌ [ApplicationService/accept] Failed to generate MOU for application ${applicationId}: ${mouResult.message}`, mouResult.error || '');
         // MOU generation is critical - fail the operation if it doesn't succeed
@@ -547,7 +547,7 @@ class ApplicationService {
           application: updated, // Still return the updated application for reference
         };
       }
-      
+
       console.log(`✅ [ApplicationService/accept] MOU generated successfully for application ${applicationId}`);
 
       // Update accepted_count in v1_campaigns table
@@ -654,8 +654,8 @@ class ApplicationService {
           .single();
 
         if (applicationData) {
-          const otherUserId = app.influencer_id === user.id 
-            ? applicationData.v1_campaigns?.brand_id 
+          const otherUserId = app.influencer_id === user.id
+            ? applicationData.v1_campaigns?.brand_id
             : app.influencer_id;
 
           if (otherUserId) {
@@ -688,7 +688,7 @@ class ApplicationService {
   /**
    * Complete an application (Admin only)
    */
-  async complete(applicationId) {
+  async complete(applicationId, initiatorId = null) {
     try {
       const { data: app, error: fetchError } = await supabaseAdmin
         .from('v1_applications')
@@ -757,7 +757,7 @@ class ApplicationService {
           const campaignTitle = completedApp.v1_campaigns?.title || 'Campaign';
 
           // Notify influencer
-          if (influencerId) {
+          if (influencerId && influencerId !== initiatorId) {
             await NotificationService.sendAndStoreNotification(influencerId, {
               type: 'CAMPAIGN_COMPLETED',
               title: `${campaignTitle} Update`,
@@ -768,7 +768,7 @@ class ApplicationService {
           }
           // Notify brand
           if (brandId) {
-            await NotificationService.notifyCampaignCompleted(completedApp.v1_campaigns?.id, brandId);
+            await NotificationService.notifyCampaignCompleted(completedApp.v1_campaigns?.id, brandId, initiatorId);
           }
         }
       } catch (notifError) {

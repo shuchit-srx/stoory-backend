@@ -68,7 +68,7 @@ class ApplicationController {
       }
 
       const userId = req.user.id;
-      
+
       // Get brand_id from brand profile (not user_id)
       const brandProfileResult = await this.getBrandProfileId(userId);
       if (!brandProfileResult || !brandProfileResult.success) {
@@ -151,7 +151,7 @@ class ApplicationController {
       }
 
       const user = req.user;
-      
+
       // If user is a brand owner, get their brand profile ID
       let brandId = null;
       if (user.role === 'BRAND_OWNER') {
@@ -196,7 +196,7 @@ class ApplicationController {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const result = await ApplicationService.complete(req.params.id);
+      const result = await ApplicationService.complete(req.params.id, req.user.id);
 
       if (!result.success) {
         return res.status(400).json(result);

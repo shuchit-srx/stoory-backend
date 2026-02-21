@@ -17,7 +17,7 @@ const ChatService = {
     // Chat should only be created after brand owner pays the platform
     // Payment orders use payable_id and payable_type, not application_id
     // Need to check both APPLICATION type (single) and CAMPAIGN type (bulk) payments
-    
+
     // Check for single application payment (payable_type = 'APPLICATION')
     const { data: singlePaymentOrder } = await supabaseAdmin
       .from('v1_payment_orders')
@@ -79,16 +79,16 @@ const ChatService = {
           .select('id, status, application_id')
           .eq('application_id', applicationId)
           .maybeSingle();
-        
+
         if (raceConditionChat) {
           return raceConditionChat;
         }
       }
-      
+
       console.error('Error creating chat:', error);
       throw new Error(`Failed to create chat: ${error.message}`);
     }
-    
+
     return data;
   },
 
@@ -397,8 +397,8 @@ const ChatService = {
 
       if (application) {
         // Determine recipient (the other party)
-        const recipientId = userId === application.influencer_id 
-          ? application.v1_campaigns?.brand_id 
+        const recipientId = userId === application.influencer_id
+          ? application.v1_campaigns?.brand_id
           : application.influencer_id;
 
         if (recipientId) {
@@ -408,7 +408,7 @@ const ChatService = {
             applicationId,
             userId,
             recipientId,
-            safeMessage
+            savedMessage
           );
         }
       }
@@ -520,7 +520,7 @@ const ChatService = {
       .from('v1_chats')
       .update({ status: 'CLOSED' })
       .eq('application_id', applicationId);
-    
+
     if (error) {
       console.error('Error closing chat:', error);
       throw new Error(`Failed to close chat: ${error.message}`);
@@ -531,10 +531,10 @@ const ChatService = {
       try {
         const NotificationService = require('./notificationService');
         const brandId = application.v1_campaigns?.brand_id;
-        const otherUserId = closedById === application.influencer_id 
-          ? brandId 
+        const otherUserId = closedById === application.influencer_id
+          ? brandId
           : application.influencer_id;
-        
+
         // Conversation closed notification removed - not in 15 trigger points
         // if (otherUserId) {
         //   await NotificationService.notifyConversationClosed(
@@ -882,7 +882,7 @@ const ChatService = {
 
     const { data: updatedMessage, error } = await supabaseAdmin
       .from('v1_chat_messages')
-      .update({ 
+      .update({
         status,
         updated_at: new Date().toISOString()
       })
@@ -952,7 +952,7 @@ const ChatService = {
 
     // Get all user chats
     const chats = await this.getUserChats(userId);
-    
+
     // Calculate total unread count
     const totalUnreadCount = chats.reduce((total, chat) => {
       return total + (chat.total_unread_messages || 0);

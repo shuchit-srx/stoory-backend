@@ -24,14 +24,14 @@ const validateCompleteProfile = [
     .isString()
     .matches(/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+$/)
     .withMessage("UPI ID must be in format: username@provider"),
-  
+
   // Common fields - profile tables
   body("pan_number")
     .optional()
     .isString()
     .isLength({ min: 10, max: 10 })
     .withMessage("PAN number must be 10 characters"),
-  
+
 
   // Influencer-specific fields - Social Platforms
   body("social_platforms")
@@ -88,7 +88,7 @@ const validateCompleteProfile = [
       }
       return true;
     }),
-  
+
 
   // Languages - array of strings
   body("languages")
@@ -99,7 +99,7 @@ const validateCompleteProfile = [
     .optional()
     .isString()
     .withMessage("Each language must be a string"),
-  
+
 
   // Categories - array of strings
   body("categories")
@@ -110,7 +110,7 @@ const validateCompleteProfile = [
     .optional()
     .isString()
     .withMessage("Each category must be a string"),
-  
+
 
   // Common profile fields (used by both influencer and brand)
   body("bio")
@@ -134,13 +134,13 @@ const validateCompleteProfile = [
     .custom((value) => {
       if (!value) return true;
       const normalized = String(value).toUpperCase().trim();
-      const validValues = ["MALE", "FEMALE", "OTHER"];
+      const validValues = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"];
       if (!validValues.includes(normalized)) {
-        throw new Error("Gender must be MALE, FEMALE, or OTHER");
+        throw new Error("Gender must be MALE, FEMALE, OTHER, or PREFER_NOT_TO_SAY");
       }
       return true;
     }),
-  
+
   // Influencer-specific fields
   body("tier")
     .optional()
@@ -162,8 +162,8 @@ const validateCompleteProfile = [
     .optional()
     .isNumeric()
     .withMessage("Max value must be a number"),
-  
-    
+
+
   // Brand-specific fields
   body("brand_name")
     .optional()
