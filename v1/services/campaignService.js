@@ -334,7 +334,24 @@ class CampaignService {
       }
     }
 
-  async getCampaigns(filters = {}, pagination = {}, influencerId = null) {
+  /**
+   * Get tier-specific payout for an influencer from bulk_tier_pricing
+   * @param {Array} bulkTierPricing - campaign.bulk_tier_pricing
+   * @param {string} influencerTier - NANO | MICRO | MID | MACRO
+   * @returns {{ amount: number } | null} - amount for that tier or null if tier not in pricing
+   */
+  getTierPayoutFromBulkPricing(bulkTierPricing, influencerTier) {
+    if (!Array.isArray(bulkTierPricing) || !influencerTier) return null;
+    const tierLower = String(influencerTier).toLowerCase();
+    const config = bulkTierPricing.find(
+      (c) => c.tier && String(c.tier).toLowerCase() === tierLower
+    );
+    if (!config) return null;
+    const amount = parseFloat(config.tier_pricing);
+    return isNaN(amount) ? null : { amount };
+  }
+
+  async getCampaigns(filters = {}, pagination = {}, influencerId = null, influencerTier = null) {
     try {
       const { type, brand_id, min_budget, max_budget, search } = filters;
       const { limit = 20, offset = 0 } = pagination;
@@ -342,18 +359,24 @@ class CampaignService {
       const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20));
       const validatedOffset = Math.max(0, parseInt(offset) || 0);
 
+      // When type is provided, validate and filter by it; when omitted, return all (NORMAL + BULK)
+      const normalizedType = type ? normalizeCampaignType(type) || null : null;
+      if (normalizedType && !this.validateType(normalizedType)) {
+        return {
+          success: false,
+          message: "Invalid campaign type. Must be NORMAL or BULK",
+        };
+      }
+
       let query = supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type, applications_accepted_till, accepted_count", { count: "exact" })
+        .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type, applications_accepted_till, accepted_count, influencer_tier, bulk_tier_pricing", { count: "exact" })
         .eq("is_deleted", false)
         .in("status", [CampaignStatus.LIVE, CampaignStatus.IN_PROGRESS])
         .order("created_at", { ascending: false });
 
-      if (type) {
-        const normalizedType = normalizeCampaignType(type) || "NORMAL";
-        if (this.validateType(normalizedType)) {
-          query = query.eq("type", normalizedType);
-        }
+      if (normalizedType) {
+        query = query.eq("type", normalizedType);
       }
 
       if (brand_id) {
@@ -428,9 +451,27 @@ class CampaignService {
           if (campaign.status !== CampaignStatus.LIVE) {
             return false;
           }
+          // Influencer view: show only if campaign has no tier or campaign tier matches influencer's tier
+          if (influencerId != null) {
+            const campaignTier = campaign.influencer_tier ? String(campaign.influencer_tier).toUpperCase().trim() : null;
+            if (campaignTier && campaignTier !== influencerTier) {
+              return false;
+            }
+            if (!influencerTier && campaignTier) {
+              return false;
+            }
+          }
         } else if (campaign.type === CampaignType.BULK) {
           if (campaign.status !== CampaignStatus.LIVE && campaign.status !== CampaignStatus.IN_PROGRESS) {
             return false;
+          }
+          // Influencer view: when they have a tier, show only if bulk_tier_pricing includes it.
+          // When they have no tier, still show the campaign (so Discover lists campaigns; tier_budget will be null).
+          if (influencerId != null && influencerTier) {
+            const tierPayout = this.getTierPayoutFromBulkPricing(campaign.bulk_tier_pricing || [], influencerTier);
+            if (!tierPayout) {
+              return false;
+            }
           }
         } else {
           return false;
@@ -457,11 +498,21 @@ class CampaignService {
         })
         .map(campaign => {
           const brandUser = brandMap[campaign.brand_id];
+          let budget = campaign.budget;
+          let tier_budget = null;
+          if (campaign.type === CampaignType.BULK && influencerTier) {
+            const tierPayout = this.getTierPayoutFromBulkPricing(campaign.bulk_tier_pricing || [], influencerTier);
+            if (tierPayout) {
+              tier_budget = tierPayout.amount;
+              budget = tierPayout.amount;
+            }
+          }
           return {
             id: campaign.id,
             title: campaign.title,
             cover_image_url: campaign.cover_image_url,
-            budget: campaign.budget,
+            budget,
+            ...(tier_budget != null && { tier_budget }),
             platform: campaign.platform,
             content_type: campaign.content_type,
             brand: {
@@ -503,10 +554,10 @@ class CampaignService {
    */
   async getCampaignById(campaignId, userId = null) {
     try {
-      // Fetch the campaign - select only required fields
+      // Fetch all columns so we get brand_guideline and assets regardless of exact DB column names
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, categories, language, work_deadline, script_deadline, applications_accepted_till, brand_id, influencer_tier, bulk_tier_pricing, assets")
+        .select("*")
         .eq("id", campaignId)
         .eq("is_deleted", false)
         .maybeSingle();
@@ -640,7 +691,42 @@ class CampaignService {
         });
       }
 
-      // Build response with only required fields
+      // For BULK campaign when viewer is influencer: add tier_budget (amount they would get)
+      let tier_budget = null;
+      if (userId && campaign.type === CampaignType.BULK && Array.isArray(campaign.bulk_tier_pricing) && campaign.bulk_tier_pricing.length > 0) {
+        const { data: profile } = await supabaseAdmin
+          .from("v1_influencer_profiles")
+          .select("tier")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .maybeSingle();
+        const influencerTier = profile?.tier ? String(profile.tier).toUpperCase().trim() : null;
+        if (influencerTier) {
+          const payout = this.getTierPayoutFromBulkPricing(campaign.bulk_tier_pricing, influencerTier);
+          if (payout) tier_budget = payout.amount;
+        }
+      }
+
+      // Read brand_guideline and assets from fetched row (support alternate DB column names)
+      const brandGuidelineValue =
+        campaign.brand_guideline ??
+        campaign.brand_guidelines ??
+        campaign.brandGuideline ??
+        null;
+      let assetsValue =
+        campaign.assets ??
+        campaign.assets_urls ??
+        campaign.asset_urls ??
+        null;
+      if (typeof assetsValue === "string") {
+        try {
+          assetsValue = JSON.parse(assetsValue);
+        } catch (_) {
+          assetsValue = assetsValue ? [assetsValue] : null;
+        }
+      }
+
+      // Build response: include description, assets, brand_guideline for bulk/influencer
       const response = {
         id: campaign.id,
         title: campaign.title,
@@ -661,7 +747,9 @@ class CampaignService {
         location: null, // Field doesn't exist in schema
         influencer_tier: campaign.influencer_tier || null, // For NORMAL campaigns
         bulk_tier_pricing: campaign.bulk_tier_pricing || null, // For BULK campaigns
-        assets: campaign.assets || null, // For BULK campaigns
+        assets: Array.isArray(assetsValue) ? assetsValue : (assetsValue || null), // For BULK campaigns (brand references)
+        brand_guideline: brandGuidelineValue ?? null, // Important for bulk/influencer brief
+        ...(tier_budget != null && { tier_budget }),
         applications: applicationsWithInfluencers
       };
 
