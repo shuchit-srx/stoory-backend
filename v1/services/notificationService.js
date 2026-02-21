@@ -7,7 +7,7 @@ class NotificationService {
     // Notification batching
     this.notificationQueue = new Map(); // Map<userId, Array<notificationData>>
     this.batchTimer = null;
-    this.BATCH_WINDOW = 5000; // 5 seconds
+    this.BATCH_WINDOW = 1000; // Reduced to 1 second as per user feedback
     this.MAX_BATCH_SIZE = 10; // Max notifications per batch
 
     // Retry queue with exponential backoff
@@ -59,7 +59,18 @@ class NotificationService {
     }).catch(() => { }); // Silently ignore errors
   }
 
-  async sendFCMNotification(userId, notificationData) {
+  async isUserInRoom(userId, roomName) {
+    if (!this.io) return false;
+    try {
+      const roomSockets = await this.io.in(roomName).fetchSockets();
+      return roomSockets.some(s => s.userId === userId);
+    } catch (err) {
+      console.error('[v1/Notification] Error checking room membership:', err);
+      return false;
+    }
+  }
+
+  async sendFCMNotification(userId, notificationData, notificationId = null) {
     try {
       if (!fcmService.initialized) {
         return {
@@ -77,6 +88,7 @@ class NotificationService {
         clickAction: notificationData.clickAction || '/',
         data: {
           type: notificationData.type,
+          notificationId: notificationId || 'unknown',
           ...notificationData.data,
         },
         badge: notificationData.badge || 1,
@@ -114,53 +126,59 @@ class NotificationService {
     let fcmResult = null;
 
     // Always attempt FCM if initialized
-    if (!fcmService.initialized) {
-      if (notificationId) {
-        this.logDeliveryAttempt(notificationId, 'fcm', false, {
-          error: 'FCM not initialized',
-          reason: 'service_not_initialized'
+    if (fcmService.initialized) {
+      let skipFCM = false;
+
+      // 🔧 OPTIMIZATION: Avoid FCM if user is already on the chat screen
+      if (notificationData.type === 'CHAT_MESSAGE' && notificationData.data?.applicationId) {
+        const roomName = `app_${notificationData.data.applicationId}`;
+        const inRoom = await this.isUserInRoom(userId, roomName);
+        if (inRoom) {
+          console.log(`[v1/Notification] Skipping FCM for user ${userId} as they are in room ${roomName}`);
+          skipFCM = true;
+        }
+      }
+
+      if (!skipFCM) {
+        fcmResult = await this.sendFCMNotification(userId, notificationData, notificationId);
+
+        if (notificationId) {
+          const fcmSuccess = fcmResult.success && fcmResult.sent > 0;
+          const fcmHasTokens = fcmResult.success && fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error;
+
+          this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess || fcmHasTokens, {
+            sent: fcmResult.sent || 0,
+            failed: fcmResult.failed || 0,
+            error: fcmResult.error || null,
+            reason: fcmResult.reason || null,
+            details: fcmResult.details || null,
+            hasTokens: fcmHasTokens,
+          });
+        }
+      } else if (notificationId) {
+        // Log skipped FCM
+        this.logDeliveryAttempt(notificationId, 'fcm', true, {
+          reason: 'user_active_in_room',
+          details: 'Skipped FCM because user is joined to the chat room'
         });
       }
-    } else {
-      fcmResult = await this.sendFCMNotification(userId, notificationData);
-
-      if (notificationId) {
-        const fcmSuccess = fcmResult.success && fcmResult.sent > 0;
-        const fcmHasTokens = fcmResult.success && fcmResult.sent === 0 && fcmResult.reason === 'no_tokens' && !fcmResult.error;
-
-        this.logDeliveryAttempt(notificationId, 'fcm', fcmSuccess || fcmHasTokens, {
-          sent: fcmResult.sent || 0,
-          failed: fcmResult.failed || 0,
-          error: fcmResult.error || null,
-          reason: fcmResult.reason || null,
-          details: fcmResult.details || null,
-          hasTokens: fcmHasTokens,
-        });
-      }
+    } else if (notificationId) {
+      this.logDeliveryAttempt(notificationId, 'fcm', false, {
+        error: 'FCM not initialized',
+        reason: 'service_not_initialized'
+      });
     }
 
     const success = (fcmResult?.success && fcmResult.sent > 0);
     const method = fcmService.initialized ? 'fcm' : 'none';
 
-    // 🔥 If socket.io is enabled, emit a realtime event to the user
+    // Realtime event emission restored for data sync (notifications)
     if (this.io) {
-      try {
-        const eventType = [
-          'APPLICATION_CREATED', 'APPLICATION_ACCEPTED', 'APPLICATION_CANCELLED',
-          'MOU_ACCEPTED_BY_BRAND', 'MOU_ACCEPTED_BY_INFLUENCER', 'MOU_FULLY_ACCEPTED',
-          'PAYOUT_RELEASED', 'PAYMENT_COMPLETED', 'CAMPAIGN_COMPLETED'
-        ].includes(notificationData.type) ? 'campaign_updated' : 'notification_received';
-
-        this.io.to(`user_${userId}`).emit(eventType, {
-          notificationId,
-          type: notificationData.type,
-          data: notificationData.data,
-          timestamp: new Date().toISOString()
-        });
-        console.log(`[v1/Notification] Emitted realtime ${eventType} event to user_${userId}`);
-      } catch (wsError) {
-        console.error(`[v1/Notification] Failed to emit realtime event to user_${userId}:`, wsError);
-      }
+      this.io.to(`user_${userId}`).emit('notification_received', {
+        ...notificationData,
+        notificationId: notificationId || 'unknown'
+      });
+      console.log(`📬 [Socket] Sent notification_received to user_${userId}`);
     }
 
     return {
@@ -350,10 +368,14 @@ class NotificationService {
   }
 
   async batchNotification(userId, notificationData) {
-    if (!this.notificationQueue.has(userId)) {
-      this.notificationQueue.set(userId, []);
+    const type = notificationData.type;
+    const campaignId = notificationData.data?.campaignId || notificationData.data?.applicationId || 'general';
+    const batchKey = `${userId}_${type}_${campaignId}`;
+
+    if (!this.notificationQueue.has(batchKey)) {
+      this.notificationQueue.set(batchKey, []);
     }
-    this.notificationQueue.get(userId).push(notificationData);
+    this.notificationQueue.get(batchKey).push(notificationData);
 
     Promise.resolve().then(async () => {
       try {
@@ -368,10 +390,10 @@ class NotificationService {
           }, this.BATCH_WINDOW);
         }
 
-        const userQueue = this.notificationQueue.get(userId);
-        if (userQueue && userQueue.length >= this.MAX_BATCH_SIZE) {
-          this.flushBatchForUser(userId).catch(err => {
-            console.error(`[v1/Notification] Error flushing batch for user ${userId}:`, err);
+        const batchQueue = this.notificationQueue.get(batchKey);
+        if (batchQueue && batchQueue.length >= this.MAX_BATCH_SIZE) {
+          this.flushBatchByKey(batchKey).catch(err => {
+            console.error(`[v1/Notification] Error flushing batch for key ${batchKey}:`, err);
           });
         }
       } catch (error) {
@@ -382,11 +404,14 @@ class NotificationService {
     return { stored: true, sent: true, batched: true };
   }
 
-  async flushBatchForUser(userId) {
-    const queue = this.notificationQueue.get(userId);
+  async flushBatchByKey(batchKey) {
+    const queue = this.notificationQueue.get(batchKey);
     if (!queue || queue.length === 0) return;
 
-    this.notificationQueue.delete(userId);
+    this.notificationQueue.delete(batchKey);
+
+    // Extract userId from batchKey (format: userId_type_campaignId)
+    const userId = batchKey.split('_')[0];
 
     try {
       const batchedData = this.createBatchedNotification(queue);
@@ -394,10 +419,10 @@ class NotificationService {
 
       const storeResult = await this.storeNotification({ ...batchedData, userId });
       if (!storeResult.success) {
-        if (!this.notificationQueue.has(userId)) {
-          this.notificationQueue.set(userId, []);
+        if (!this.notificationQueue.has(batchKey)) {
+          this.notificationQueue.set(batchKey, []);
         }
-        this.notificationQueue.get(userId).push(...queue);
+        this.notificationQueue.get(batchKey).push(...queue);
         return;
       }
 
@@ -423,11 +448,11 @@ class NotificationService {
         }
       }
     } catch (error) {
-      console.error(`[v1/Notification] Error flushing batch for user ${userId}:`, error);
-      if (!this.notificationQueue.has(userId)) {
-        this.notificationQueue.set(userId, []);
+      console.error(`[v1/Notification] Error flushing batch for key ${batchKey}:`, error);
+      if (!this.notificationQueue.has(batchKey)) {
+        this.notificationQueue.set(batchKey, []);
       }
-      this.notificationQueue.get(userId).push(...queue);
+      this.notificationQueue.get(batchKey).push(...queue);
     }
   }
 
@@ -437,12 +462,12 @@ class NotificationService {
       this.batchTimer = null;
     }
 
-    const userIds = Array.from(this.notificationQueue.keys());
-    for (const userId of userIds) {
+    const batchKeys = Array.from(this.notificationQueue.keys());
+    for (const batchKey of batchKeys) {
       try {
-        await this.flushBatchForUser(userId);
+        await this.flushBatchByKey(batchKey);
       } catch (error) {
-        console.error(`[v1/Notification] Error flushing batch for user ${userId}:`, error);
+        console.error(`[v1/Notification] Error flushing batch for key ${batchKey}:`, error);
       }
     }
   }
@@ -772,7 +797,7 @@ class NotificationService {
 
   // 5. When both have accepted the MOU, brand_owner is notified
   // 6. When both have accepted the MOU, influencer is notified
-  async notifyMOUFullyAccepted(mouId, applicationId, brandId, influencerId) {
+  async notifyMOUFullyAccepted(mouId, applicationId, brandId, influencerId, initiatorId = null) {
     try {
       const { data: application } = await supabaseAdmin
         .from('v1_applications')
@@ -798,7 +823,11 @@ class NotificationService {
           recipient: 'brand'
         },
       };
-      await this.sendAndStoreNotification(brandId, brandNotificationData);
+
+      // Skip notification if the initiator is the brand owner
+      if (brandId !== initiatorId) {
+        await this.sendAndStoreNotification(brandId, brandNotificationData);
+      }
 
       const influencerTemplate = getNotificationTemplate('MOU_FULLY_ACCEPTED_INFLUENCER', {
         campaignTitle,
@@ -816,7 +845,11 @@ class NotificationService {
           recipient: 'influencer'
         },
       };
-      await this.sendAndStoreNotification(influencerId, influencerNotificationData);
+
+      // Skip notification if the initiator is the influencer
+      if (influencerId !== initiatorId) {
+        await this.sendAndStoreNotification(influencerId, influencerNotificationData);
+      }
 
       return { success: true };
     } catch (error) {
@@ -1007,8 +1040,13 @@ class NotificationService {
   }
 
   // 12 & 14. When campaign gets completed, brand_owner is notified
-  async notifyCampaignCompleted(campaignId, brandId) {
+  async notifyCampaignCompleted(campaignId, brandId, initiatorId = null) {
     try {
+      // Skip notification if the initiator is the brand owner
+      if (brandId === initiatorId) {
+        return { success: true, skipped: 'initiator' };
+      }
+
       const { data: campaign } = await supabaseAdmin
         .from('v1_campaigns')
         .select('id, title')
@@ -1064,7 +1102,7 @@ class NotificationService {
   }
 
   // 15. New chat message will be notified
-  async notifyChatMessage(applicationId, senderId, recipientId, messagePreview) {
+  async notifyChatMessage(applicationId, senderId, recipientId, messageData) {
     try {
       const { data: sender } = await supabaseAdmin
         .from('v1_users')
@@ -1077,9 +1115,11 @@ class NotificationService {
       const chat = await ChatService.getChatByApplication(applicationId);
       const chatId = chat?.id;
 
+      const messageContent = typeof messageData === 'string' ? messageData : messageData.message;
+
       const template = getNotificationTemplate('CHAT_MESSAGE', {
         senderName: sender?.name,
-        messagePreview,
+        messagePreview: messageContent ? (messageContent.substring(0, 50) + (messageContent.length > 50 ? '...' : '')) : 'New attachment',
         applicationId,
         chatId,
       });
@@ -1090,7 +1130,61 @@ class NotificationService {
         data: { applicationId, senderId, recipientId, chatId },
       };
 
-      return await this.sendAndStoreNotification(recipientId, notificationData);
+      // 1. Send FCM & General Notification event
+      const result = await this.sendAndStoreNotification(recipientId, notificationData);
+
+      // 2. Broadcast specific receive_message event to the chat room for real-time bubble update
+      if (this.io && typeof messageData === 'object' && messageData.id) {
+        const emitPayload = {
+          ...messageData,
+          chat_id: applicationId,
+          sender_id: senderId,
+          sender: {
+            id: senderId,
+            name: sender?.name
+          }
+        };
+
+        const roomName = `app_${applicationId}`;
+        this.io.to(roomName).emit('receive_message', emitPayload);
+        console.log(`[v1/Notification] Broadcast receive_message to room ${roomName}`);
+      }
+
+      // 3. Emit unread count update to recipient's private room (with last_message for zero-delay preview)
+      if (this.io && chatId) {
+        try {
+          const chatUnreadCount = await ChatService.getUnreadCountForChat(chatId, recipientId);
+          const totalUnreadData = await ChatService.getTotalUnreadCount(recipientId);
+
+          const unreadPayload = {
+            chatId: chatId,
+            unreadCount: chatUnreadCount,
+            totalUnreadCount: totalUnreadData.totalUnreadCount,
+            action: 'increment',
+            timestamp: new Date().toISOString()
+          };
+          // Include last_message when we have message data so frontend can update preview with no delay
+          if (typeof messageData === 'object' && messageData !== null) {
+            const text = messageData.message ?? messageData.content ?? messageData.body ?? messageData.text;
+            const preview = text != null ? String(text).trim() : '';
+            if (preview !== '') {
+              unreadPayload.last_message = {
+                id: messageData.id,
+                message: preview,
+                content: preview,
+                created_at: messageData.created_at,
+                sender_id: messageData.sender_id ?? senderId,
+                seen: messageData.seen || false
+              };
+            }
+          }
+          this.io.to(`user_${recipientId}`).emit('unread_count_updated', unreadPayload);
+        } catch (unreadErr) {
+          console.error('[v1/Notification] Unread count broadcast error:', unreadErr);
+        }
+      }
+
+      return result;
     } catch (error) {
       console.error('[v1/Notification] Chat message error:', error);
       return { success: false, error: error.message };

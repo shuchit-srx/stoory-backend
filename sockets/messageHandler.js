@@ -158,11 +158,20 @@ class MessageHandler {
                 }
 
                 socket.join(`room:${conversationId}`);
-                console.log(`📡 [SOCKET] chat:join room:${conversationId} by user:${socket.user.id} sock:${socket.id}`);
+                socket.join(`app_${conversationId}`); // Backend spec compatibility
+                console.log(`📡 [SOCKET] chat:join room:${conversationId} and app_${conversationId} by user:${socket.user.id} sock:${socket.id}`);
                 socket.emit('chat:joined', { conversationId });
+                socket.emit('joined_chat', { applicationId: conversationId }); // Legacy support
             } catch (error) {
                 socket.emit('chat:error', { message: error.message });
             }
+        });
+
+        // Legacy: join_chat alias for V1 app compatibility
+        socket.on('join_chat', async ({ applicationId }) => {
+            console.log(`📡 [SOCKET] Legacy join_chat alias used for applicationId: ${applicationId}`);
+            // Map join_chat to chat:join logic
+            return socket.emit('chat:join', { conversationId: applicationId });
         });
 
         // Simplified: Leave conversation room (chat:leave)
@@ -226,6 +235,12 @@ class MessageHandler {
                 is_typing: true
             });
 
+            // Legacy room
+            socket.to(`app_${conversationId}`).emit('user_typing', {
+                userId: userId,
+                isTyping: true
+            });
+
             // Emit to global update rooms for chat list
             socket.to(`global_${userId}`).emit('typing_status_update', {
                 conversation_id: conversationId,
@@ -246,12 +261,26 @@ class MessageHandler {
                 is_typing: false
             });
 
+            // Legacy room
+            socket.to(`app_${conversationId}`).emit('user_typing', {
+                userId: userId,
+                isTyping: false
+            });
+
             // Emit to global update rooms for chat list
             socket.to(`global_${userId}`).emit('typing_status_update', {
                 conversation_id: conversationId,
                 user_id: userId,
                 is_typing: false,
                 timestamp: new Date().toISOString()
+            });
+        });
+
+        // Legacy typing alias
+        socket.on('typing', ({ applicationId, isTyping }) => {
+            return socket.emit(isTyping ? 'typing_start' : 'typing_stop', {
+                conversationId: applicationId,
+                userId: socket.user?.id
             });
         });
 
@@ -347,6 +376,12 @@ class MessageHandler {
                 // Broadcast to room: chat:new with { message }
                 console.log(`➡️ [EMIT] chat:new -> room:${conversationId} msg:${savedMessage.id}`);
                 this.io.to(`room:${conversationId}`).emit('chat:new', { message: savedMessage });
+                this.io.to(`app_${conversationId}`).emit('chat:new', { message: savedMessage });
+
+                // Legacy: Emit receive_message for V1 app compatibility
+                console.log(`➡️ [EMIT] receive_message -> app_${conversationId} msg:${savedMessage.id}`);
+                this.io.to(`app_${conversationId}`).emit('receive_message', savedMessage);
+                this.io.to(`room:${conversationId}`).emit('receive_message', savedMessage);
 
                 // Update conversation list for both users with standardized conversations:upsert
                 try {
@@ -377,14 +412,15 @@ class MessageHandler {
                     });
                     conversationListUtils.emitConversationsUpsert(this.io, receiverId, receiverPayload);
 
-                    // Also emit unread_count_updated for receiver
+                    // Also emit unread_count_updated for receiver (with last_message for zero-delay preview)
                     if (receiverPayload.unread_count > 0) {
                         conversationListUtils.emitUnreadCountUpdated(
                             this.io,
                             receiverId,
                             conversationId,
                             receiverPayload.unread_count,
-                            'increment'
+                            'increment',
+                            savedMessage
                         );
                     }
                 } catch (e) {
@@ -452,6 +488,33 @@ class MessageHandler {
                 console.error('chat:send error:', error);
                 socket.emit('chat:error', { message: error.message, tempId: data.tempId });
             }
+        });
+
+        // Legacy send_message alias
+        socket.on('send_message', (data, callback) => {
+            console.log(`➡️ [SOCKET] Legacy send_message alias used:`, data);
+            // Map V1 send_message to chat:send logic
+            const mappedData = {
+                tempId: data.tempId || `temp_v1_${Date.now()}`,
+                conversationId: data.applicationId || data.conversationId,
+                text: data.message,
+                attachments: data.attachmentUrl ? [{ url: data.attachmentUrl }] : null
+            };
+
+            // If callback provided, listen for ack
+            if (typeof callback === 'function') {
+                socket.once('chat:ack', (payload) => {
+                    if (payload.tempId === mappedData.tempId) {
+                        callback({
+                            success: true,
+                            messageId: payload.message?.id,
+                            timestamp: payload.message?.created_at
+                        });
+                    }
+                });
+            }
+
+            return socket.emit('chat:send', mappedData);
         });
 
 
@@ -567,12 +630,21 @@ class MessageHandler {
 
                         if (!error) {
                             console.log(`➡️ [EMIT] chat:read -> room:${conversationId} upTo:${upToMessageId} reader:${socket.user.id}`);
-                            this.io.to(`room:${conversationId}`).emit('chat:read', {
+                            const readPayload = {
                                 conversation_id: conversationId,
                                 messageIds: [],
                                 upToMessageId,
                                 readerId: socket.user.id,
                                 readAt: new Date().toISOString()
+                            };
+                            this.io.to(`room:${conversationId}`).emit('chat:read', readPayload);
+                            this.io.to(`app_${conversationId}`).emit('chat:read', readPayload);
+
+                            // Legacy format
+                            this.io.to(`app_${conversationId}`).emit('message_read', {
+                                applicationId: conversationId,
+                                messageId: upToMessageId,
+                                readerId: socket.user.id
                             });
                         }
                     } else if (messageIds && messageIds.length > 0) {
@@ -586,11 +658,20 @@ class MessageHandler {
 
                         if (!error) {
                             console.log(`➡️ [EMIT] chat:read -> room:${conversationId} ids:${messageIds.length} reader:${socket.user.id}`);
-                            this.io.to(`room:${conversationId}`).emit('chat:read', {
+                            const readPayload = {
                                 conversation_id: conversationId,
                                 messageIds,
                                 readerId: socket.user.id,
                                 readAt: new Date().toISOString()
+                            };
+                            this.io.to(`room:${conversationId}`).emit('chat:read', readPayload);
+                            this.io.to(`app_${conversationId}`).emit('chat:read', readPayload);
+
+                            // Legacy format (pick last)
+                            this.io.to(`app_${conversationId}`).emit('message_read', {
+                                applicationId: conversationId,
+                                messageId: messageIds[messageIds.length - 1],
+                                readerId: socket.user.id
                             });
                         }
                     }
@@ -599,6 +680,18 @@ class MessageHandler {
                 console.error('chat:read error:', error);
                 socket.emit('chat:error', { message: error.message, conversationId, messageIds, upToMessageId });
             }
+        });
+
+        // Legacy mark_read alias
+        socket.on('mark_read', (data, callback) => {
+            const mappedData = {
+                conversationId: data.conversationId, // Mark read needs conv ID in new spec
+                upToMessageId: data.messageId
+            };
+            if (typeof callback === 'function') {
+                callback({ success: true });
+            }
+            return socket.emit('chat:read', mappedData);
         });
 
         // Handle attachment upload progress

@@ -108,10 +108,12 @@ async function buildConversationsUpsertPayload({
     finalUnreadCount = await getUnreadCount(conversationId, currentUserId);
   }
 
-  // Build last_message object
+  // Build last_message object (frontend reads first of: content, message, body, text)
+  const text = lastMessage?.message ?? lastMessage?.content ?? lastMessage?.body ?? lastMessage?.text ?? '';
   const lastMessageObj = lastMessage ? {
     id: lastMessage.id,
-    message: lastMessage.message || lastMessage.content,
+    message: text,
+    content: text,
     created_at: lastMessage.created_at,
     sender_id: lastMessage.sender_id,
     seen: lastMessage.seen || false
@@ -189,14 +191,38 @@ async function emitConversationsUpsertToBothUsers(io, conversationId, conversati
 }
 
 /**
+ * Build last_message object for socket payload (frontend reads first of: content, message, body, text)
+ * @param {Object|string} lastMessage - Message object or preview string
+ * @returns {Object|null} last_message shape or null
+ */
+function buildLastMessageForPayload(lastMessage) {
+  if (lastMessage == null) return null;
+  if (typeof lastMessage === 'string') {
+    const t = lastMessage.trim();
+    return t ? { message: t, content: t } : null;
+  }
+  const text = lastMessage.message ?? lastMessage.content ?? lastMessage.body ?? lastMessage.text ?? '';
+  if (!text) return null;
+  return {
+    id: lastMessage.id,
+    message: text,
+    content: text,
+    created_at: lastMessage.created_at,
+    sender_id: lastMessage.sender_id,
+    seen: lastMessage.seen || false
+  };
+}
+
+/**
  * Emit unread_count_updated event
  * @param {Object} io - Socket.IO instance
  * @param {string} userId - User ID
  * @param {string} conversationId - Conversation ID
  * @param {number} unreadCount - New unread count
- * @param {string} action - 'increment' | 'decrement' | 'reset'
+ * @param {string} [action] - 'increment' | 'decrement' | 'reset'
+ * @param {Object|string} [lastMessage] - Optional; when provided, payload includes last_message for zero-delay preview (object or string)
  */
-function emitUnreadCountUpdated(io, userId, conversationId, unreadCount, action = null) {
+function emitUnreadCountUpdated(io, userId, conversationId, unreadCount, action = null, lastMessage = null) {
   if (!io || !userId) {
     return;
   }
@@ -209,6 +235,11 @@ function emitUnreadCountUpdated(io, userId, conversationId, unreadCount, action 
 
   if (action) {
     payload.action = action;
+  }
+
+  const lastMessageObj = buildLastMessageForPayload(lastMessage);
+  if (lastMessageObj) {
+    payload.last_message = lastMessageObj;
   }
 
   console.log(`➡️ [EMIT] unread_count_updated -> ${roomName} conv:${conversationId} count:${unreadCount}`);

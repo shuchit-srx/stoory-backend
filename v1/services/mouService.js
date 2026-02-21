@@ -90,10 +90,10 @@ class MOUService {
           }
         }
 
-        return { 
-          success: true, 
+        return {
+          success: true,
           message: 'No MOU found for this application',
-          data: null 
+          data: null
         };
       }
 
@@ -150,55 +150,55 @@ class MOUService {
       // Validate user has access and can accept
       if (userRole === 'INFLUENCER') {
         if (application.influencer_id !== userId) {
-          return { 
-            success: false, 
-            message: 'Only the influencer associated with this MOU can accept it as influencer' 
+          return {
+            success: false,
+            message: 'Only the influencer associated with this MOU can accept it as influencer'
           };
         }
       } else if (userRole === 'BRAND_OWNER') {
         if (application.v1_campaigns.brand_id !== userId) {
-          return { 
-            success: false, 
-            message: 'Only the brand owner associated with this MOU can accept it as brand' 
+          return {
+            success: false,
+            message: 'Only the brand owner associated with this MOU can accept it as brand'
           };
         }
       } else {
-        return { 
-          success: false, 
-          message: 'Only influencers and brand owners can accept MOUs' 
+        return {
+          success: false,
+          message: 'Only influencers and brand owners can accept MOUs'
         };
       }
 
       // Check if already accepted by this party
       if (userRole === 'INFLUENCER' && mou.accepted_by_influencer) {
-        return { 
-          success: false, 
-          message: 'MOU has already been accepted by the influencer' 
+        return {
+          success: false,
+          message: 'MOU has already been accepted by the influencer'
         };
       }
 
       if (userRole === 'BRAND_OWNER' && mou.accepted_by_brand) {
-        return { 
-          success: false, 
-          message: 'MOU has already been accepted by the brand' 
+        return {
+          success: false,
+          message: 'MOU has already been accepted by the brand'
         };
       }
 
       // Check if MOU is in a state that prevents acceptance
       // CANCELLED and EXPIRED always block acceptance
       if (['CANCELLED', 'EXPIRED'].includes(mou.status)) {
-        return { 
-          success: false, 
-          message: `MOU cannot be accepted. Current status: ${mou.status}` 
+        return {
+          success: false,
+          message: `MOU cannot be accepted. Current status: ${mou.status}`
         };
       }
 
       // For ACTIVE status, only block if both parties have actually accepted
       // (This handles cases where admin set status to ACTIVE but parties haven't accepted)
       if (mou.status === 'ACTIVE' && mou.accepted_by_influencer && mou.accepted_by_brand) {
-        return { 
-          success: false, 
-          message: 'MOU has already been fully accepted by both parties' 
+        return {
+          success: false,
+          message: 'MOU has already been fully accepted by both parties'
         };
       }
 
@@ -215,7 +215,7 @@ class MOUService {
       }
 
       // Determine new status
-      const willBeFullyAccepted = 
+      const willBeFullyAccepted =
         (userRole === 'INFLUENCER' && mou.accepted_by_brand) ||
         (userRole === 'BRAND_OWNER' && mou.accepted_by_influencer);
 
@@ -240,10 +240,10 @@ class MOUService {
 
       if (updateError) {
         console.error('[MOUService/acceptMOU] Update error:', updateError);
-        return { 
-          success: false, 
+        return {
+          success: false,
           message: 'Failed to accept MOU',
-          error: updateError.message 
+          error: updateError.message
         };
       }
 
@@ -252,10 +252,10 @@ class MOUService {
       // Send notification to other party about MOU acceptance
       try {
         const NotificationService = require('./notificationService');
-        const otherUserId = userRole === 'INFLUENCER' 
-          ? application.brand_id 
+        const otherUserId = userRole === 'INFLUENCER'
+          ? application.brand_id
           : application.influencer_id;
-        
+
         // Notify other party that MOU was accepted (Triggers #3 and #4)
         if (userRole === 'BRAND_OWNER') {
           await NotificationService.notifyMOUAcceptedByBrand(
@@ -285,7 +285,8 @@ class MOUService {
             updatedMOU.id,
             application.id,
             application.brand_id,
-            application.influencer_id
+            application.influencer_id,
+            userId // userId is the initiator
           );
           console.log(`✅ [MOUService/acceptMOU] Notified brand owner to proceed with payment for application ${application.id}`);
         } catch (notifError) {
@@ -433,10 +434,10 @@ class MOUService {
       // Format dates
       const formatDate = (date) => {
         if (!date) return 'Not specified';
-        return new Date(date).toLocaleDateString('en-IN', { 
-          year: 'numeric', 
-          month: 'long', 
-          day: 'numeric' 
+        return new Date(date).toLocaleDateString('en-IN', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
         });
       };
 
@@ -527,10 +528,10 @@ class MOUService {
 
       if (createError) {
         console.error('[MOUService/generateMOUForApplication] Create error:', createError);
-        return { 
-          success: false, 
+        return {
+          success: false,
           message: 'Failed to create MOU',
-          error: createError.message 
+          error: createError.message
         };
       }
 
@@ -572,24 +573,24 @@ class MOUService {
     let content = `MEMORANDUM OF UNDERSTANDING\n`;
     content += `================================\n\n`;
     content += `This Memorandum of Understanding (MOU) is entered into between:\n\n`;
-    if(brand){
-    content += `PARTY 1 - BRAND OWNER:\n`;
-    content += `Name: ${brand.name}\n`;
-    content += `Brand Name: ${brand.brandName}\n`;
-    content += `Email: ${brand.email}\n`;
-    content += `Phone: ${brand.phone}\n\n`;
-  }
-  if(influencer){
-    content += `PARTY 2 - INFLUENCER:\n`;
-    content += `Name: ${influencer.name}\n`;
-    content += `Email: ${influencer.email}\n`;
-    content += `Phone: ${influencer.phone}\n\n`;
-  }
-    
-  if(campaign){
-    content += `CAMPAIGN DETAILS:\n`;
-    content += `Campaign Title: ${campaign.title}\n`;
-    if (campaign.description) {
+    if (brand) {
+      content += `PARTY 1 - BRAND OWNER:\n`;
+      content += `Name: ${brand.name}\n`;
+      content += `Brand Name: ${brand.brandName}\n`;
+      content += `Email: ${brand.email}\n`;
+      content += `Phone: ${brand.phone}\n\n`;
+    }
+    if (influencer) {
+      content += `PARTY 2 - INFLUENCER:\n`;
+      content += `Name: ${influencer.name}\n`;
+      content += `Email: ${influencer.email}\n`;
+      content += `Phone: ${influencer.phone}\n\n`;
+    }
+
+    if (campaign) {
+      content += `CAMPAIGN DETAILS:\n`;
+      content += `Campaign Title: ${campaign.title}\n`;
+      if (campaign.description) {
         content += `Campaign Description: ${campaign.description}\n`;
       }
       content += `\n`;
@@ -602,19 +603,19 @@ class MOUService {
     content += `Platform Fee Percentage: ${financials.platformFeePercentage}%\n`;
     content += `Platform Fee Amount: ${formatCurrency(financials.platformFeeAmount)}\n`;
     content += `Agreed Amount (Net Amount to Influencer): ${formatCurrency(financials.agreedAmount)}\n\n`;
-    
+
 
     // PROCEDURE section (replaced WORK PROCEDURE)
     content += `PROCEDURE:\n`;
     content += `----------\n`;
-    
+
     if (requiresScript) {
       content += `1. SCRIPT SUBMISSION:\n`;
       content += `   - The Influencer must submit the script within the stipulated deadline.\n`;
       content += `   - Script Deadline: ${formatDate(scriptDeadline)}\n`;
       content += `   - The script is subject to revision, rejection, and acceptance.\n`;
       content += `   - In case of revision, the Influencer needs to submit the revised script.\n\n`;
-      
+
       content += `2. WORK SUBMISSION:\n`;
       content += `   - The Influencer must submit the work within the stipulated deadline.\n`;
       content += `   - Work Deadline: ${formatDate(workDeadline)}\n`;
@@ -671,18 +672,18 @@ class MOUService {
 
       // Validate required fields
       if (!application_id || !content) {
-        return { 
-          success: false, 
-          message: 'application_id and content are required' 
+        return {
+          success: false,
+          message: 'application_id and content are required'
         };
       }
 
       // Validate status
       const validStatuses = ['DRAFT', 'SENT', 'ACTIVE', 'CANCELLED', 'EXPIRED'];
       if (!validStatuses.includes(status)) {
-        return { 
-          success: false, 
-          message: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+        return {
+          success: false,
+          message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`
         };
       }
 
@@ -719,7 +720,7 @@ class MOUService {
       let templateVersion = 1;
       if (existingMous && existingMous.length > 0) {
         const latestVersion = existingMous[0].template_version;
-        
+
         // Handle both numeric and string versions (for backward compatibility)
         if (typeof latestVersion === 'number') {
           templateVersion = latestVersion + 1;
@@ -754,10 +755,10 @@ class MOUService {
 
       if (createError) {
         console.error('[MOUService/createMOU] Create error:', createError);
-        return { 
-          success: false, 
+        return {
+          success: false,
           message: 'Failed to create MOU',
-          error: createError.message 
+          error: createError.message
         };
       }
 

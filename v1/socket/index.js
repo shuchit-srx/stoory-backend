@@ -72,7 +72,12 @@ const initSocket = (server) => {
 
     // Automatically put the user in their own private room for direct notifications
     socket.join(`user_${socket.user.id}`);
-    console.log(`User ${socket.user.id} joined personal room user_${socket.user.id}`);
+    console.log(`🏠 [Socket] Joining user room: user_${socket.user.id}`);
+
+    // Log all incoming events for debugging (if needed)
+    socket.onAny((event, ...args) => {
+      console.log(`📬 [Socket] Incoming Event: ${event}`, args);
+    });
 
     // 🔧 OPTIMIZATION: Verify socket is connected before restoring rooms
     // SIGNIFICANCE: Prevents operations on disconnected sockets
@@ -255,63 +260,8 @@ const initSocket = (server) => {
           });
         }
 
-        // Prepare payload for broadcast (chat_id must be applicationId for frontend)
-        const emitPayload = {
-          ...savedMessage,
-          chat_id: applicationId,
-          sender_id: savedMessage.sender_id,
-          sender: {
-            id: socket.user.id
-          }
-        };
-
-        // Broadcast message to all users in room
-        const roomSockets = await io.in(roomName).fetchSockets();
-        const recipientSockets = roomSockets.filter(s => s.userId !== socket.user.id);
-
-        console.log(`[Socket] Emitting receive_message to room ${roomName}`, {
-          messageId: savedMessage.id,
-          chat_id: applicationId,
-          sender_id: socket.user.id,
-          roomClients: roomSockets.map(s => s.userId),
-          roomClientCount: roomSockets.length,
-          recipientCount: recipientSockets.length
-        });
-
-        io.to(roomName).emit('receive_message', emitPayload);
-
-        // Update message status to DELIVERED for all recipients in the room
-        if (recipientSockets.length > 0) {
-          try {
-            await ChatService.updateMessageStatus(savedMessage.id, 'DELIVERED');
-            console.log(`[Socket] Message ${savedMessage.id} marked as DELIVERED to ${recipientSockets.length} recipients`);
-
-            // Update unread counts for all recipients
-            // savedMessage should have chat_id from the database
-            if (savedMessage.chat_id) {
-              for (const recipientSocket of recipientSockets) {
-                try {
-                  const recipientId = recipientSocket.userId;
-                  const chatUnreadCount = await ChatService.getUnreadCountForChat(savedMessage.chat_id, recipientId);
-                  const totalUnreadData = await ChatService.getTotalUnreadCount(recipientId);
-
-                  // Emit unread count update to recipient
-                  io.to(`user_${recipientId}`).emit('unread_count_updated', {
-                    chatId: savedMessage.chat_id,
-                    unreadCount: chatUnreadCount,
-                    totalUnreadCount: totalUnreadData.totalUnreadCount,
-                    action: 'increment',
-                    timestamp: new Date().toISOString()
-                  });
-                } catch (unreadError) {
-                  console.error(`[Socket] Error updating unread count for recipient ${recipientSocket.userId}:`, unreadError);
-                }
-              }
-            }
-          } catch (statusError) {
-            console.error('[Socket] Failed to update message status to DELIVERED:', statusError);
-          }
-        }
+        // Broadcast and notifications are now handled by NotificationService.notifyChatMessage 
+        // called inside ChatService.saveMessage
 
         // Acknowledge to sender
         if (callback) {
@@ -411,6 +361,7 @@ const initSocket = (server) => {
             status: 'READ',
             timestamp: new Date().toISOString()
           });
+          console.log(`📬 [Socket] Broadcast message_read for message ${messageId} to room ${roomName}`);
         }
 
         // Calculate and emit updated unread count for this chat

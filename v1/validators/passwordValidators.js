@@ -73,9 +73,9 @@ const validateBrandRegister = [
     .custom((value) => {
       if (!value) return true;
       const normalized = String(value).toUpperCase().trim();
-      const validGenders = ["MALE", "FEMALE", "OTHER"];
+      const validGenders = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"];
       if (!validGenders.includes(normalized)) {
-        throw new Error("gender must be one of: MALE, FEMALE, OTHER");
+        throw new Error("gender must be one of: MALE, FEMALE, OTHER, PREFER_NOT_TO_SAY");
       }
       return true;
     }),
