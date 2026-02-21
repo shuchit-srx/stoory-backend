@@ -412,14 +412,15 @@ class MessageHandler {
                     });
                     conversationListUtils.emitConversationsUpsert(this.io, receiverId, receiverPayload);
 
-                    // Also emit unread_count_updated for receiver
+                    // Also emit unread_count_updated for receiver (with last_message for zero-delay preview)
                     if (receiverPayload.unread_count > 0) {
                         conversationListUtils.emitUnreadCountUpdated(
                             this.io,
                             receiverId,
                             conversationId,
                             receiverPayload.unread_count,
-                            'increment'
+                            'increment',
+                            savedMessage
                         );
                     }
                 } catch (e) {

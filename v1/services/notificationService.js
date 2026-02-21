@@ -1150,19 +1150,35 @@ class NotificationService {
         console.log(`[v1/Notification] Broadcast receive_message to room ${roomName}`);
       }
 
-      // 3. Emit unread count update to recipient's private room
+      // 3. Emit unread count update to recipient's private room (with last_message for zero-delay preview)
       if (this.io && chatId) {
         try {
           const chatUnreadCount = await ChatService.getUnreadCountForChat(chatId, recipientId);
           const totalUnreadData = await ChatService.getTotalUnreadCount(recipientId);
 
-          this.io.to(`user_${recipientId}`).emit('unread_count_updated', {
+          const unreadPayload = {
             chatId: chatId,
             unreadCount: chatUnreadCount,
             totalUnreadCount: totalUnreadData.totalUnreadCount,
             action: 'increment',
             timestamp: new Date().toISOString()
-          });
+          };
+          // Include last_message when we have message data so frontend can update preview with no delay
+          if (typeof messageData === 'object' && messageData !== null) {
+            const text = messageData.message ?? messageData.content ?? messageData.body ?? messageData.text;
+            const preview = text != null ? String(text).trim() : '';
+            if (preview !== '') {
+              unreadPayload.last_message = {
+                id: messageData.id,
+                message: preview,
+                content: preview,
+                created_at: messageData.created_at,
+                sender_id: messageData.sender_id ?? senderId,
+                seen: messageData.seen || false
+              };
+            }
+          }
+          this.io.to(`user_${recipientId}`).emit('unread_count_updated', unreadPayload);
         } catch (unreadErr) {
           console.error('[v1/Notification] Unread count broadcast error:', unreadErr);
         }
