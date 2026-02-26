@@ -68,12 +68,20 @@ class UserController {
           });
         }
 
+        // Extract filters from query params
+        const filters = {
+          locations: req.query.locations,
+          languages: req.query.languages,
+          categories: req.query.categories,
+          search: req.query.search,
+        };
+
         const pagination = {
           limit,
           offset,
         };
 
-        const result = await UserService.getAllInfluencers(pagination);
+        const result = await UserService.getAllInfluencers(pagination, filters);
 
       if (!result.success) {
         return res.status(500).json({

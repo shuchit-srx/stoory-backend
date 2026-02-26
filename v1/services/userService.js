@@ -210,9 +210,10 @@ class UserService {
   /**
    * Get all influencers from v1_users table with pagination
    * Returns simplified influencer data with profiles, social accounts, and categories
-   * @param {Object} pagination - Pagination parameters { page, limit }
+   * @param {Object} pagination - Pagination parameters { limit, offset }
+   * @param {Object} filters - Filter parameters { locations, languages, categories, search }
    */
-  async getAllInfluencers(pagination = {}) {
+  async getAllInfluencers(pagination = {}, filters = {}) {
     try {
       // Accept offset + limit for infinite scroll support
       const { limit = 20, offset = 0 } = pagination;
@@ -221,14 +222,95 @@ class UserService {
       const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items
       const validatedOffset = Math.max(0, parseInt(offset) || 0);
 
-      // Get all influencer users with pagination
-      const { data: influencers, error: influencersError, count } = await supabaseAdmin
+      // Parse filter helpers
+      const { parseArrayParam } = require("../utils/filterHelpers");
+      const languages = parseArrayParam(filters.languages);
+      const categories = parseArrayParam(filters.categories);
+      const locations = parseArrayParam(filters.locations);
+      const search = filters.search ? String(filters.search).trim() : null;
+
+      // If we have profile-based filters (languages, categories, locations), 
+      // first get matching user IDs from profiles
+      let filteredUserIds = null;
+      if (languages && languages.length > 0 || categories && categories.length > 0 || locations && locations.length > 0) {
+        const { applyArrayFilter } = require("../utils/filterHelpers");
+        let profileQuery = supabaseAdmin
+          .from("v1_influencer_profiles")
+          .select("user_id, categories, languages, city, country")
+          .eq("is_deleted", false);
+
+        // Apply array filters using Supabase overlaps for better performance
+        if (languages && languages.length > 0) {
+          profileQuery = applyArrayFilter(profileQuery, "languages", languages, "OR");
+        }
+
+        if (categories && categories.length > 0) {
+          profileQuery = applyArrayFilter(profileQuery, "categories", categories, "OR");
+        }
+
+        // Note: locations filter (city/country) will be applied in memory since it requires partial matching
+        const { data: allProfiles, error: profilesError } = await profileQuery;
+
+        if (profilesError) {
+          console.error(
+            "[v1/UserService/getAllInfluencers] Profiles filter error:",
+            profilesError
+          );
+        } else if (allProfiles) {
+          // Filter profiles in memory for locations (city/country partial matching)
+          // Languages and categories are already filtered at DB level
+          let matchingProfiles = allProfiles;
+          
+          if (locations && locations.length > 0) {
+            const locationLower = locations.map(loc => String(loc).toLowerCase());
+            matchingProfiles = allProfiles.filter(profile => {
+              const city = profile.city ? String(profile.city).toLowerCase() : "";
+              const country = profile.country ? String(profile.country).toLowerCase() : "";
+              return locationLower.some(loc => 
+                city.includes(loc) || country.includes(loc) ||
+                city === loc || country === loc
+              );
+            });
+          }
+
+          filteredUserIds = new Set(matchingProfiles.map(p => p.user_id));
+        }
+      }
+
+      // Build user query
+      let userQuery = supabaseAdmin
         .from("v1_users")
         .select("id, name", { count: "exact" })
         .eq("role", "INFLUENCER")
-        .eq("is_deleted", false)
-        .order("created_at", { ascending: false })
+        .eq("is_deleted", false);
+
+      // Apply search filter on name
+      if (search && search.length > 0) {
+        userQuery = userQuery.ilike("name", `%${search}%`);
+      }
+
+      // Apply profile-based filter (if we have filtered user IDs)
+      if (filteredUserIds && filteredUserIds.size > 0) {
+        userQuery = userQuery.in("id", Array.from(filteredUserIds));
+      } else if (filteredUserIds && filteredUserIds.size === 0) {
+        // No matching profiles, return empty result
+        return {
+          success: true,
+          influencers: [],
+          pagination: {
+            limit: validatedLimit,
+            offset: validatedOffset,
+            count: 0,
+            total: 0,
+            hasMore: false,
+          },
+        };
+      }
+
+      userQuery = userQuery.order("created_at", { ascending: false })
         .range(validatedOffset, validatedOffset + validatedLimit - 1);
+
+      const { data: influencers, error: influencersError, count } = await userQuery;
 
       if (influencersError) {
         console.error(
@@ -259,12 +341,12 @@ class UserService {
       // Get influencer profiles for all influencers
       const userIds = influencers.map((inf) => inf.id);
       
-      // Fetch profiles with only required fields
-        const profilesResult = await supabaseAdmin
-          .from("v1_influencer_profiles")
-        .select("user_id, categories, profile_photo_url, languages")
-          .in("user_id", userIds)
-          .eq("is_deleted", false);
+      // Fetch profiles with required fields including city/country for location filtering
+      const profilesResult = await supabaseAdmin
+        .from("v1_influencer_profiles")
+        .select("user_id, categories, profile_photo_url, languages, city, country")
+        .in("user_id", userIds)
+        .eq("is_deleted", false);
         
       const influencerProfiles = profilesResult.data || [];
       if (profilesResult.error) {

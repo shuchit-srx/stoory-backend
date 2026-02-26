@@ -218,6 +218,9 @@ class CampaignController {
         max_budget: req.query.max_budget
           ? parseFloat(req.query.max_budget)
           : undefined,
+        language: req.query.language || req.query.languages,
+        categories: req.query.categories,
+        platform: req.query.platform,
         search: req.query.search,
       };
 

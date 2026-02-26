@@ -353,7 +353,7 @@ class CampaignService {
 
   async getCampaigns(filters = {}, pagination = {}, influencerId = null, influencerTier = null) {
     try {
-      const { type, brand_id, min_budget, max_budget, search } = filters;
+      const { type, brand_id, min_budget, max_budget, language, categories, platform, search } = filters;
       const { limit = 20, offset = 0 } = pagination;
       
       const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20));
@@ -368,9 +368,12 @@ class CampaignService {
         };
       }
 
+      // Parse filter helpers
+      const { parseArrayParam, applyArrayFilter } = require("../utils/filterHelpers");
+
       let query = supabaseAdmin
         .from("v1_campaigns")
-        .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type, applications_accepted_till, accepted_count, influencer_tier, bulk_tier_pricing", { count: "exact" })
+        .select("id, title, cover_image_url, budget, platform, content_type, brand_id, status, type, applications_accepted_till, accepted_count, influencer_tier, bulk_tier_pricing, language, categories", { count: "exact" })
         .eq("is_deleted", false)
         .in("status", [CampaignStatus.LIVE, CampaignStatus.IN_PROGRESS])
         .order("created_at", { ascending: false });
@@ -389,6 +392,25 @@ class CampaignService {
 
       if (max_budget !== undefined) {
         query = query.lte("budget", max_budget);
+      }
+
+      // Apply language filter
+      const languages = parseArrayParam(language);
+      if (languages && languages.length > 0) {
+        // Handle both single language field and array - use overlaps for array matching
+        query = applyArrayFilter(query, "language", languages, "OR");
+      }
+
+      // Apply categories filter
+      const categoriesArray = parseArrayParam(categories);
+      if (categoriesArray && categoriesArray.length > 0) {
+        query = applyArrayFilter(query, "categories", categoriesArray, "OR");
+      }
+
+      // Apply platform filter
+      const platformArray = parseArrayParam(platform);
+      if (platformArray && platformArray.length > 0) {
+        query = applyArrayFilter(query, "platform", platformArray, "OR");
       }
 
       if (search) {
